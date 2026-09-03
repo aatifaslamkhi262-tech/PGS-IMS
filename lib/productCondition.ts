@@ -1,4 +1,4 @@
-export const PRODUCT_CONDITIONS = ["New", "Used"] as const;
+export const PRODUCT_CONDITIONS = ["New", "Used", "Refurbished"] as const;
 
 export type ProductCondition = (typeof PRODUCT_CONDITIONS)[number];
 
@@ -11,6 +11,7 @@ export function normalizeProductCondition(
   const trimmed = value.trim();
   if (trimmed.toLowerCase() === "new") return "New";
   if (trimmed.toLowerCase() === "used") return "Used";
+  if (trimmed.toLowerCase() === "refurbished") return "Refurbished";
   return null;
 }
 
@@ -23,17 +24,20 @@ export function validateProductCondition(value: unknown): {
   if (!normalized) {
     return {
       valid: false,
-      error: 'Product condition must be either "New" or "Used".',
+      error: 'Product condition must be "New", "Used", or "Refurbished".',
     };
   }
   return { valid: true, condition: normalized };
 }
 
-/** Suggest a SKU suffix based on condition (e.g. -NEW, -USED). */
+/** Suggest a SKU suffix based on condition (e.g. -NEW, -USED, -REF). */
 export function suggestSkuConditionSuffix(
   condition: ProductCondition
 ): string {
-  return condition === "New" ? "-NEW" : "-USED";
+  if (condition === "New") return "-NEW";
+  if (condition === "Used") return "-USED";
+  if (condition === "Refurbished") return "-REF";
+  return "-NEW";
 }
 
 /** Build a draft SKU from product name initials and condition. */
@@ -58,9 +62,13 @@ export function buildSkuDraft(
 export function getConditionBadgeClasses(
   condition: ProductCondition
 ): string {
-  return condition === "New"
-    ? "bg-sky-500/10 text-sky-300 border border-sky-500/20"
-    : "bg-orange-500/10 text-orange-300 border border-orange-500/20";
+  if (condition === "New")
+    return "bg-sky-500/10 text-sky-300 border border-sky-500/20";
+  if (condition === "Used")
+    return "bg-orange-500/10 text-orange-300 border border-orange-500/20";
+  if (condition === "Refurbished")
+    return "bg-purple-500/10 text-purple-300 border border-purple-500/20";
+  return "bg-slate-500/10 text-slate-300 border border-slate-500/20";
 }
 
 /** Append condition to product name if not already present. */
@@ -69,8 +77,8 @@ export function buildCounterpartProductName(
   targetCondition: ProductCondition
 ): string {
   const base = name
-    .replace(/\s*-\s*(New|Used)\s*$/i, "")
-    .replace(/\s*\((New|Used)\)\s*$/i, "")
+    .replace(/\s*-\s*(New|Used|Refurbished)\s*$/i, "")
+    .replace(/\s*\((New|Used|Refurbished)\)\s*$/i, "")
     .trim();
   return `${base} - ${targetCondition}`;
 }

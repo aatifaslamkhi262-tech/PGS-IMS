@@ -9,22 +9,24 @@ import {
 } from "./productCondition";
 
 describe("normalizeProductCondition", () => {
-  it("accepts valid New/Used values case-insensitively", () => {
+  it("accepts valid New/Used/Refurbished values case-insensitively", () => {
     expect(normalizeProductCondition("New")).toBe("New");
     expect(normalizeProductCondition("new")).toBe("New");
     expect(normalizeProductCondition("Used")).toBe("Used");
     expect(normalizeProductCondition(" used ")).toBe("Used");
+    expect(normalizeProductCondition("Refurbished")).toBe("Refurbished");
+    expect(normalizeProductCondition("refurbished")).toBe("Refurbished");
   });
 
   it("rejects invalid values", () => {
-    expect(normalizeProductCondition("Refurbished")).toBeNull();
+    expect(normalizeProductCondition("Broken")).toBeNull();
     expect(normalizeProductCondition("")).toBeNull();
     expect(normalizeProductCondition(null)).toBeNull();
   });
 });
 
 describe("validateProductCondition", () => {
-  it("returns valid result for New and Used", () => {
+  it("returns valid result for New, Used, and Refurbished", () => {
     expect(validateProductCondition("New")).toEqual({
       valid: true,
       condition: "New",
@@ -32,6 +34,10 @@ describe("validateProductCondition", () => {
     expect(validateProductCondition("used")).toEqual({
       valid: true,
       condition: "Used",
+    });
+    expect(validateProductCondition("refurbished")).toEqual({
+      valid: true,
+      condition: "Refurbished",
     });
   });
 
@@ -45,9 +51,7 @@ describe("suggestSkuConditionSuffix", () => {
   it("returns distinct suffixes per condition", () => {
     expect(suggestSkuConditionSuffix("New")).toBe("-NEW");
     expect(suggestSkuConditionSuffix("Used")).toBe("-USED");
-    expect(suggestSkuConditionSuffix("New")).not.toBe(
-      suggestSkuConditionSuffix("Used")
-    );
+    expect(suggestSkuConditionSuffix("Refurbished")).toBe("-REF");
   });
 });
 
@@ -57,9 +61,11 @@ describe("buildSkuDraft", () => {
     expect(sku).toMatch(/-NEW-\d{3}$/);
   });
 
-  it("uses different suffix for Used products", () => {
-    const sku = buildSkuDraft("PS5 Slim Disc Edition", "Used");
-    expect(sku).toMatch(/-USED-\d{3}$/);
+  it("uses different suffix for Used and Refurbished products", () => {
+    const usedSku = buildSkuDraft("PS5 Slim Disc Edition", "Used");
+    expect(usedSku).toMatch(/-USED-\d{3}$/);
+    const refSku = buildSkuDraft("PS5 Slim Disc Edition", "Refurbished");
+    expect(refSku).toMatch(/-REF-\d{3}$/);
   });
 });
 
@@ -78,7 +84,7 @@ describe("buildCounterpartProductName", () => {
 });
 
 describe("PRODUCT_CONDITIONS", () => {
-  it("defines exactly New and Used", () => {
-    expect(PRODUCT_CONDITIONS).toEqual(["New", "Used"]);
+  it("defines New, Used, and Refurbished", () => {
+    expect(PRODUCT_CONDITIONS).toEqual(["New", "Used", "Refurbished"]);
   });
 });
