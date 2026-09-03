@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { PurchaseInvoice } from "@/models/PurchaseInvoice";
+import { Product } from "@/models/Product";
 import "@/models/Supplier"; // Ensure Supplier model is registered
 import { verifyRole } from "@/lib/auth/rbac";
 
@@ -130,6 +131,23 @@ export async function POST(req: NextRequest) {
       notes: notes?.trim() || undefined,
       createdBy: auth.user.username,
     });
+
+    // Update baseline Product document prices if current baseline prices are placeholders (<= 1)
+    for (const item of validatedItems) {
+      await Product.updateOne(
+        {
+          _id: item.product,
+          $or: [{ costPrice: { $lte: 1 } }, { sellingPrice: { $lte: 1 } }],
+        },
+        {
+          $set: {
+            costPrice: item.unitCost,
+            sellingPrice: item.sellingPrice,
+            minSellingPrice: item.minSellingPrice,
+          },
+        }
+      );
+    }
 
     return NextResponse.json({ success: true, data: invoice });
   } catch (error: any) {

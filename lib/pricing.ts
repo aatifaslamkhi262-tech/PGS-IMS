@@ -26,12 +26,7 @@ export async function calculateProductWeightedPricing(productId: string): Promis
     .lean();
 
   if (receivings.length === 0) {
-    return {
-      priceConfigured: false,
-      avgCostPrice: null,
-      avgSellingPrice: null,
-      avgMinSellingPrice: null,
-    };
+    return getPricingFromLatestInvoice(productId);
   }
 
   let totalQty = 0;
@@ -61,12 +56,7 @@ export async function calculateProductWeightedPricing(productId: string): Promis
   }
 
   if (totalQty === 0) {
-    return {
-      priceConfigured: false,
-      avgCostPrice: null,
-      avgSellingPrice: null,
-      avgMinSellingPrice: null,
-    };
+    return getPricingFromLatestInvoice(productId);
   }
 
   return {
@@ -74,5 +64,38 @@ export async function calculateProductWeightedPricing(productId: string): Promis
     avgCostPrice: Math.round((totalCostAmount / totalQty) * 100) / 100,
     avgSellingPrice: Math.round((totalSellingAmount / totalQty) * 100) / 100,
     avgMinSellingPrice: Math.round((totalMinSellingAmount / totalQty) * 100) / 100,
+  };
+}
+
+/**
+ * Fallback pricing function when no approved physical receiving exists yet.
+ * Looks up the most recent PurchaseInvoice created for this product.
+ */
+async function getPricingFromLatestInvoice(productId: string): Promise<WeightedPricingResult> {
+  const latestInvoice = await PurchaseInvoice.findOne({
+    "items.product": productId,
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+
+  if (latestInvoice && Array.isArray(latestInvoice.items)) {
+    const item = latestInvoice.items.find(
+      (it: any) => it.product.toString() === productId
+    );
+    if (item) {
+      return {
+        priceConfigured: true,
+        avgCostPrice: item.unitCost || 0,
+        avgSellingPrice: item.sellingPrice || 0,
+        avgMinSellingPrice: item.minSellingPrice || 0,
+      };
+    }
+  }
+
+  return {
+    priceConfigured: false,
+    avgCostPrice: null,
+    avgSellingPrice: null,
+    avgMinSellingPrice: null,
   };
 }
