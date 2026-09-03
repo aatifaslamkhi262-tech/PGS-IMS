@@ -182,13 +182,6 @@ export default function EditProductPage({
     if (id) loadProductData();
   }, [id]);
 
-  // Auto-regenerate SKU when name or condition changes in edit mode
-  useEffect(() => {
-    if (name.trim() && condition) {
-      setSku(buildSkuDraft(name, condition));
-    }
-  }, [name, condition]);
-
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
 

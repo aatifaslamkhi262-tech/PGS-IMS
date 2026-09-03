@@ -72,6 +72,16 @@ export async function calculateProductWeightedPricing(productId: string): Promis
  * Looks up the most recent PurchaseInvoice created for this product.
  */
 async function getPricingFromLatestInvoice(productId: string): Promise<WeightedPricingResult> {
+  const { default: mongoose } = await import("mongoose");
+  if (!mongoose.Types.ObjectId.isValid(productId)) {
+    return {
+      priceConfigured: false,
+      avgCostPrice: null,
+      avgSellingPrice: null,
+      avgMinSellingPrice: null,
+    };
+  }
+
   const latestInvoice = await PurchaseInvoice.findOne({
     "items.product": productId,
   })

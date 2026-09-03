@@ -117,9 +117,10 @@ export async function GET(req: NextRequest) {
           brand: (p as any).brand || "",
           modelNumber: (p as any).modelNumber || (p as any).model || "",
           priceConfigured: pricing.priceConfigured,
-          costPrice: pricing.priceConfigured ? pricing.avgCostPrice : p.costPrice,
-          sellingPrice: pricing.priceConfigured ? pricing.avgSellingPrice : p.sellingPrice,
-          minSellingPrice: pricing.priceConfigured ? pricing.avgMinSellingPrice : p.minSellingPrice,
+          costPrice: p.costPrice ?? (pricing.priceConfigured ? pricing.avgCostPrice : 0),
+          sellingPrice: p.sellingPrice ?? (pricing.priceConfigured ? pricing.avgSellingPrice : 0),
+          minSellingPrice: p.minSellingPrice ?? (pricing.priceConfigured ? pricing.avgMinSellingPrice : 0),
+          weightedPricing: pricing,
         };
       })
     );

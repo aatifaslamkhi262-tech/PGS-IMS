@@ -40,9 +40,10 @@ export async function GET(
       brand: product.brand || "",
       modelNumber: product.modelNumber || product.model || "",
       priceConfigured: pricing.priceConfigured,
-      costPrice: pricing.priceConfigured ? pricing.avgCostPrice : product.costPrice,
-      sellingPrice: pricing.priceConfigured ? pricing.avgSellingPrice : product.sellingPrice,
-      minSellingPrice: pricing.priceConfigured ? pricing.avgMinSellingPrice : product.minSellingPrice,
+      costPrice: product.costPrice ?? (pricing.priceConfigured ? pricing.avgCostPrice : 0),
+      sellingPrice: product.sellingPrice ?? (pricing.priceConfigured ? pricing.avgSellingPrice : 0),
+      minSellingPrice: product.minSellingPrice ?? (pricing.priceConfigured ? pricing.avgMinSellingPrice : 0),
+      weightedPricing: pricing,
     };
 
     return NextResponse.json({ success: true, data: productWithPricing });
@@ -142,9 +143,9 @@ export async function PUT(
       );
     }
 
-    // If name or condition changed, regenerate SKU
-    const cleanSku = (body.name || body.condition) 
-      ? buildSkuDraft((body.name || product.name).trim(), nextCondition)
+    // Use explicitly passed SKU or keep existing SKU (do not force buildSkuDraft on every edit)
+    const cleanSku = body.sku && body.sku.trim() 
+      ? body.sku.trim().toUpperCase() 
       : product.sku;
 
     // Barcode cannot be changed - always use existing barcode
