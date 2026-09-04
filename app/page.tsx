@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -139,8 +139,18 @@ export default function ProductListPage() {
     fetchMetadata();
   }, []);
 
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   // Fetch Products
   const fetchProducts = useCallback(async () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const signal = controller.signal;
+
     setLoading(true);
     setError("");
     try {
@@ -153,8 +163,11 @@ export default function ProductListPage() {
       params.append("sortBy", sortBy);
       params.append("sortOrder", sortOrder);
 
-      const res = await fetch(`/api/products?${params.toString()}`);
+      const res = await fetch(`/api/products?${params.toString()}`, { signal });
+      if (signal.aborted) return;
       const data = await res.json();
+
+      if (signal.aborted) return;
 
       if (!res.ok || !data.success) {
         throw new Error(data.error || "Failed to fetch products");
@@ -162,10 +175,15 @@ export default function ProductListPage() {
 
       setProducts(data.data);
     } catch (err: any) {
+      if (err.name === "AbortError" || signal.aborted) {
+        return;
+      }
       setError(err.message || "An error occurred while loading products");
       addToast("error", err.message || "Failed to load products");
     } finally {
-      setLoading(false);
+      if (!signal.aborted) {
+        setLoading(false);
+      }
     }
   }, [
     debouncedSearch,

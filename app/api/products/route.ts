@@ -108,20 +108,21 @@ export async function GET(req: NextRequest) {
     ]);
 
     const { calculateProductWeightedPricing } = await import("@/lib/pricing");
-    const productsWithPricing = [];
-    for (const p of products) {
-      const pricing = await calculateProductWeightedPricing(p._id.toString());
-      productsWithPricing.push({
-        ...p,
-        color: (p as any).color || "Unspecified",
-        brand: (p as any).brand || "",
-        modelNumber: (p as any).modelNumber || (p as any).model || "",
-        priceConfigured: pricing.priceConfigured,
-        costPrice: pricing.priceConfigured ? pricing.avgCostPrice : p.costPrice,
-        sellingPrice: pricing.priceConfigured ? pricing.avgSellingPrice : p.sellingPrice,
-        minSellingPrice: pricing.priceConfigured ? pricing.avgMinSellingPrice : p.minSellingPrice,
-      });
-    }
+    const productsWithPricing = await Promise.all(
+      products.map(async (p) => {
+        const pricing = await calculateProductWeightedPricing(p._id.toString());
+        return {
+          ...p,
+          color: (p as any).color || "Unspecified",
+          brand: (p as any).brand || "",
+          modelNumber: (p as any).modelNumber || (p as any).model || "",
+          priceConfigured: pricing.priceConfigured,
+          costPrice: pricing.priceConfigured ? pricing.avgCostPrice : p.costPrice,
+          sellingPrice: pricing.priceConfigured ? pricing.avgSellingPrice : p.sellingPrice,
+          minSellingPrice: pricing.priceConfigured ? pricing.avgMinSellingPrice : p.minSellingPrice,
+        };
+      })
+    );
 
     return NextResponse.json({
       success: true,
