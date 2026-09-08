@@ -35,6 +35,8 @@ export default function NewTransferPage() {
   const [locations, setLocations] = useState<LocationOption[]>([]);
   const [products, setProducts] = useState<ProductOption[]>([]);
 
+  const [sourceLocation, setSourceLocation] = useState("");
+  const [destinationLocation, setDestinationLocation] = useState("");
   const [userRole, setUserRole] = useState<string | null>(null);
   const [reason, setReason] = useState("Stock Request");
   const [notes, setNotes] = useState("");
