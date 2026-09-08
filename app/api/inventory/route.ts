@@ -22,6 +22,8 @@ export async function GET(req: NextRequest) {
     const category = searchParams.get("category") || "";
     const serialized = searchParams.get("serialized") || ""; // "true" or "false"
     const status = searchParams.get("status") || ""; // "In Stock" or "Out of Stock"
+    const page = parseInt(searchParams.get("page") || "1", 10);
+    const limit = parseInt(searchParams.get("limit") || "25", 10);
 
     // 1. Resolve product IDs by serial number search if applicable
     let serialProductIds: string[] = [];
@@ -60,12 +62,44 @@ export async function GET(req: NextRequest) {
       prodQuery.serialTracking = false;
     }
 
-    const products = await Product.find(prodQuery).select("name sku barcode category condition serialTracking active brand model modelNumber color").lean();
-    const productIds = products.map((p) => p._id.toString());
+    // Apply DB-level pagination when no status filter is active
+    let pageProducts = [];
+    let total = 0;
+    let validPage = page;
+    let totalPages = 1;
+    let skip = 0;
+
+    if (!status) {
+      total = await Product.countDocuments(prodQuery);
+      totalPages = Math.ceil(total / limit) || 1;
+      validPage = Math.max(1, Math.min(page, totalPages));
+      skip = (validPage - 1) * limit;
+
+      pageProducts = await Product.find(prodQuery)
+        .select("name sku barcode category condition serialTracking active brand model modelNumber color")
+        .skip(skip)
+        .limit(limit)
+        .lean();
+    } else {
+      pageProducts = await Product.find(prodQuery)
+        .select("name sku barcode category condition serialTracking active brand model modelNumber color")
+        .lean();
+    }
+
+    const productIds = pageProducts.map((p) => p._id.toString());
 
     // If no products match, return empty
     if (productIds.length === 0) {
-      return NextResponse.json({ success: true, data: [] });
+      return NextResponse.json({
+        success: true,
+        data: [],
+        pagination: {
+          total: 0,
+          page: 1,
+          limit,
+          totalPages: 0,
+        },
+      });
     }
 
     // 3. Query inventory items for these products
@@ -96,7 +130,7 @@ export async function GET(req: NextRequest) {
 
     // 5. Build output data
     const result = [];
-    for (const prod of products) {
+    for (const prod of pageProducts) {
       const pStr = prod._id.toString();
       const stockLines = inventoryMap[pStr] || [];
 
@@ -138,7 +172,25 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ success: true, data: result });
+    let finalData = result;
+    if (status) {
+      total = result.length;
+      totalPages = Math.ceil(total / limit) || 1;
+      validPage = Math.max(1, Math.min(page, totalPages));
+      skip = (validPage - 1) * limit;
+      finalData = result.slice(skip, skip + limit);
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: finalData,
+      pagination: {
+        total,
+        page: validPage,
+        limit,
+        totalPages,
+      },
+    });
   } catch (error: any) {
     return NextResponse.json(
       { success: false, error: error.message || "Failed to fetch inventory." },

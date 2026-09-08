@@ -14,6 +14,8 @@ import {
   X,
 } from "lucide-react";
 import { ToastContainer, ToastMessage } from "@/components/Toast";
+import { Pagination } from "@/components/Pagination";
+import { TableSkeleton } from "@/components/TableSkeleton";
 
 interface InventoryProduct {
   product: {
@@ -46,6 +48,12 @@ export default function InventoryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [userRole, setUserRole] = useState("");
+
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   // Create Location Modal State
   const [showLocationModal, setShowLocationModal] = useState(false);
@@ -98,6 +106,11 @@ export default function InventoryPage() {
     }
   };
 
+  // Reset page to 1 on filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, selectedLocation, selectedCondition, selectedCategory, selectedSerialized, selectedStatus]);
+
   // Fetch Inventory List
   const fetchInventory = async () => {
     setLoading(true);
@@ -109,11 +122,17 @@ export default function InventoryPage() {
       if (selectedCategory) params.append("category", selectedCategory);
       if (selectedSerialized) params.append("serialized", selectedSerialized);
       if (selectedStatus) params.append("status", selectedStatus);
+      params.append("page", currentPage.toString());
+      params.append("limit", itemsPerPage.toString());
 
       const res = await fetch(`/api/inventory?${params.toString()}`);
       const data = await res.json();
       if (data.success) {
         setInventory(data.data);
+        if (data.pagination) {
+          setTotalItems(data.pagination.total);
+          setTotalPages(data.pagination.totalPages);
+        }
       } else {
         setError(data.error || "Failed to load inventory registry.");
       }
@@ -184,7 +203,7 @@ export default function InventoryPage() {
 
   useEffect(() => {
     fetchInventory();
-  }, [search, selectedLocation, selectedCondition, selectedCategory, selectedSerialized, selectedStatus]);
+  }, [search, selectedLocation, selectedCondition, selectedCategory, selectedSerialized, selectedStatus, currentPage, itemsPerPage]);
 
   return (
     <div className="space-y-6">
@@ -292,19 +311,14 @@ export default function InventoryPage() {
       </div>
 
       {/* Loader & Error */}
-      {loading && inventory.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-slate-900 border border-slate-800 rounded-xl">
-          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3" />
-          <span className="text-xs">Loading inventory registry...</span>
-        </div>
-      )}
-
-      {error && (
+      {loading ? (
+        <TableSkeleton rows={6} type="inventory" />
+      ) : error ? (
         <div className="p-4 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold rounded-xl flex items-center gap-2">
           <AlertCircle className="w-5 h-5" />
           <span>{error}</span>
         </div>
-      )}
+      ) : null}
 
       {/* Empty State */}
       {!loading && !error && inventory.length === 0 && (
@@ -320,9 +334,9 @@ export default function InventoryPage() {
       {/* Inventory List */}
       {!loading && !error && inventory.length > 0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xs">
-          {/* Desktop Table view */}
+          {/* Desktop & Tablet Table view */}
           <div className="hidden md:block overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
+            <table className="w-full text-left text-xs border-collapse min-w-[750px]">
               <thead>
                 <tr className="bg-slate-950 border-b border-slate-850 text-slate-400 font-bold uppercase tracking-wider">
                   <th className="p-4">Product Details</th>
@@ -474,6 +488,19 @@ export default function InventoryPage() {
               </div>
             ))}
           </div>
+          {/* Pagination Controls */}
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            itemsPerPage={itemsPerPage}
+            onPageChange={(p) => setCurrentPage(p)}
+            onItemsPerPageChange={(l) => {
+              setItemsPerPage(l);
+              setCurrentPage(1);
+            }}
+            itemLabel="inventory items"
+          />
         </div>
       )}
       {/* Create Location Modal */}

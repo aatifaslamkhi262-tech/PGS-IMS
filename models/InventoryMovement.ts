@@ -16,6 +16,12 @@ export interface IInventoryMovement {
   afterQuantity: number;
   performedBy: string; // username of operator
   approvedBy?: string; // username of accountant/admin who approved
+  carrierUser?: Types.ObjectId;
+  carrierName?: string;
+  carrierUsername?: string;
+  dispatchedBy?: string;
+  condition?: string; // "New" | "Used"
+  linkedTransferNumber?: string;
   date: Date;
   notes?: string;
   createdAt?: Date;
@@ -84,6 +90,29 @@ const InventoryMovementSchema: Schema = new Schema(
     },
     approvedBy: {
       type: String,
+    },
+    carrierUser: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    carrierName: {
+      type: String,
+      trim: true,
+    },
+    carrierUsername: {
+      type: String,
+      trim: true,
+    },
+    dispatchedBy: {
+      type: String,
+    },
+    condition: {
+      type: String,
+      trim: true,
+    },
+    linkedTransferNumber: {
+      type: String,
+      trim: true,
     },
     date: {
       type: Date,

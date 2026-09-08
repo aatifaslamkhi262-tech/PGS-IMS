@@ -1,11 +1,14 @@
-import mongoose, { Schema, Document, Model } from "mongoose";
+import mongoose, { Schema, Document, Model, Types } from "mongoose";
 
 export type UserRole = "Admin" | "Warehouse" | "Accountant" | "Branch" | "Salesman";
 
 export interface IUser {
+  _id?: Types.ObjectId;
+  name?: string;
   username: string;
   passwordHash: string;
   role: UserRole;
+  assignedLocation?: Types.ObjectId;
   active: boolean;
   createdAt?: Date;
   updatedAt?: Date;
@@ -15,6 +18,10 @@ export type UserDocument = Document & IUser;
 
 const UserSchema: Schema = new Schema(
   {
+    name: {
+      type: String,
+      trim: true,
+    },
     username: {
       type: String,
       required: [true, "Username is required"],
@@ -31,6 +38,10 @@ const UserSchema: Schema = new Schema(
       enum: ["Admin", "Warehouse", "Accountant", "Branch", "Salesman"],
       required: [true, "User role is required"],
     },
+    assignedLocation: {
+      type: Schema.Types.ObjectId,
+      ref: "Location",
+    },
     active: {
       type: Boolean,
       default: true,
@@ -40,8 +51,6 @@ const UserSchema: Schema = new Schema(
     timestamps: true,
   }
 );
-
-
 
 export const User: Model<IUser> =
   mongoose.models.User || mongoose.model<IUser>("User", UserSchema);

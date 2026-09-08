@@ -107,23 +107,30 @@ export async function GET(req: NextRequest) {
       Product.countDocuments(query),
     ]);
 
-    const { calculateProductWeightedPricing } = await import("@/lib/pricing");
-    const productsWithPricing = await Promise.all(
-      products.map(async (p) => {
-        const pricing = await calculateProductWeightedPricing(p._id.toString());
-        return {
-          ...p,
-          color: (p as any).color || "Unspecified",
-          brand: (p as any).brand || "",
-          modelNumber: (p as any).modelNumber || (p as any).model || "",
-          priceConfigured: pricing.priceConfigured,
-          costPrice: p.costPrice ?? (pricing.priceConfigured ? pricing.avgCostPrice : 0),
-          sellingPrice: p.sellingPrice ?? (pricing.priceConfigured ? pricing.avgSellingPrice : 0),
-          minSellingPrice: p.minSellingPrice ?? (pricing.priceConfigured ? pricing.avgMinSellingPrice : 0),
-          weightedPricing: pricing,
-        };
-      })
-    );
+    const { batchCalculateProductWeightedPricing } = await import("@/lib/pricing");
+    const productIds = products.map((p) => p._id.toString());
+    const batchPricing = await batchCalculateProductWeightedPricing(productIds);
+
+    const productsWithPricing = products.map((p) => {
+      const pStr = p._id.toString();
+      const pricing = batchPricing[pStr] || {
+        priceConfigured: false,
+        avgCostPrice: null,
+        avgSellingPrice: null,
+        avgMinSellingPrice: null,
+      };
+      return {
+        ...p,
+        color: (p as any).color || "Unspecified",
+        brand: (p as any).brand || "",
+        modelNumber: (p as any).modelNumber || (p as any).model || "",
+        priceConfigured: pricing.priceConfigured,
+        costPrice: p.costPrice ?? (pricing.priceConfigured ? pricing.avgCostPrice : 0),
+        sellingPrice: p.sellingPrice ?? (pricing.priceConfigured ? pricing.avgSellingPrice : 0),
+        minSellingPrice: p.minSellingPrice ?? (pricing.priceConfigured ? pricing.avgMinSellingPrice : 0),
+        weightedPricing: pricing,
+      };
+    });
 
     return NextResponse.json({
       success: true,

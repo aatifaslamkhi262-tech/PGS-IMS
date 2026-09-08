@@ -8,8 +8,8 @@ import { verifyRole } from "@/lib/auth/rbac";
 export async function GET(req: NextRequest) {
   try {
     await dbConnect();
-    // Allow Admin, Warehouse, Accountant, Branch, and Salesman to view history
-    const auth = await verifyRole(["Admin", "Warehouse", "Accountant", "Branch", "Salesman"]);
+    // Allow Admin, Warehouse, Accountant to view history
+    const auth = await verifyRole(["Admin", "Warehouse", "Accountant"]);
     if (!auth.authorized) {
       return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     }
@@ -18,6 +18,8 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get("search") || "";
     const supplier = searchParams.get("supplier") || "";
     const status = searchParams.get("status") || "";
+    const startDate = searchParams.get("startDate") || "";
+    const endDate = searchParams.get("endDate") || "";
 
     const query: any = {};
     if (search.trim()) {
@@ -30,9 +32,19 @@ export async function GET(req: NextRequest) {
       query.status = status;
     }
 
+    if (startDate || endDate) {
+      query.invoiceDate = {};
+      if (startDate) {
+        query.invoiceDate.$gte = new Date(`${startDate}T00:00:00.000Z`);
+      }
+      if (endDate) {
+        query.invoiceDate.$lte = new Date(`${endDate}T23:59:59.999Z`);
+      }
+    }
+
     const invoices = await PurchaseInvoice.find(query)
       .populate("supplier", "name code")
-      .sort({ createdAt: -1 })
+      .sort({ invoiceDate: -1, createdAt: -1 })
       .lean();
 
     return NextResponse.json({ success: true, data: invoices });
@@ -132,21 +144,20 @@ export async function POST(req: NextRequest) {
       createdBy: auth.user.username,
     });
 
-    // Update baseline Product document prices if current baseline prices are placeholders (<= 1)
+    // Update baseline Product document prices whenever valid prices are provided on an invoice
     for (const item of validatedItems) {
-      await Product.updateOne(
-        {
-          _id: item.product,
-          $or: [{ costPrice: { $lte: 1 } }, { sellingPrice: { $lte: 1 } }],
-        },
-        {
-          $set: {
-            costPrice: item.unitCost,
-            sellingPrice: item.sellingPrice,
-            minSellingPrice: item.minSellingPrice,
-          },
-        }
-      );
+      if (item.unitCost > 0 || item.sellingPrice > 0) {
+        await Product.updateOne(
+          { _id: item.product },
+          {
+            $set: {
+              ...(item.unitCost > 0 && { costPrice: item.unitCost }),
+              ...(item.sellingPrice > 0 && { sellingPrice: item.sellingPrice }),
+              ...(item.minSellingPrice > 0 && { minSellingPrice: item.minSellingPrice }),
+            },
+          }
+        );
+      }
     }
 
     return NextResponse.json({ success: true, data: invoice });

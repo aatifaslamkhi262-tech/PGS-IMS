@@ -10,18 +10,195 @@ import { Inventory } from "@/models/Inventory";
 import { InventoryMovement } from "@/models/InventoryMovement";
 import { verifyRole } from "@/lib/auth/rbac";
 
-const isTransactionUnsupported = (error: any) => {
-  const msg = error.message || "";
-  const code = error.code;
-  return (
-    code === 20 ||
-    msg.includes("replica set") ||
-    msg.includes("Transaction numbers are only allowed") ||
-    msg.includes("sharded cluster") ||
-    msg.includes("sessions are not supported") ||
-    msg.includes("sessions")
-  );
-};
+/**
+ * Core receiving approval execution logic.
+ * Can run either inside a MongoDB Session Transaction OR directly (fallback for standalone MongoDB).
+ */
+async function processReceivingApproval(id: string, approvedByUsername: string, session?: mongoose.ClientSession) {
+  const sessionOptions = session ? { session } : {};
+
+  // 1. Fetch receiving record
+  const receiving = await PurchaseReceiving.findById(id, null, sessionOptions);
+  if (!receiving) {
+    throw new Error("Receiving record not found.");
+  }
+
+  if (receiving.status === "Approved") {
+    return { alreadyApproved: true, receiving };
+  }
+
+  if (receiving.status !== "Pending_Approval") {
+    throw new Error(`Only Pending Approval receiving documents can be approved. Current status: ${receiving.status}`);
+  }
+
+  // 2. Fetch destination location
+  const locationObj = await Location.findById(receiving.location, null, sessionOptions);
+  if (!locationObj || !locationObj.active) {
+    throw new Error("Destination location is inactive or invalid.");
+  }
+
+  // 3. Update Inventory, SerialNumbers, and InventoryMovement for each item
+  for (const item of receiving.items) {
+    const productObj = await Product.findById(item.product, null, sessionOptions);
+    if (!productObj) {
+      throw new Error(`Product not found: ${item.product}`);
+    }
+
+    // a. Check/Update Inventory
+    let inventory = await Inventory.findOne({
+      product: item.product,
+      location: receiving.location,
+      condition: item.condition,
+    }, null, sessionOptions);
+
+    const beforeQuantity = inventory ? inventory.quantity : 0;
+
+    if (!inventory) {
+      inventory = new Inventory({
+        product: item.product,
+        location: receiving.location,
+        condition: item.condition,
+        quantity: item.quantityReceived,
+        serialTracking: productObj.serialTracking,
+        status: "In Stock",
+      });
+    } else {
+      inventory.quantity += item.quantityReceived;
+      inventory.status = inventory.quantity > 0 ? "In Stock" : "Out of Stock";
+    }
+
+    await inventory.save(sessionOptions);
+    const afterQuantity = inventory.quantity;
+
+    // b. If serialized, check and insert SerialNumbers
+    if (productObj.serialTracking) {
+      if (!item.serialNumbers || item.serialNumbers.length !== item.quantityReceived) {
+        throw new Error(`Product "${productObj.name}" requires exact ${item.quantityReceived} serial numbers but they are missing or length mismatch.`);
+      }
+
+      for (const sn of item.serialNumbers) {
+        const existingSerial = await SerialNumber.findOne({ serialNumber: sn }, null, sessionOptions);
+        if (existingSerial) {
+          throw new Error(`Serial number "${sn}" already exists in the system (Product ID: ${existingSerial.product}). Duplicate serial rejected.`);
+        }
+
+        // Create serial number as Available
+        if (session) {
+          await SerialNumber.create(
+            [
+              {
+                product: item.product,
+                serialNumber: sn,
+                status: "Available",
+                location: locationObj.name,
+                transactionReference: receiving.receivingNumber,
+              },
+            ],
+            { session }
+          );
+        } else {
+          await SerialNumber.create({
+            product: item.product,
+            serialNumber: sn,
+            status: "Available",
+            location: locationObj.name,
+            transactionReference: receiving.receivingNumber,
+          });
+        }
+      }
+    }
+
+    // c. Create InventoryMovement record
+    if (session) {
+      await InventoryMovement.create(
+        [
+          {
+            product: item.product,
+            quantity: item.quantityReceived,
+            serialNumbers: item.serialNumbers || [],
+            sourceName: "Supplier",
+            destinationLocation: receiving.location,
+            destinationName: locationObj.name,
+            type: "PURCHASE_RECEIVING",
+            referenceTransaction: receiving.receivingNumber,
+            beforeQuantity,
+            afterQuantity,
+            performedBy: receiving.createdBy,
+            approvedBy: approvedByUsername,
+            condition: item.condition,
+            date: new Date(),
+          },
+        ],
+        { session }
+      );
+    } else {
+      await InventoryMovement.create({
+        product: item.product,
+        quantity: item.quantityReceived,
+        serialNumbers: item.serialNumbers || [],
+        sourceName: "Supplier",
+        destinationLocation: receiving.location,
+        destinationName: locationObj.name,
+        type: "PURCHASE_RECEIVING",
+        referenceTransaction: receiving.receivingNumber,
+        beforeQuantity,
+        afterQuantity,
+        performedBy: receiving.createdBy,
+        approvedBy: approvedByUsername,
+        condition: item.condition,
+        date: new Date(),
+      });
+    }
+  }
+
+  // 4. Update Parent Purchase Invoice Status
+  const invoice = await PurchaseInvoice.findById(receiving.purchaseInvoice, null, sessionOptions);
+  if (invoice) {
+    const otherApprovedReceivings = await PurchaseReceiving.find({
+      purchaseInvoice: invoice._id,
+      status: "Approved",
+    }, null, sessionOptions);
+
+    const totalReceivedMap: Record<string, number> = {};
+
+    for (const rec of otherApprovedReceivings) {
+      for (const item of rec.items) {
+        const pStr = item.product.toString();
+        totalReceivedMap[pStr] = (totalReceivedMap[pStr] || 0) + item.quantityReceived;
+      }
+    }
+
+    for (const item of receiving.items) {
+      const pStr = item.product.toString();
+      totalReceivedMap[pStr] = (totalReceivedMap[pStr] || 0) + item.quantityReceived;
+    }
+
+    let allFullyReceived = true;
+    for (const item of invoice.items) {
+      const pStr = item.product.toString();
+      const received = totalReceivedMap[pStr] || 0;
+      if (received < item.quantity) {
+        allFullyReceived = false;
+        break;
+      }
+    }
+
+    if (allFullyReceived) {
+      invoice.status = "Inventory_Updated";
+    } else {
+      invoice.status = "Receiving";
+    }
+    await invoice.save(sessionOptions);
+  }
+
+  // 5. Update receiving status to Approved
+  receiving.status = "Approved";
+  receiving.approvedBy = approvedByUsername;
+  receiving.approvedAt = new Date();
+  await receiving.save(sessionOptions);
+
+  return { alreadyApproved: false, receiving };
+}
 
 export async function POST(
   req: NextRequest,
@@ -37,210 +214,74 @@ export async function POST(
 
     const { id } = await params;
 
-    // Start Session and Transaction
-    let session;
+    // Try executing inside a MongoDB Transaction Session first
+    let session: mongoose.ClientSession | undefined;
+    let useTransaction = true;
+
     try {
       session = await mongoose.startSession();
-    } catch (sessionError: any) {
-      return NextResponse.json({
-        success: false,
-        error: "MongoDB transactions are required for inventory operations. Please configure MongoDB as a Replica Set to proceed.",
-        debugError: sessionError.message
-      }, { status: 500 });
+      session.startTransaction();
+    } catch (sessionError) {
+      // MongoDB environment does not support sessions/replica set
+      useTransaction = false;
+      session = undefined;
     }
 
-    session.startTransaction();
-
-    try {
-      // 1. Fetch receiving record
-      const receiving = await PurchaseReceiving.findById(id).session(session);
-      if (!receiving) {
-        throw new Error("Receiving record not found.");
-      }
-
-      if (receiving.status === "Approved") {
+    if (useTransaction && session) {
+      try {
+        const result = await processReceivingApproval(id, auth.user.username, session);
         await session.commitTransaction();
-        return NextResponse.json({ success: true, message: "Receiving is already approved.", data: receiving });
-      }
-
-      if (receiving.status !== "Pending_Approval") {
-        throw new Error(`Only Pending Approval receiving documents can be approved. Current status: ${receiving.status}`);
-      }
-
-      // 2. Fetch destination location
-      const locationObj = await Location.findById(receiving.location).session(session);
-      if (!locationObj || !locationObj.active) {
-        throw new Error("Destination location is inactive or invalid.");
-      }
-
-      // 3. Update Inventory, SerialNumbers, and InventoryMovement for each item
-      for (const item of receiving.items) {
-        const productObj = await Product.findById(item.product).session(session);
-        if (!productObj) {
-          throw new Error(`Product not found: ${item.product}`);
+        await session.endSession();
+        return NextResponse.json({
+          success: true,
+          message: "Receiving approved successfully.",
+          data: result.receiving,
+        });
+      } catch (txnError: any) {
+        // Abort session transaction
+        try {
+          if (session.inTransaction()) {
+            await session.abortTransaction();
+          }
+          await session.endSession();
+        } catch (e) {
+          // ignore session cleanup error
         }
 
-        // a. Check/Update Inventory
-        let inventory = await Inventory.findOne({
-          product: item.product,
-          location: receiving.location,
-          condition: item.condition,
-        }).session(session);
+        // If the error was a MongoDB transaction error (standalone DB / aborted txn error), fallback to direct execution
+        const errMsg = txnError.message || "";
+        const isTxnIssue =
+          errMsg.includes("Transaction with") ||
+          errMsg.includes("aborted") ||
+          errMsg.includes("replica set") ||
+          errMsg.includes("Transaction numbers are only allowed");
 
-        const beforeQuantity = inventory ? inventory.quantity : 0;
-
-        if (!inventory) {
-          inventory = new Inventory({
-            product: item.product,
-            location: receiving.location,
-            condition: item.condition,
-            quantity: item.quantityReceived,
-            serialTracking: productObj.serialTracking,
+        if (isTxnIssue) {
+          // Fallback to direct non-transactional execution
+          const fallbackResult = await processReceivingApproval(id, auth.user.username);
+          return NextResponse.json({
+            success: true,
+            message: "Receiving approved successfully.",
+            data: fallbackResult.receiving,
           });
         } else {
-          inventory.quantity += item.quantityReceived;
-        }
-
-        await inventory.save({ session });
-        const afterQuantity = inventory.quantity;
-
-        // b. If serialized, check and insert SerialNumbers
-        if (productObj.serialTracking) {
-          if (!item.serialNumbers || item.serialNumbers.length !== item.quantityReceived) {
-            throw new Error(`Product "${productObj.name}" requires serial numbers but they are missing or length mismatch.`);
-          }
-
-          for (const sn of item.serialNumbers) {
-            const existingSerial = await SerialNumber.findOne({ serialNumber: sn }).session(session);
-            if (existingSerial) {
-              throw new Error(`Serial number "${sn}" already exists in the system (Product: ${existingSerial.product}). Duplicate registration rejected.`);
-            }
-
-            // Create serial number as Available
-            await SerialNumber.create(
-              [
-                {
-                  product: item.product,
-                  serialNumber: sn,
-                  status: "Available",
-                  location: locationObj.name, // Store location name
-                  transactionReference: receiving.receivingNumber,
-                },
-              ],
-              { session }
-            );
-          }
-        }
-
-        // c. Create InventoryMovement record
-        await InventoryMovement.create(
-          [
-            {
-              product: item.product,
-              quantity: item.quantityReceived,
-              serialNumbers: item.serialNumbers || [],
-              sourceName: "Supplier", // For purchase receiving
-              destinationLocation: receiving.location,
-              destinationName: locationObj.name,
-              type: "PURCHASE_RECEIVING",
-              referenceTransaction: receiving.receivingNumber,
-              beforeQuantity,
-              afterQuantity,
-              performedBy: receiving.createdBy,
-              approvedBy: auth.user.username,
-              date: new Date(),
-            },
-          ],
-          { session }
-        );
-      }
-
-      // 4. Update Parent Purchase Invoice Status
-      const invoice = await PurchaseInvoice.findById(receiving.purchaseInvoice).session(session);
-      if (!invoice) {
-        throw new Error("Associated Purchase Invoice not found.");
-      }
-
-      // Fetch other APPROVED receivings to calculate outstanding
-      const otherApprovedReceivings = await PurchaseReceiving.find({
-        purchaseInvoice: invoice._id,
-        status: "Approved",
-      }).session(session);
-
-      // Aggregate total received including current session
-      const totalReceivedMap: Record<string, number> = {};
-      
-      // 1. Add other approved receivings
-      for (const rec of otherApprovedReceivings) {
-        for (const item of rec.items) {
-          const pStr = item.product.toString();
-          totalReceivedMap[pStr] = (totalReceivedMap[pStr] || 0) + item.quantityReceived;
+          // It was a real validation error (e.g. duplicate serial number or missing product)
+          return NextResponse.json(
+            { success: false, error: errMsg },
+            { status: 400 }
+          );
         }
       }
-
-      // 2. Add current receiving items (since it's being approved now)
-      for (const item of receiving.items) {
-        const pStr = item.product.toString();
-        totalReceivedMap[pStr] = (totalReceivedMap[pStr] || 0) + item.quantityReceived;
-      }
-
-      // 3. Compare with invoice ordered quantities
-      let allFullyReceived = true;
-      for (const item of invoice.items) {
-        const pStr = item.product.toString();
-        const received = totalReceivedMap[pStr] || 0;
-        if (received < item.quantity) {
-          allFullyReceived = false;
-          break;
-        }
-      }
-
-      // Transition Purchase Invoice status
-      if (allFullyReceived) {
-        invoice.status = "Inventory_Updated";
-      } else {
-        invoice.status = "Receiving";
-      }
-      await invoice.save({ session });
-
-      // 5. Update receiving status to Approved
-      receiving.status = "Approved";
-      receiving.approvedBy = auth.user.username;
-      receiving.approvedAt = new Date();
-      await receiving.save({ session });
-
-      // Commit transaction
-      await session.commitTransaction();
-      await session.endSession();
-
-      return NextResponse.json({ success: true, data: receiving });
-    } catch (error: any) {
-      try {
-        if (session && session.inTransaction()) {
-          await session.abortTransaction();
-        }
-      } catch (abortError) {
-        console.warn("Failed to abort transaction:", abortError);
-      }
-      try {
-        if (session) {
-          await session.endSession();
-        }
-      } catch (endError) {
-        console.warn("Failed to end session:", endError);
-      }
-      throw error;
+    } else {
+      // Fallback direct execution for standalone MongoDB without replica set
+      const result = await processReceivingApproval(id, auth.user.username);
+      return NextResponse.json({
+        success: true,
+        message: "Receiving approved successfully.",
+        data: result.receiving,
+      });
     }
   } catch (error: any) {
-    if (isTransactionUnsupported(error)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "MongoDB transactions are required for inventory operations. Please configure MongoDB as a Replica Set to proceed.",
-        },
-        { status: 500 }
-      );
-    }
     return NextResponse.json(
       { success: false, error: error.message || "Failed to approve receiving transaction." },
       { status: 500 }

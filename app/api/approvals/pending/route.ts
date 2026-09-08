@@ -34,7 +34,15 @@ export async function GET(req: NextRequest) {
       .sort({ createdAt: -1 })
       .lean();
 
-    // 3. Format unified items list
+    // 3. Fetch pending Stock Transfers
+    const { StockTransfer } = await import("@/models/StockTransfer");
+    const pendingTransfers = await StockTransfer.find({ status: "Pending_Approval" })
+      .populate("sourceLocation", "name code")
+      .populate("destinationLocation", "name code")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // 4. Format unified items list
     const formattedInvoices = pendingInvoices.map((inv: any) => {
       const productCount = inv.items.length;
       const totalQty = inv.items.reduce((sum: number, item: any) => sum + item.quantity, 0);
@@ -78,8 +86,34 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    // Merge and sort by pendingSince (oldest first, so older approvals get resolved first)
-    const combinedApprovals = [...formattedInvoices, ...formattedReceivings].sort(
+    const formattedTransfers = pendingTransfers.map((tr: any) => {
+      const productCount = tr.items.length;
+      const totalQty = tr.items.reduce((sum: number, item: any) => sum + item.quantity, 0);
+
+      return {
+        id: tr._id,
+        type: "Stock Transfer",
+        reference: tr.transferNumber,
+        parentReference: undefined,
+        supplierName: `${tr.sourceLocation?.name || "Source"} ➔ ${tr.destinationLocation?.name || "Destination"}`,
+        supplierCode: tr.reason || "Stock Request",
+        date: tr.createdAt,
+        amount: null,
+        locationName: tr.destinationLocation?.name || "Unknown Location",
+        productCount,
+        quantity: totalQty,
+        createdBy: tr.createdBy,
+        status: tr.status,
+        pendingSince: tr.createdAt,
+      };
+    });
+
+    // Merge and sort by pendingSince (oldest first)
+    const combinedApprovals = [
+      ...formattedInvoices,
+      ...formattedReceivings,
+      ...formattedTransfers,
+    ].sort(
       (a: any, b: any) => new Date(a.pendingSince).getTime() - new Date(b.pendingSince).getTime()
     );
 

@@ -20,10 +20,15 @@ import {
   PackageX,
   Lock,
   Camera,
+  Truck,
+  Users,
+  BarChart3,
 } from "lucide-react";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { ToastContainer, ToastMessage } from "@/components/Toast";
 import { CameraBarcodeScannerModal } from "@/components/CameraBarcodeScannerModal";
+import { Pagination } from "@/components/Pagination";
+import { TableSkeleton } from "@/components/TableSkeleton";
 import {
   DEFAULT_PRODUCT_CONDITION,
   getConditionBadgeClasses,
@@ -59,6 +64,12 @@ export default function ProductListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
   // Filters & Search
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -87,6 +98,19 @@ export default function ProductListPage() {
   const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
+
+  // Reset page to 1 whenever filters or search change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [
+    debouncedSearch,
+    selectedCategory,
+    selectedGroup,
+    selectedCondition,
+    selectedStatus,
+    sortBy,
+    sortOrder,
+  ]);
 
   // Verify RBAC access
   useEffect(() => {
@@ -162,6 +186,8 @@ export default function ProductListPage() {
       if (selectedStatus !== "all") params.append("status", selectedStatus);
       params.append("sortBy", sortBy);
       params.append("sortOrder", sortOrder);
+      params.append("page", currentPage.toString());
+      params.append("limit", itemsPerPage.toString());
 
       const res = await fetch(`/api/products?${params.toString()}`, { signal });
       if (signal.aborted) return;
@@ -174,6 +200,10 @@ export default function ProductListPage() {
       }
 
       setProducts(data.data);
+      if (data.pagination) {
+        setTotalItems(data.pagination.total);
+        setTotalPages(data.pagination.totalPages);
+      }
     } catch (err: any) {
       if (err.name === "AbortError" || signal.aborted) {
         return;
@@ -193,6 +223,8 @@ export default function ProductListPage() {
     selectedStatus,
     sortBy,
     sortOrder,
+    currentPage,
+    itemsPerPage,
   ]);
 
   useEffect(() => {
@@ -283,7 +315,7 @@ export default function ProductListPage() {
       />
 
       {/* Header Section */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-sm">
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-5 rounded-2xl">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-100 tracking-tight">
             Product Directory
@@ -292,20 +324,27 @@ export default function ProductListPage() {
             Manage products — New and Used are separate records with their own SKU, barcode, stock, and price.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={fetchProducts}
-            className="p-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-slate-300 transition-colors"
+            className="p-2 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-slate-300 transition-colors cursor-pointer"
             title="Refresh List"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           </button>
           <Link
+            href="/users"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs transition-colors"
+          >
+            <Users className="w-3.5 h-3.5 text-slate-400" />
+            <span>Staff & Users</span>
+          </Link>
+          <Link
             href="/products/new"
-            className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm shadow-md shadow-indigo-900/30 transition-colors"
+            className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-colors"
           >
             <Plus className="w-4 h-4" />
-            Add New Product
+            <span>Add New Product</span>
           </Link>
         </div>
       </div>
@@ -321,7 +360,7 @@ export default function ProductListPage() {
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search by Product Name, SKU, Barcode, or Model..."
-              className="w-full pl-11 pr-16 py-3 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+              className="w-full pl-11 pr-16 py-3 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-all"
             />
             {searchInput && (
               <button
@@ -337,10 +376,10 @@ export default function ProductListPage() {
           <button
             type="button"
             onClick={() => setCameraScannerOpen(true)}
-            className="flex items-center gap-2 px-3.5 py-3 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 rounded-xl font-semibold text-xs transition-colors shrink-0"
+            className="flex items-center gap-2 px-3.5 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl font-semibold text-xs transition-colors shrink-0 cursor-pointer"
             title="Scan product barcode using phone/laptop camera"
           >
-            <Camera className="w-4 h-4" />
+            <Camera className="w-4 h-4 text-slate-400" />
             <span className="hidden sm:inline">Scan with Camera</span>
           </button>
         </div>
@@ -422,7 +461,7 @@ export default function ProductListPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80 text-xs text-slate-400">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-slate-300">
-              Showing {products.length} product{products.length === 1 ? "" : "s"}
+              Showing {products.length} of {totalItems} product{totalItems === 1 ? "" : "s"}
             </span>
             {debouncedSearch && (
               <span className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded">
@@ -459,10 +498,7 @@ export default function ProductListPage() {
 
       {/* Main Content Area: Loading / Error / Empty / Product List */}
       {loading ? (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-3">
-          <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-sm font-medium text-slate-400">Loading products...</p>
-        </div>
+        <TableSkeleton rows={6} type="products" />
       ) : error ? (
         <div className="bg-rose-950/30 border border-rose-800/40 rounded-2xl p-8 text-center space-y-3">
           <AlertCircle className="w-10 h-10 text-rose-400 mx-auto" />
@@ -800,6 +836,20 @@ export default function ProductListPage() {
               </table>
             </div>
           </div>
+
+          {/* Pagination Controls */}
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            itemsPerPage={itemsPerPage}
+            onPageChange={(p) => setCurrentPage(p)}
+            onItemsPerPageChange={(l) => {
+              setItemsPerPage(l);
+              setCurrentPage(1);
+            }}
+            itemLabel="products"
+          />
         </>
       )}
     </div>

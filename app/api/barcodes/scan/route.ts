@@ -188,9 +188,16 @@ export async function GET(req: NextRequest) {
     const { calculateProductWeightedPricing } = await import("@/lib/pricing");
     const pricingResult = await calculateProductWeightedPricing(product._id.toString());
 
+    const effectiveCost = (pricingResult.priceConfigured && pricingResult.avgCostPrice) ? pricingResult.avgCostPrice : (product.costPrice && product.costPrice > 1 ? product.costPrice : (product.costPrice || 0));
+    const effectiveSelling = (pricingResult.priceConfigured && pricingResult.avgSellingPrice) ? pricingResult.avgSellingPrice : (product.sellingPrice && product.sellingPrice > 1 ? product.sellingPrice : (product.sellingPrice || 0));
+    const effectiveMinSelling = (pricingResult.priceConfigured && pricingResult.avgMinSellingPrice) ? pricingResult.avgMinSellingPrice : (product.minSellingPrice && product.minSellingPrice > 1 ? product.minSellingPrice : (product.minSellingPrice || 0));
+
     // Project safe product details for restricted roles
     const safeProduct = isAuthorizedForProvenance ? {
       ...product,
+      costPrice: effectiveCost,
+      sellingPrice: effectiveSelling,
+      minSellingPrice: effectiveMinSelling,
       color: product.color || "Unspecified",
       brand: product.brand || "",
       modelNumber: product.modelNumber || product.model || "",
@@ -201,6 +208,9 @@ export async function GET(req: NextRequest) {
       sku: product.sku,
       barcode: product.barcode,
       condition: product.condition,
+      costPrice: effectiveCost,
+      sellingPrice: effectiveSelling,
+      minSellingPrice: effectiveMinSelling,
       color: product.color || "Unspecified",
       brand: product.brand || "",
       modelNumber: product.modelNumber || product.model || "",

@@ -19,7 +19,7 @@ import { ToastContainer, ToastMessage } from "@/components/Toast";
 
 interface PendingApprovalItem {
   id: string;
-  type: "Purchase Invoice" | "Purchase Receiving";
+  type: "Purchase Invoice" | "Purchase Receiving" | "Stock Transfer";
   reference: string;
   parentReference?: string;
   supplierName: string;
@@ -124,7 +124,9 @@ export default function ApprovalsPage() {
       const endpoint =
         item.type === "Purchase Invoice"
           ? `/api/purchase-invoices/${item.id}`
-          : `/api/purchase-receivings/${item.id}`;
+          : item.type === "Purchase Receiving"
+          ? `/api/purchase-receivings/${item.id}`
+          : `/api/transfers/${item.id}`;
       const res = await fetch(endpoint);
       const data = await res.json();
       if (data.success) {
@@ -151,7 +153,9 @@ export default function ApprovalsPage() {
       const endpoint =
         selectedItem.type === "Purchase Invoice"
           ? `/api/purchase-invoices/${selectedItem.id}/approve`
-          : `/api/purchase-receivings/${selectedItem.id}/approve`;
+          : selectedItem.type === "Purchase Receiving"
+          ? `/api/purchase-receivings/${selectedItem.id}/approve`
+          : `/api/transfers/${selectedItem.id}/approve`;
 
       const res = await fetch(endpoint, { method: "POST" });
       const data = await res.json();
@@ -187,7 +191,9 @@ export default function ApprovalsPage() {
       const endpoint =
         selectedItem.type === "Purchase Invoice"
           ? `/api/purchase-invoices/${selectedItem.id}/reject`
-          : `/api/purchase-receivings/${selectedItem.id}/reject`;
+          : selectedItem.type === "Purchase Receiving"
+          ? `/api/purchase-receivings/${selectedItem.id}/reject`
+          : `/api/transfers/${selectedItem.id}/reject`;
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -279,7 +285,9 @@ export default function ApprovalsPage() {
                         className={`px-2 py-0.5 text-[9px] font-bold rounded uppercase ${
                           item.type === "Purchase Invoice"
                             ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                            : "bg-purple-500/10 text-purple-400 border border-purple-500/20"
+                            : item.type === "Purchase Receiving"
+                            ? "bg-purple-500/10 text-purple-400 border border-purple-500/20"
+                            : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
                         }`}
                       >
                         {item.type}
@@ -298,7 +306,7 @@ export default function ApprovalsPage() {
                       ) : (
                         <span className="flex items-center gap-1">
                           <Layers className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Recv to: {item.locationName}</span>
+                          <span>{item.type === "Stock Transfer" ? `Route: ${item.supplierName}` : `Recv to: ${item.locationName}`}</span>
                         </span>
                       )}
                     </td>
@@ -334,7 +342,9 @@ export default function ApprovalsPage() {
                     className={`px-2 py-0.5 text-[8px] font-bold rounded uppercase ${
                       item.type === "Purchase Invoice"
                         ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                        : "bg-purple-500/10 text-purple-400 border border-purple-500/20"
+                        : item.type === "Purchase Receiving"
+                        ? "bg-purple-500/10 text-purple-400 border border-purple-500/20"
+                        : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
                     }`}
                   >
                     {item.type}
@@ -427,14 +437,18 @@ export default function ApprovalsPage() {
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 p-3.5 bg-slate-950 border border-slate-850 rounded-lg">
                     <div>
                       <span className="block text-[9px] font-extrabold text-slate-500 uppercase tracking-wider mb-0.5">
-                        Supplier
+                        {selectedItem.type === "Stock Transfer" ? "Transfer Route" : "Supplier"}
                       </span>
                       <span className="font-bold text-slate-200">{selectedItem.supplierName}</span>
                     </div>
 
                     <div>
                       <span className="block text-[9px] font-extrabold text-slate-500 uppercase tracking-wider mb-0.5">
-                        {selectedItem.type === "Purchase Invoice" ? "Invoice Date" : "Date Received"}
+                        {selectedItem.type === "Purchase Invoice"
+                          ? "Invoice Date"
+                          : selectedItem.type === "Stock Transfer"
+                          ? "Transfer Date"
+                          : "Date Received"}
                       </span>
                       <span className="font-semibold text-slate-350 flex items-center gap-1">
                         <Calendar className="w-3.5 h-3.5 text-slate-550" />
@@ -448,9 +462,9 @@ export default function ApprovalsPage() {
                       </span>
                       <span className="font-bold text-slate-200">
                         {selectedItem.type === "Purchase Invoice" ? (
-                          `Rs. ${selectedDetails.total.toLocaleString("en-PK")}`
+                          `Rs. ${(selectedDetails.total || 0).toLocaleString("en-PK")}`
                         ) : (
-                          selectedDetails.location?.name || "Unknown"
+                          selectedDetails.location?.name || selectedDetails.destinationLocation?.name || "Unknown"
                         )}
                       </span>
                     </div>
@@ -487,7 +501,11 @@ export default function ApprovalsPage() {
                             <th className="p-2.5">Product Name / Barcode</th>
                             <th className="p-2.5 text-center">Condition</th>
                             <th className="p-2.5 text-right">
-                              {selectedItem.type === "Purchase Invoice" ? "Qty Ordered" : "Qty Received"}
+                              {selectedItem.type === "Purchase Invoice"
+                                ? "Qty Ordered"
+                                : selectedItem.type === "Stock Transfer"
+                                ? "Qty Transferred"
+                                : "Qty Received"}
                             </th>
                             {selectedItem.type === "Purchase Invoice" && (
                               <>
@@ -500,48 +518,56 @@ export default function ApprovalsPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-850 text-slate-350">
-                          {selectedDetails.items.map((line: any, idx: number) => (
-                            <tr key={idx} className="hover:bg-slate-850/40">
-                              <td className="p-2.5">
-                                <div className="font-bold text-slate-250">{line.name}</div>
-                                <div className="text-[9px] text-slate-500 font-bold uppercase">
-                                  SKU: {line.sku} | Barcode: {line.barcode}
-                                </div>
-                                {line.serialNumbers && line.serialNumbers.length > 0 && (
-                                  <div className="mt-1 bg-slate-950 p-2 border border-slate-850 rounded text-[9px] text-slate-400 font-semibold space-y-0.5">
-                                    <span className="block font-bold text-[8px] uppercase text-indigo-400 tracking-wider">
-                                      Scanned Serial Numbers:
-                                    </span>
-                                    <p className="break-all font-mono leading-relaxed">
-                                      {line.serialNumbers.join(", ")}
-                                    </p>
+                          {selectedDetails.items.map((line: any, idx: number) => {
+                            const name = line.name || line.product?.name || "Unknown Product";
+                            const sku = line.sku || line.product?.sku || "-";
+                            const barcode = line.barcode || line.product?.barcode || "-";
+                            const condition = line.condition || line.product?.condition || "New";
+                            const qty = line.quantity ?? line.quantityReceived ?? 0;
+
+                            return (
+                              <tr key={idx} className="hover:bg-slate-850/40">
+                                <td className="p-2.5">
+                                  <div className="font-bold text-slate-250">{name}</div>
+                                  <div className="text-[9px] text-slate-500 font-bold uppercase">
+                                    SKU: {sku} | Barcode: {barcode}
                                   </div>
+                                  {line.serialNumbers && line.serialNumbers.length > 0 && (
+                                    <div className="mt-1 bg-slate-950 p-2 border border-slate-850 rounded text-[9px] text-slate-400 font-semibold space-y-0.5">
+                                      <span className="block font-bold text-[8px] uppercase text-indigo-400 tracking-wider">
+                                        Scanned Serial Numbers:
+                                      </span>
+                                      <p className="break-all font-mono leading-relaxed">
+                                        {line.serialNumbers.join(", ")}
+                                      </p>
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="p-2.5 text-center font-semibold uppercase text-slate-400">
+                                  {condition}
+                                </td>
+                                <td className="p-2.5 text-right font-bold text-slate-200">
+                                  {qty}
+                                </td>
+                                {selectedItem.type === "Purchase Invoice" && (
+                                  <>
+                                    <td className="p-2.5 text-right font-medium text-slate-400">
+                                      Rs. {(line.unitCost || 0).toLocaleString("en-PK")}
+                                    </td>
+                                    <td className="p-2.5 text-right font-medium text-slate-400">
+                                      Rs. {line.sellingPrice?.toLocaleString("en-PK") || "0"}
+                                    </td>
+                                    <td className="p-2.5 text-right font-medium text-slate-400">
+                                      Rs. {line.minSellingPrice?.toLocaleString("en-PK") || "0"}
+                                    </td>
+                                    <td className="p-2.5 text-right font-bold text-slate-200">
+                                      Rs. {(line.amount || 0).toLocaleString("en-PK")}
+                                    </td>
+                                  </>
                                 )}
-                              </td>
-                              <td className="p-2.5 text-center font-semibold uppercase text-slate-400">
-                                {line.condition}
-                              </td>
-                              <td className="p-2.5 text-right font-bold text-slate-200">
-                                {line.quantity || line.quantityReceived}
-                              </td>
-                              {selectedItem.type === "Purchase Invoice" && (
-                                <>
-                                  <td className="p-2.5 text-right font-medium text-slate-400">
-                                    Rs. {line.unitCost.toLocaleString("en-PK")}
-                                  </td>
-                                  <td className="p-2.5 text-right font-medium text-slate-400">
-                                    Rs. {line.sellingPrice?.toLocaleString("en-PK") || "0"}
-                                  </td>
-                                  <td className="p-2.5 text-right font-medium text-slate-400">
-                                    Rs. {line.minSellingPrice?.toLocaleString("en-PK") || "0"}
-                                  </td>
-                                  <td className="p-2.5 text-right font-bold text-slate-200">
-                                    Rs. {line.amount.toLocaleString("en-PK")}
-                                  </td>
-                                </>
-                              )}
-                            </tr>
-                          ))}
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -599,12 +625,20 @@ export default function ApprovalsPage() {
                     <span>Go to Invoice Details</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </Link>
-                ) : (
+                ) : selectedItem.type === "Purchase Receiving" ? (
                   <Link
                     href={`/purchase-invoices/${selectedDetails?.purchaseInvoice?._id || ""}`}
                     className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-400 hover:underline"
                   >
                     <span>Go to Invoice Details</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                ) : (
+                  <Link
+                    href={`/transfers/${selectedItem.id}`}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-400 hover:underline"
+                  >
+                    <span>Go to Transfer Details</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </Link>
                 )}
