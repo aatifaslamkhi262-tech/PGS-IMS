@@ -62,12 +62,14 @@ export async function GET(req: NextRequest) {
 
     // Search filter (Name, SKU, Barcode, Model, ModelNumber, Brand, Color)
     if (search.trim()) {
-      const searchRegex = new RegExp(search.trim(), "i");
+      const escapeRegex = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const trimmedSearch = search.trim();
+      const searchRegex = new RegExp(escapeRegex(trimmedSearch), "i");
       query.$or = [
         { name: searchRegex },
         { sku: searchRegex },
-        { barcode: trimmedSearch }, // Exact match for barcode only
+        { barcode: trimmedSearch }, // Exact match for barcode
+        { barcode: searchRegex },
         { model: searchRegex },
         { modelNumber: searchRegex },
         { brand: searchRegex },

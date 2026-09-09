@@ -12,10 +12,12 @@ import {
   Grid,
   Plus,
   X,
+  Camera,
 } from "lucide-react";
 import { ToastContainer, ToastMessage } from "@/components/Toast";
 import { Pagination } from "@/components/Pagination";
 import { TableSkeleton } from "@/components/TableSkeleton";
+import { CameraBarcodeScannerModal } from "@/components/CameraBarcodeScannerModal";
 
 interface InventoryProduct {
   product: {
@@ -63,8 +65,10 @@ export default function InventoryPage() {
   const [modalError, setModalError] = useState("");
   const [creatingLocation, setCreatingLocation] = useState(false);
 
-  // Filters
-  const [search, setSearch] = useState("");
+  // Filters & Search
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [cameraScannerOpen, setCameraScannerOpen] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState("");
   const [selectedCondition, setSelectedCondition] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
@@ -106,17 +110,26 @@ export default function InventoryPage() {
     }
   };
 
+  // Debounce search input (300ms)
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(searchInput);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchInput]);
+
   // Reset page to 1 on filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, selectedLocation, selectedCondition, selectedCategory, selectedSerialized, selectedStatus]);
+  }, [debouncedSearch, selectedLocation, selectedCondition, selectedCategory, selectedSerialized, selectedStatus]);
 
-  // Fetch Inventory List
-  const fetchInventory = async () => {
+  // Fetch Inventory List with AbortSignal to avoid out-of-order race conditions
+  const fetchInventory = async (signal?: AbortSignal) => {
     setLoading(true);
+    setError("");
     try {
       const params = new URLSearchParams();
-      if (search.trim()) params.append("search", search);
+      if (debouncedSearch.trim()) params.append("search", debouncedSearch.trim());
       if (selectedLocation) params.append("location", selectedLocation);
       if (selectedCondition) params.append("condition", selectedCondition);
       if (selectedCategory) params.append("category", selectedCategory);
@@ -125,8 +138,11 @@ export default function InventoryPage() {
       params.append("page", currentPage.toString());
       params.append("limit", itemsPerPage.toString());
 
-      const res = await fetch(`/api/inventory?${params.toString()}`);
+      const res = await fetch(`/api/inventory?${params.toString()}`, { signal });
+      if (signal?.aborted) return;
       const data = await res.json();
+      if (signal?.aborted) return;
+
       if (data.success) {
         setInventory(data.data);
         if (data.pagination) {
@@ -136,10 +152,13 @@ export default function InventoryPage() {
       } else {
         setError(data.error || "Failed to load inventory registry.");
       }
-    } catch {
+    } catch (err: any) {
+      if (err.name === "AbortError" || signal?.aborted) return;
       setError("Failed to fetch inventory from server.");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   };
 
@@ -202,8 +221,12 @@ export default function InventoryPage() {
   }, []);
 
   useEffect(() => {
-    fetchInventory();
-  }, [search, selectedLocation, selectedCondition, selectedCategory, selectedSerialized, selectedStatus, currentPage, itemsPerPage]);
+    const controller = new AbortController();
+    fetchInventory(controller.signal);
+    return () => {
+      controller.abort();
+    };
+  }, [debouncedSearch, selectedLocation, selectedCondition, selectedCategory, selectedSerialized, selectedStatus, currentPage, itemsPerPage]);
 
   return (
     <div className="space-y-6">
@@ -240,11 +263,40 @@ export default function InventoryPage() {
           <Search className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
           <input
             type="text"
-            placeholder="Search by product, SKU, barcode, serial..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-850 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+            placeholder="Search product, SKU, barcode, serial (or scan)..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                setDebouncedSearch(searchInput.trim());
+              }
+            }}
+            className="w-full pl-9 pr-16 py-2 bg-slate-950 border border-slate-850 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
           />
+          <div className="absolute right-2 top-2 flex items-center gap-1.5">
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchInput("");
+                  setDebouncedSearch("");
+                }}
+                className="p-1 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                title="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setCameraScannerOpen(true)}
+              className="p-1 text-indigo-400 hover:text-indigo-300 hover:bg-slate-800 rounded transition-colors cursor-pointer"
+              title="Scan barcode with camera"
+            >
+              <Camera className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Location Filter */}
@@ -593,6 +645,18 @@ export default function InventoryPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {cameraScannerOpen && (
+        <CameraBarcodeScannerModal
+          isOpen={cameraScannerOpen}
+          onClose={() => setCameraScannerOpen(false)}
+          onScanSuccess={(scannedCode) => {
+            setSearchInput(scannedCode);
+            setDebouncedSearch(scannedCode);
+            addToast("info", `Scanned barcode/serial: ${scannedCode}`);
+          }}
+        />
       )}
 
       <ToastContainer toasts={toasts} onClose={removeToast} />

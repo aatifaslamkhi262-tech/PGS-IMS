@@ -25,11 +25,15 @@ export async function GET(req: NextRequest) {
     const page = parseInt(searchParams.get("page") || "1", 10);
     const limit = parseInt(searchParams.get("limit") || "25", 10);
 
+    const escapeRegex = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     // 1. Resolve product IDs by serial number search if applicable
     let serialProductIds: string[] = [];
     if (search.trim()) {
+      const cleanSearch = search.trim();
+      const escapedSearch = escapeRegex(cleanSearch);
       const matchingSerials = await SerialNumber.find({
-        serialNumber: new RegExp(search.trim(), "i"),
+        serialNumber: new RegExp(escapedSearch, "i"),
       })
         .select("product")
         .lean();
@@ -39,10 +43,13 @@ export async function GET(req: NextRequest) {
     // 2. Query products first to apply filters
     const prodQuery: any = { isDeleted: false };
     if (search.trim()) {
-      const searchRegex = new RegExp(search.trim(), "i");
+      const cleanSearch = search.trim();
+      const escapedSearch = escapeRegex(cleanSearch);
+      const searchRegex = new RegExp(escapedSearch, "i");
       prodQuery.$or = [
         { name: searchRegex },
         { sku: searchRegex },
+        { barcode: cleanSearch },
         { barcode: searchRegex },
         { model: searchRegex },
         { modelNumber: searchRegex },
