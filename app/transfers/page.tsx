@@ -164,104 +164,164 @@ export default function TransfersPage() {
           ) : transfers.length === 0 ? (
             <div className="p-12 text-center text-slate-400">No stock transfers found.</div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-slate-300 min-w-[850px]">
-                <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-800">
-                  <tr>
-                    <th className="py-3.5 px-4 whitespace-nowrap">Transfer Ref</th>
-                    <th className="py-3.5 px-4 whitespace-nowrap">Type</th>
-                    <th className="py-3.5 px-4 whitespace-nowrap">From</th>
-                    <th className="py-3.5 px-4 whitespace-nowrap">To</th>
-                    <th className="py-3.5 px-4">Items / Qty</th>
-                    <th className="py-3.5 px-4 text-right whitespace-nowrap">Total Valuation</th>
-                    <th className="py-3.5 px-4 whitespace-nowrap">Carried By</th>
-                    <th className="py-3.5 px-4 whitespace-nowrap">Dispatched By</th>
-                    <th className="py-3.5 px-4 whitespace-nowrap">Status</th>
-                    <th className="py-3.5 px-4 text-right whitespace-nowrap">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800">
-                  {transfers.map((tr) => {
-                    const totalValuation = tr.items.reduce((sum, item) => {
-                      const cost = (item.product as any)?.costPrice;
-                      const selling = (item.product as any)?.sellingPrice;
-                      const rate = (cost && cost > 1) ? cost : (selling || 0);
-                      return sum + ((item.quantity || 1) * rate);
-                    }, 0);
-                    return (
-                      <tr key={tr._id} className="hover:bg-slate-800/40 transition">
-                        <td className="py-3.5 px-4 font-mono font-bold text-indigo-400 whitespace-nowrap">
-                          <Link href={`/transfers/${tr._id}`} className="hover:underline">
+            <div>
+              {/* Mobile Card View (< md) */}
+              <div className="block md:hidden divide-y divide-slate-800">
+                {transfers.map((tr) => {
+                  const totalValuation = tr.items.reduce((sum, item) => {
+                    const cost = (item.product as any)?.costPrice;
+                    const selling = (item.product as any)?.sellingPrice;
+                    const rate = (cost && cost > 1) ? cost : (selling || 0);
+                    return sum + ((item.quantity || 1) * rate);
+                  }, 0);
+                  return (
+                    <div key={tr._id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <Link href={`/transfers/${tr._id}`} className="font-mono font-bold text-indigo-400 text-sm hover:underline block">
                             {tr.transferNumber}
                           </Link>
-                        </td>
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
-                              tr.type === "Return"
-                                ? "bg-amber-950 text-amber-300 border-amber-800"
-                                : tr.type === "Direct_Reject"
-                                ? "bg-rose-950 text-rose-300 border-rose-800"
-                                : "bg-indigo-950 text-indigo-300 border-indigo-800"
-                            }`}
-                          >
-                            {tr.type}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 font-medium text-slate-200 whitespace-nowrap">
-                          {tr.sourceLocation?.name || "N/A"}
-                        </td>
-                        <td className="py-3.5 px-4 font-medium text-slate-200 whitespace-nowrap">
-                          {tr.destinationLocation?.name || "N/A"}
-                        </td>
-                        <td className="py-3.5 px-4 max-w-xs">
-                          <div className="space-y-1">
-                            {tr.items.slice(0, 2).map((item, idx) => (
-                              <div key={idx} className="text-slate-300 truncate">
-                                <span className="font-semibold text-slate-100">{item.product?.name || "Item"}</span>{" "}
-                                <span className="text-slate-400">({item.condition})</span> x{item.quantity}
-                              </div>
-                            ))}
-                            {tr.items.length > 2 && (
-                              <div className="text-[11px] font-semibold text-indigo-400 pt-0.5">
-                                + {tr.items.length - 2} more item{tr.items.length - 2 > 1 ? "s" : ""} ({tr.items.reduce((acc, curr) => acc + (curr.quantity || 1), 0)} total qty)
-                              </div>
-                            )}
+                          <div className="text-[11px] text-slate-400 font-medium">
+                            {tr.sourceLocation?.name || "N/A"} → {tr.destinationLocation?.name || "N/A"}
                           </div>
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-400 whitespace-nowrap">
-                          Rs. {totalValuation.toLocaleString("en-PK")}
-                        </td>
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          {tr.carrierName ? (
-                            <div className="font-semibold text-emerald-400">🚶 {tr.carrierName}</div>
-                          ) : (
-                            <span className="text-slate-500">—</span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-400 whitespace-nowrap">{tr.dispatchedBy || tr.createdBy}</td>
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          <span
-                            className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap ${getStatusBadge(
-                              tr.status
-                            )}`}
-                          >
-                            {tr.status.replace("_", " ")}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                          <Link
-                            href={`/transfers/${tr._id}`}
-                            className="inline-block px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition"
-                          >
-                            View Details →
-                          </Link>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                        </div>
+                        <span
+                          className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-semibold border whitespace-nowrap ${getStatusBadge(
+                            tr.status
+                          )}`}
+                        >
+                          {tr.status.replace("_", " ")}
+                        </span>
+                      </div>
+
+                      <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-850 text-xs space-y-1">
+                        {tr.items.slice(0, 2).map((item, idx) => (
+                          <div key={idx} className="text-slate-300 truncate flex justify-between">
+                            <span>{item.product?.name || "Item"} ({item.condition})</span>
+                            <strong className="text-indigo-400 font-mono">x{item.quantity}</strong>
+                          </div>
+                        ))}
+                        {tr.items.length > 2 && (
+                          <div className="text-[10px] font-semibold text-indigo-400 pt-0.5">
+                            + {tr.items.length - 2} more item{tr.items.length - 2 > 1 ? "s" : ""}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/60">
+                        <span className="font-mono font-bold text-emerald-400">Rs. {totalValuation.toLocaleString("en-PK")}</span>
+                        <Link
+                          href={`/transfers/${tr._id}`}
+                          className="px-3 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 font-semibold border border-indigo-500/30 text-xs"
+                        >
+                          Details →
+                        </Link>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Desktop View (>= md) */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-left text-xs text-slate-300 min-w-[850px]">
+                  <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-800">
+                    <tr>
+                      <th className="py-3.5 px-4 whitespace-nowrap">Transfer Ref</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">Type</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">From</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">To</th>
+                      <th className="py-3.5 px-4">Items / Qty</th>
+                      <th className="py-3.5 px-4 text-right whitespace-nowrap">Total Valuation</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">Carried By</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">Dispatched By</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">Status</th>
+                      <th className="py-3.5 px-4 text-right whitespace-nowrap">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {transfers.map((tr) => {
+                      const totalValuation = tr.items.reduce((sum, item) => {
+                        const cost = (item.product as any)?.costPrice;
+                        const selling = (item.product as any)?.sellingPrice;
+                        const rate = (cost && cost > 1) ? cost : (selling || 0);
+                        return sum + ((item.quantity || 1) * rate);
+                      }, 0);
+                      return (
+                        <tr key={tr._id} className="hover:bg-slate-800/40 transition">
+                          <td className="py-3.5 px-4 font-mono font-bold text-indigo-400 whitespace-nowrap">
+                            <Link href={`/transfers/${tr._id}`} className="hover:underline">
+                              {tr.transferNumber}
+                            </Link>
+                          </td>
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                                tr.type === "Return"
+                                  ? "bg-amber-950 text-amber-300 border-amber-800"
+                                  : tr.type === "Direct_Reject"
+                                  ? "bg-rose-950 text-rose-300 border-rose-800"
+                                  : "bg-indigo-950 text-indigo-300 border-indigo-800"
+                              }`}
+                            >
+                              {tr.type}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 font-medium text-slate-200 whitespace-nowrap">
+                            {tr.sourceLocation?.name || "N/A"}
+                          </td>
+                          <td className="py-3.5 px-4 font-medium text-slate-200 whitespace-nowrap">
+                            {tr.destinationLocation?.name || "N/A"}
+                          </td>
+                          <td className="py-3.5 px-4 max-w-xs">
+                            <div className="space-y-1">
+                              {tr.items.slice(0, 2).map((item, idx) => (
+                                <div key={idx} className="text-slate-300 truncate">
+                                  <span className="font-semibold text-slate-100">{item.product?.name || "Item"}</span>{" "}
+                                  <span className="text-slate-400">({item.condition})</span> x{item.quantity}
+                                </div>
+                              ))}
+                              {tr.items.length > 2 && (
+                                <div className="text-[11px] font-semibold text-indigo-400 pt-0.5">
+                                  + {tr.items.length - 2} more item{tr.items.length - 2 > 1 ? "s" : ""} ({tr.items.reduce((acc, curr) => acc + (curr.quantity || 1), 0)} total qty)
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-400 whitespace-nowrap">
+                            Rs. {totalValuation.toLocaleString("en-PK")}
+                          </td>
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            {tr.carrierName ? (
+                              <div className="font-semibold text-emerald-400">🚶 {tr.carrierName}</div>
+                            ) : (
+                              <span className="text-slate-500">—</span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4 text-slate-400 whitespace-nowrap">{tr.dispatchedBy || tr.createdBy}</td>
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <span
+                              className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap ${getStatusBadge(
+                                tr.status
+                              )}`}
+                            >
+                              {tr.status.replace("_", " ")}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                            <Link
+                              href={`/transfers/${tr._id}`}
+                              className="inline-block px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition"
+                            >
+                              View Details →
+                            </Link>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

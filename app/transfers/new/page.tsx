@@ -3,6 +3,8 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { Camera } from "lucide-react";
+import { CameraBarcodeScannerModal } from "@/components/CameraBarcodeScannerModal";
 
 interface LocationOption {
   _id: string;
@@ -43,6 +45,9 @@ export default function NewTransferPage() {
   const [reason, setReason] = useState("Stock Request");
   const [notes, setNotes] = useState("");
   const [directApprove, setDirectApprove] = useState(false);
+
+  // Camera Scanner modal state
+  const [cameraScannerOpen, setCameraScannerOpen] = useState(false);
 
   // Line items state
   const [productSearch, setProductSearch] = useState("");
@@ -278,6 +283,14 @@ export default function NewTransferPage() {
       setTimeout(() => searchInputRef.current?.focus(), 50);
     } else {
       setScanStatusMsg(`❌ Barcode / Serial '${cleanCode}' not found in system.`);
+    }
+  };
+
+  const handleCameraScanSuccess = (scannedCode: string) => {
+    setCameraScannerOpen(false);
+    if (scannedCode && scannedCode.trim()) {
+      setProductSearch(scannedCode.trim());
+      resolveScannedBarcode(scannedCode.trim());
     }
   };
 
@@ -617,12 +630,12 @@ export default function NewTransferPage() {
                       <span>⚡ Instant Auto-Add on Scan</span>
                     </label>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap sm:flex-nowrap gap-2">
                     <div className="relative w-full">
                       <input
                         ref={searchInputRef}
                         type="text"
-                        placeholder="Type name or scan barcode / serial with scanner gun..."
+                        placeholder="Type name or scan barcode / serial..."
                         value={productSearch}
                         onChange={(e) => handleProductSearchChange(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
@@ -641,8 +654,17 @@ export default function NewTransferPage() {
                     </div>
                     <button
                       type="button"
+                      onClick={() => setCameraScannerOpen(true)}
+                      className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg shadow-md shadow-indigo-900/30 whitespace-nowrap cursor-pointer shrink-0"
+                      title="Scan barcode or serial with phone/mobile camera"
+                    >
+                      <Camera className="w-4 h-4 text-white shrink-0" />
+                      <span>Camera Scan</span>
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => resolveScannedBarcode(productSearch)}
-                      className="px-3.5 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 font-semibold text-xs rounded-lg border border-blue-500/30 whitespace-nowrap"
+                      className="px-3.5 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 font-semibold text-xs rounded-lg border border-blue-500/30 whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       Scan / Match
                     </button>
@@ -789,70 +811,116 @@ export default function NewTransferPage() {
             {/* Added Items List */}
             {items.length > 0 && (
               <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden space-y-0">
-                <table className="w-full text-left text-xs text-slate-300">
-                  <thead className="bg-slate-900 text-slate-400 uppercase border-b border-slate-800">
-                    <tr>
-                      <th className="py-2.5 px-4">Product</th>
-                      <th className="py-2.5 px-4">Condition</th>
-                      <th className="py-2.5 px-4">Qty</th>
-                      <th className="py-2.5 px-4 text-right">Unit Rate</th>
-                      <th className="py-2.5 px-4 text-right">Line Total</th>
-                      <th className="py-2.5 px-4">Serials</th>
-                      <th className="py-2.5 px-4 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800">
-                    {items.map((it, idx) => {
-                      const cost = it.product.costPrice;
-                      const selling = it.product.sellingPrice;
-                      const unitRate = (cost && cost > 1) ? cost : (selling || 0);
-                      const lineTotal = it.quantity * unitRate;
-                      return (
-                        <tr key={idx}>
-                          <td className="py-2.5 px-4 font-semibold text-slate-100">{it.product.name}</td>
-                          <td className="py-2.5 px-4">
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-950 text-blue-300 border border-blue-800">
+                {/* Mobile Card View (< md) */}
+                <div className="block md:hidden divide-y divide-slate-800">
+                  {items.map((it, idx) => {
+                    const cost = it.product.costPrice;
+                    const selling = it.product.sellingPrice;
+                    const unitRate = (cost && cost > 1) ? cost : (selling || 0);
+                    const lineTotal = it.quantity * unitRate;
+                    return (
+                      <div key={idx} className="p-3.5 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h4 className="font-bold text-slate-100 text-xs sm:text-sm">{it.product.name}</h4>
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-950 text-blue-300 border border-blue-800">
                               {it.condition}
                             </span>
-                          </td>
-                          <td className="py-2.5 px-4 font-mono font-bold text-blue-400">{it.quantity}</td>
-                          <td className="py-2.5 px-4 text-right font-mono text-slate-300">
-                            Rs. {unitRate.toLocaleString("en-PK")}
-                          </td>
-                          <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-400">
-                            Rs. {lineTotal.toLocaleString("en-PK")}
-                          </td>
-                          <td className="py-2.5 px-4">
-                            {it.serialNumbers.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
-                                {it.serialNumbers.map((s, i) => (
-                                  <span
-                                    key={i}
-                                    className="px-1.5 py-0.5 bg-slate-900 text-blue-300 border border-slate-800 rounded font-mono text-[10px]"
-                                  >
-                                    {s}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : (
-                              <span className="text-slate-500">—</span>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-4 text-right">
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveItem(idx)}
-                              className="text-rose-400 hover:text-rose-300 text-xs font-semibold cursor-pointer"
-                            >
-                              Remove
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <div className="p-3 bg-slate-900/90 border-t border-slate-800 flex items-center justify-between text-xs font-mono">
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveItem(idx)}
+                            className="text-rose-400 hover:text-rose-300 text-xs font-semibold shrink-0 cursor-pointer"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between text-xs font-mono pt-1 border-t border-slate-900">
+                          <span className="text-slate-400">Qty: <strong className="text-blue-400">{it.quantity}</strong> × Rs. {unitRate.toLocaleString("en-PK")}</span>
+                          <span className="font-bold text-emerald-400">Rs. {lineTotal.toLocaleString("en-PK")}</span>
+                        </div>
+                        {it.serialNumbers.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pt-1">
+                            {it.serialNumbers.map((s, i) => (
+                              <span key={i} className="px-1.5 py-0.5 bg-slate-900 text-blue-300 border border-slate-800 rounded font-mono text-[9px]">
+                                {s}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop View (>= md) */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-900 text-slate-400 uppercase border-b border-slate-800">
+                      <tr>
+                        <th className="py-2.5 px-4">Product</th>
+                        <th className="py-2.5 px-4">Condition</th>
+                        <th className="py-2.5 px-4">Qty</th>
+                        <th className="py-2.5 px-4 text-right">Unit Rate</th>
+                        <th className="py-2.5 px-4 text-right">Line Total</th>
+                        <th className="py-2.5 px-4">Serials</th>
+                        <th className="py-2.5 px-4 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {items.map((it, idx) => {
+                        const cost = it.product.costPrice;
+                        const selling = it.product.sellingPrice;
+                        const unitRate = (cost && cost > 1) ? cost : (selling || 0);
+                        const lineTotal = it.quantity * unitRate;
+                        return (
+                          <tr key={idx}>
+                            <td className="py-2.5 px-4 font-semibold text-slate-100">{it.product.name}</td>
+                            <td className="py-2.5 px-4">
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-950 text-blue-300 border border-blue-800">
+                                {it.condition}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-4 font-mono font-bold text-blue-400">{it.quantity}</td>
+                            <td className="py-2.5 px-4 text-right font-mono text-slate-300">
+                              Rs. {unitRate.toLocaleString("en-PK")}
+                            </td>
+                            <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-400">
+                              Rs. {lineTotal.toLocaleString("en-PK")}
+                            </td>
+                            <td className="py-2.5 px-4">
+                              {it.serialNumbers.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {it.serialNumbers.map((s, i) => (
+                                    <span
+                                      key={i}
+                                      className="px-1.5 py-0.5 bg-slate-900 text-blue-300 border border-slate-800 rounded font-mono text-[10px]"
+                                    >
+                                      {s}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-slate-500">—</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-4 text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveItem(idx)}
+                                className="text-rose-400 hover:text-rose-300 text-xs font-semibold cursor-pointer"
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="p-3 bg-slate-900/90 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
                   <span className="text-slate-400">
                     Total Items: <strong className="text-blue-400">{items.reduce((sum, i) => sum + i.quantity, 0)}</strong>
                   </span>
@@ -886,6 +954,15 @@ export default function NewTransferPage() {
           </div>
         </form>
       </div>
+
+      {/* Camera Barcode & Serial Scanner Modal */}
+      {cameraScannerOpen && (
+        <CameraBarcodeScannerModal
+          isOpen={cameraScannerOpen}
+          onClose={() => setCameraScannerOpen(false)}
+          onScanSuccess={handleCameraScanSuccess}
+        />
+      )}
     </div>
   );
 }
