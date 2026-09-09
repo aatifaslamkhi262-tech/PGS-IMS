@@ -127,9 +127,9 @@ export async function GET(req: NextRequest) {
         brand: (p as any).brand || "",
         modelNumber: (p as any).modelNumber || (p as any).model || "",
         priceConfigured: pricing.priceConfigured,
-        costPrice: p.costPrice ?? (pricing.priceConfigured ? pricing.avgCostPrice : 0),
-        sellingPrice: p.sellingPrice ?? (pricing.priceConfigured ? pricing.avgSellingPrice : 0),
-        minSellingPrice: p.minSellingPrice ?? (pricing.priceConfigured ? pricing.avgMinSellingPrice : 0),
+        costPrice: (pricing.priceConfigured && pricing.avgCostPrice) ? pricing.avgCostPrice : ((p.costPrice && p.costPrice > 1) ? p.costPrice : (p.sellingPrice || 0)),
+        sellingPrice: (pricing.priceConfigured && pricing.avgSellingPrice) ? pricing.avgSellingPrice : (p.sellingPrice || 0),
+        minSellingPrice: (pricing.priceConfigured && pricing.avgMinSellingPrice) ? pricing.avgMinSellingPrice : (p.minSellingPrice || 0),
         weightedPricing: pricing,
       };
     });

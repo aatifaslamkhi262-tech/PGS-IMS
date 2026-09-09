@@ -26,7 +26,37 @@ export async function GET(
       return NextResponse.json({ success: false, error: "Stock transfer not found." }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, data: transfer });
+    const { batchCalculateProductWeightedPricing } = await import("@/lib/pricing");
+    const productIds = transfer.items
+      .map((it) => (it.product as any)?._id ? (it.product as any)._id.toString() : (it.product ? it.product.toString() : null))
+      .filter(Boolean) as string[];
+
+    const batchPricing = await batchCalculateProductWeightedPricing(productIds);
+
+    const transferObj = transfer.toObject();
+    transferObj.items = transferObj.items.map((it: any) => {
+      if (!it.product) return it;
+      const pId = it.product._id ? it.product._id.toString() : it.product.toString();
+      const pricing = batchPricing[pId];
+      const dynamicCost = (pricing?.priceConfigured && pricing.avgCostPrice)
+        ? pricing.avgCostPrice
+        : ((it.product.costPrice && it.product.costPrice > 1) ? it.product.costPrice : (pricing?.avgSellingPrice || it.product.sellingPrice || 0));
+      const dynamicSelling = (pricing?.priceConfigured && pricing.avgSellingPrice)
+        ? pricing.avgSellingPrice
+        : ((it.product.sellingPrice && it.product.sellingPrice > 1) ? it.product.sellingPrice : 0);
+
+      return {
+        ...it,
+        product: {
+          ...it.product,
+          costPrice: dynamicCost,
+          sellingPrice: dynamicSelling,
+          weightedPricing: pricing,
+        },
+      };
+    });
+
+    return NextResponse.json({ success: true, data: transferObj });
   } catch (error: any) {
     return NextResponse.json(
       { success: false, error: error.message || "Failed to fetch stock transfer details." },

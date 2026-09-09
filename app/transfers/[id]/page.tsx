@@ -13,6 +13,7 @@ import {
   User,
   MapPin,
   Package,
+  AlertTriangle,
 } from "lucide-react";
 
 interface UserOption {
@@ -20,6 +21,17 @@ interface UserOption {
   name: string;
   username: string;
   role: string;
+}
+
+interface DamagedReceiveItem {
+  product: string;
+  productName?: string;
+  serialNumber?: string;
+  condition: string;
+  damageType: "Damaged" | "Claim";
+  reason: string;
+  reportedBy: string;
+  reportedAt: string;
 }
 
 interface TransferData {
@@ -30,7 +42,7 @@ interface TransferData {
   destinationLocation: { _id: string; name: string; code: string; type: string };
   status: "Draft" | "Pending_Approval" | "Approved" | "Dispatched" | "Received" | "Rejected" | "Cancelled";
   items: Array<{
-    product: { name: string; sku: string; barcode: string; serialTracking: boolean };
+    product: { _id?: string; name: string; sku: string; barcode: string; serialTracking: boolean; costPrice?: number; sellingPrice?: number };
     condition: string;
     quantity: number;
     serialNumbers?: string[];
@@ -48,6 +60,7 @@ interface TransferData {
   dispatchedAt?: string;
   receivedBy?: string;
   receivedAt?: string;
+  damagedReceiveLogs?: DamagedReceiveItem[];
   linkedOriginalTransfer?: { _id: string; transferNumber: string; status: string };
   createdAt: string;
 }
@@ -66,6 +79,11 @@ export default function TransferDetailPage() {
   const [selectedCarrierId, setSelectedCarrierId] = useState("");
   const [dispatchNotes, setDispatchNotes] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
+
+  // Damage Receive Modal State
+  const [showReceiveDamageModal, setShowReceiveDamageModal] = useState(false);
+  const [damagedReports, setDamagedReports] = useState<Record<string, { status: "OK" | "Damaged" | "Claim"; reason: string }>>({});
+  const [receiveDamageNotes, setReceiveDamageNotes] = useState("");
 
   const fetchTransferDetails = async () => {
     try {
@@ -125,7 +143,7 @@ export default function TransferDetailPage() {
 
   const handleDispatch = async () => {
     if (!selectedCarrierId) {
-      alert("Please select a physical carrier user.");
+      alert("Please select a physical carrier / staff runner.");
       return;
     }
 
@@ -154,13 +172,120 @@ export default function TransferDetailPage() {
   };
 
   const handleReceive = async () => {
-    if (!confirm("Are you sure you want to confirm receipt of this stock into destination inventory?")) return;
+    if (!confirm("Are you sure all stock arrived in good condition and confirm receipt?")) return;
 
     try {
       setActionLoading(true);
       const res = await fetch(`/api/transfers/${params.id}/receive`, { method: "POST" });
       const data = await res.json();
       if (data.success) {
+        fetchTransferDetails();
+      } else {
+        alert("Error: " + data.error);
+      }
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const openReceiveDamageModal = () => {
+    if (!transfer) return;
+    const initialMap: Record<string, { status: "OK" | "Damaged" | "Claim"; reason: string }> = {};
+
+    transfer.items.forEach((item, itemIdx) => {
+      if (item.serialNumbers && item.serialNumbers.length > 0) {
+        item.serialNumbers.forEach((sn) => {
+          initialMap[`${item.product?.sku || itemIdx}_${sn}`] = {
+            status: "OK",
+            reason: "",
+          };
+        });
+      } else {
+        initialMap[`${item.product?.sku || itemIdx}_nonserial`] = {
+          status: "OK",
+          reason: "",
+        };
+      }
+    });
+
+    setDamagedReports(initialMap);
+    setReceiveDamageNotes("");
+    setShowReceiveDamageModal(true);
+  };
+
+  const handleConfirmReceiveDamage = async () => {
+    if (!transfer) return;
+
+    const damagedList: Array<{
+      productId: string;
+      serialNumber?: string;
+      condition: string;
+      damageType: "Damaged" | "Claim";
+      reason: string;
+    }> = [];
+
+    let hasEmptyReason = false;
+
+    transfer.items.forEach((item, itemIdx) => {
+      const pId = (item.product as any)._id || item.product;
+      if (item.serialNumbers && item.serialNumbers.length > 0) {
+        item.serialNumbers.forEach((sn) => {
+          const key = `${item.product?.sku || itemIdx}_${sn}`;
+          const rep = damagedReports[key];
+          if (rep && (rep.status === "Damaged" || rep.status === "Claim")) {
+            if (!rep.reason || !rep.reason.trim()) {
+              hasEmptyReason = true;
+            }
+            damagedList.push({
+              productId: typeof pId === 'string' ? pId : (pId as any)?.toString(),
+              serialNumber: sn,
+              condition: item.condition,
+              damageType: rep.status,
+              reason: rep.reason.trim(),
+            });
+          }
+        });
+      } else {
+        const key = `${item.product?.sku || itemIdx}_nonserial`;
+        const rep = damagedReports[key];
+        if (rep && (rep.status === "Damaged" || rep.status === "Claim")) {
+          if (!rep.reason || !rep.reason.trim()) {
+            hasEmptyReason = true;
+          }
+          damagedList.push({
+            productId: typeof pId === 'string' ? pId : (pId as any)?.toString(),
+            condition: item.condition,
+            damageType: rep.status,
+            reason: rep.reason.trim(),
+          });
+        }
+      }
+    });
+
+    if (hasEmptyReason) {
+      alert("Misuse Prevention: You MUST provide a mandatory reason for all damaged or claimed items before submitting!");
+      return;
+    }
+
+    if (!confirm(`Confirm receipt with ${damagedList.length} damaged/claim item(s)? Audit logs and carrier custody will be permanently recorded.`)) {
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      const res = await fetch(`/api/transfers/${params.id}/receive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          notes: receiveDamageNotes,
+          damagedItems: damagedList,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setShowReceiveDamageModal(false);
         fetchTransferDetails();
       } else {
         alert("Error: " + data.error);
@@ -301,7 +426,7 @@ export default function TransferDetailPage() {
           </Link>
         </div>
 
-        {/* Action Buttons Toolbar (Flat, Clean, Fully Responsive) */}
+        {/* Action Buttons Toolbar */}
         {(transfer.status === "Pending_Approval" || transfer.status === "Approved" || transfer.status === "Dispatched" || transfer.status === "Received") && (
           <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center gap-2.5">
             {transfer.status === "Pending_Approval" && (
@@ -333,7 +458,15 @@ export default function TransferDetailPage() {
                   className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Confirm Receive Stock</span>
+                  <span>Confirm Receive (All OK)</span>
+                </button>
+                <button
+                  onClick={openReceiveDamageModal}
+                  disabled={actionLoading}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <AlertTriangle className="w-4 h-4" />
+                  <span>Receive & Report Damage / Claim</span>
                 </button>
                 <button
                   onClick={handleDirectReject}
@@ -372,6 +505,57 @@ export default function TransferDetailPage() {
           >
             View Original Transfer →
           </Link>
+        </div>
+      )}
+
+      {/* Damaged / Claim Receive Audit Log Banner */}
+      {transfer.damagedReceiveLogs && transfer.damagedReceiveLogs.length > 0 && (
+        <div className="bg-rose-950/40 border border-rose-800/60 rounded-2xl p-5 space-y-4 shadow-sm">
+          <div className="flex items-center justify-between border-b border-rose-900/60 pb-3">
+            <h3 className="text-xs font-bold text-rose-200 uppercase tracking-wider flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-400" />
+              <span>Damaged / Claim Stock Reported On Receipt</span>
+            </h3>
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-900/60 text-rose-300 border border-rose-700/60 font-mono">
+              {transfer.damagedReceiveLogs.length} Incident(s) Logged
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {transfer.damagedReceiveLogs.map((log, lIdx) => (
+              <div key={lIdx} className="bg-slate-950/80 border border-slate-800 p-3.5 rounded-xl space-y-2 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-bold text-slate-100">
+                    Product: {log.productName || "Product"} {log.serialNumber ? `(Serial: ${log.serialNumber})` : ""}
+                  </div>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                      log.damageType === "Damaged"
+                        ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                        : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                    }`}
+                  >
+                    {log.damageType}
+                  </span>
+                </div>
+
+                <div className="text-slate-300 font-medium bg-slate-900 p-2.5 rounded-lg border border-slate-850">
+                  <span className="text-[10px] text-slate-500 uppercase font-semibold block mb-0.5">Mandated Reason / Note:</span>
+                  "{log.reason}"
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-850">
+                  <span>
+                    Reported By: <strong className="text-slate-200">{log.reportedBy}</strong>
+                  </span>
+                  <span>
+                    Carrier at Delivery: <strong className="text-purple-400">{transfer.carrierName || "N/A"}</strong>
+                  </span>
+                  <span>Time: {new Date(log.reportedAt).toLocaleString()}</span>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -451,7 +635,7 @@ export default function TransferDetailPage() {
                 <span className="text-slate-300">{new Date(transfer.receivedAt).toLocaleString()}</span>
               </div>
               <div className="text-emerald-400 text-xs font-semibold pt-1">
-                ✓ Stock added to {transfer.destinationLocation?.name}
+                ✓ Stock processed into {transfer.destinationLocation?.name}
               </div>
             </div>
           ) : transfer.status === "Dispatched" ? (
@@ -470,55 +654,72 @@ export default function TransferDetailPage() {
       </div>
 
       {/* Items & Serial Numbers List */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xs">
         <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between">
           <h2 className="text-xs sm:text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
             <Package className="w-4 h-4 text-indigo-400" />
             <span>Transfer Line Items</span>
           </h2>
-          <span className="text-xs text-slate-400 font-mono">
-            Total Items: {transfer.items.reduce((sum, i) => sum + i.quantity, 0)}
-          </span>
+          <div className="flex items-center gap-3 text-xs font-mono">
+            <span className="text-slate-400">
+              Total Items: <strong className="text-indigo-400">{transfer.items.reduce((sum, i) => sum + i.quantity, 0)}</strong>
+            </span>
+            <span className="text-slate-700">|</span>
+            <span className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg font-bold">
+              Total Valuation: Rs. {transfer.items.reduce((sum, i) => {
+                const cost = (i.product as any)?.costPrice;
+                const selling = (i.product as any)?.sellingPrice;
+                const price = (cost && cost > 1) ? cost : (selling || 0);
+                return sum + (i.quantity * price);
+              }, 0).toLocaleString("en-PK")}
+            </span>
+          </div>
         </div>
 
         {/* Mobile View (< md) */}
         <div className="block md:hidden divide-y divide-slate-800">
-          {transfer.items.map((it, idx) => (
-            <div key={idx} className="p-4 space-y-2">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <h4 className="font-bold text-slate-100 text-sm">{it.product?.name || "Product"}</h4>
-                  <div className="text-xs font-mono text-slate-400">
-                    {it.product?.sku} {it.product?.barcode ? `| ${it.product.barcode}` : ""}
+          {transfer.items.map((it, idx) => {
+            const cost = (it.product as any)?.costPrice;
+            const selling = (it.product as any)?.sellingPrice;
+            const unitPrice = (cost && cost > 1) ? cost : (selling || 0);
+            const lineTotal = it.quantity * unitPrice;
+            return (
+              <div key={idx} className="p-4 space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h4 className="font-bold text-slate-100 text-sm">{it.product?.name || "Product"}</h4>
+                    <div className="text-xs font-mono text-slate-400">
+                      {it.product?.sku} {it.product?.barcode ? `| ${it.product.barcode}` : ""}
+                    </div>
                   </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                    {it.condition}
+                  </span>
                 </div>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
-                  {it.condition}
-                </span>
-              </div>
 
-              <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-xs">
-                <span className="text-slate-400">Quantity:</span>
-                <span className="font-mono font-bold text-indigo-400 text-sm">{it.quantity}</span>
-              </div>
+                <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-xs">
+                  <span className="text-slate-400">Qty: <strong className="text-indigo-400">{it.quantity}</strong> × Rs. {unitPrice.toLocaleString("en-PK")}</span>
+                  <span className="font-mono font-bold text-emerald-400 text-sm">Rs. {lineTotal.toLocaleString("en-PK")}</span>
+                </div>
 
-              {it.serialNumbers && it.serialNumbers.length > 0 && (
-                <div className="pt-1 space-y-1">
-                  <span className="text-[10px] text-slate-400 uppercase font-semibold block">Serials:</span>
-                  <div className="flex flex-wrap gap-1">
-                    {it.serialNumbers.map((sn, sIdx) => (
-                      <span
-                        key={sIdx}
-                        className="px-2 py-0.5 bg-slate-950 text-indigo-300 border border-slate-800 rounded font-mono text-[10px]"
-                      >
-                        {sn}
-                      </span>
-                    ))}
+                {it.serialNumbers && it.serialNumbers.length > 0 && (
+                  <div className="pt-1 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Serials:</span>
+                    <div className="flex flex-wrap gap-1">
+                      {it.serialNumbers.map((sn, sIdx) => (
+                        <span
+                          key={sIdx}
+                          className="px-2 py-0.5 bg-slate-950 text-indigo-300 border border-slate-800 rounded font-mono text-[10px]"
+                        >
+                          {sn}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {/* Desktop View (>= md) */}
@@ -530,42 +731,56 @@ export default function TransferDetailPage() {
                 <th className="px-4 py-4">SKU / Barcode</th>
                 <th className="px-4 py-4">Condition</th>
                 <th className="px-4 py-4 text-center">Quantity</th>
+                <th className="px-4 py-4 text-right">Unit Price</th>
+                <th className="px-4 py-4 text-right">Line Total</th>
                 <th className="px-5 py-4">Serial Numbers</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-medium text-slate-300">
-              {transfer.items.map((it, idx) => (
-                <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
-                  <td className="px-5 py-4 font-bold text-slate-100">{it.product?.name || "Product"}</td>
-                  <td className="px-4 py-4 font-mono text-slate-400">
-                    {it.product?.sku} {it.product?.barcode ? `/ ${it.product.barcode}` : ""}
-                  </td>
-                  <td className="px-4 py-4">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
-                      {it.condition}
-                    </span>
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold text-indigo-400 text-sm">
-                    {it.quantity}
-                  </td>
-                  <td className="px-5 py-4">
-                    {it.serialNumbers && it.serialNumbers.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        {it.serialNumbers.map((sn, sIdx) => (
-                          <span
-                            key={sIdx}
-                            className="px-2 py-0.5 bg-slate-950 text-indigo-300 border border-slate-800 rounded font-mono text-[11px]"
-                          >
-                            {sn}
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-slate-500 italic">Non-Serial Tracked</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {transfer.items.map((it, idx) => {
+                const cost = (it.product as any)?.costPrice;
+                const selling = (it.product as any)?.sellingPrice;
+                const unitPrice = (cost && cost > 1) ? cost : (selling || 0);
+                const lineTotal = it.quantity * unitPrice;
+                return (
+                  <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
+                    <td className="px-5 py-4 font-bold text-slate-100">{it.product?.name || "Product"}</td>
+                    <td className="px-4 py-4 font-mono text-slate-400">
+                      {it.product?.sku} {it.product?.barcode ? `/ ${it.product.barcode}` : ""}
+                    </td>
+                    <td className="px-4 py-4">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                        {it.condition}
+                      </span>
+                    </td>
+                    <td className="px-4 py-4 text-center font-mono font-bold text-indigo-400 text-sm">
+                      {it.quantity}
+                    </td>
+                    <td className="px-4 py-4 text-right font-mono text-slate-300">
+                      Rs. {unitPrice.toLocaleString("en-PK")}
+                    </td>
+                    <td className="px-4 py-4 text-right font-mono font-bold text-emerald-400">
+                      Rs. {lineTotal.toLocaleString("en-PK")}
+                    </td>
+                    <td className="px-5 py-4">
+                      {it.serialNumbers && it.serialNumbers.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {it.serialNumbers.map((sn, sIdx) => (
+                            <span
+                              key={sIdx}
+                              className="px-2 py-0.5 bg-slate-950 text-indigo-300 border border-slate-800 rounded font-mono text-[11px]"
+                            >
+                              {sn}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-slate-500 italic">Non-Serial Tracked</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -636,6 +851,258 @@ export default function TransferDetailPage() {
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
               >
                 {actionLoading ? "Dispatching..." : "Confirm & Dispatch Stock"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Receive & Report Damage Modal */}
+      {showReceiveDamageModal && transfer && (
+        <div className="fixed inset-0 bg-slate-950/85 flex items-center justify-center p-4 z-50 animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 max-w-2xl w-full max-h-[90vh] flex flex-col space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+                <span>Receive & Audit Stock (Report Damage / Claim)</span>
+              </h3>
+              <button
+                onClick={() => setShowReceiveDamageModal(false)}
+                className="text-slate-400 hover:text-slate-200 text-xs font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="text-xs space-y-1 bg-amber-950/30 border border-amber-800/40 p-3 rounded-xl text-amber-200 shrink-0">
+              <p className="font-semibold">⚠️ Misuse Prevention & Custody Notice:</p>
+              <p className="text-[11px] text-amber-300/80">
+                Marking stock as <strong>Damaged</strong> or <strong>Claim</strong> requires entering a mandatory reason.
+                This report will be permanently tied to carrier <strong>{transfer.carrierName || "Carrier"}</strong> and logged into the audit trail.
+              </p>
+            </div>
+
+            <div className="overflow-y-auto space-y-4 pr-1 grow">
+              {transfer.items.map((item, itemIdx) => {
+                const isSerialized = item.serialNumbers && item.serialNumbers.length > 0;
+                return (
+                  <div key={itemIdx} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="font-bold text-slate-200 text-xs sm:text-sm">{item.product?.name}</h4>
+                        <span className="text-[10px] font-mono text-slate-400">{item.product?.sku}</span>
+                      </div>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300">
+                        Qty: {item.quantity} ({item.condition})
+                      </span>
+                    </div>
+
+                    {isSerialized ? (
+                      <div className="space-y-3 pt-1 border-t border-slate-850">
+                        {item.serialNumbers!.map((sn) => {
+                          const key = `${item.product?.sku || itemIdx}_${sn}`;
+                          const rep = damagedReports[key] || { status: "OK", reason: "" };
+                          return (
+                            <div key={sn} className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="font-mono text-xs font-bold text-indigo-300">Serial: {sn}</span>
+                                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDamagedReports((prev) => ({
+                                        ...prev,
+                                        [key]: { ...prev[key], status: "OK" },
+                                      }))
+                                    }
+                                    className={`px-2.5 py-1 text-[10px] font-bold rounded transition-colors ${
+                                      rep.status === "OK"
+                                        ? "bg-emerald-600 text-white"
+                                        : "text-slate-400 hover:text-slate-200"
+                                    }`}
+                                  >
+                                    ✓ OK
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDamagedReports((prev) => ({
+                                        ...prev,
+                                        [key]: { ...prev[key], status: "Damaged" },
+                                      }))
+                                    }
+                                    className={`px-2.5 py-1 text-[10px] font-bold rounded transition-colors ${
+                                      rep.status === "Damaged"
+                                        ? "bg-rose-600 text-white"
+                                        : "text-slate-400 hover:text-slate-200"
+                                    }`}
+                                  >
+                                    Damaged
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDamagedReports((prev) => ({
+                                        ...prev,
+                                        [key]: { ...prev[key], status: "Claim" },
+                                      }))
+                                    }
+                                    className={`px-2.5 py-1 text-[10px] font-bold rounded transition-colors ${
+                                      rep.status === "Claim"
+                                        ? "bg-amber-600 text-white"
+                                        : "text-slate-400 hover:text-slate-200"
+                                    }`}
+                                  >
+                                    Claim
+                                  </button>
+                                </div>
+                              </div>
+
+                              {rep.status !== "OK" && (
+                                <div>
+                                  <label className="block text-[10px] font-bold text-rose-300 uppercase tracking-wider mb-1">
+                                    Mandatory Reason for {rep.status} *
+                                  </label>
+                                  <input
+                                    type="text"
+                                    required
+                                    value={rep.reason}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setDamagedReports((prev) => ({
+                                        ...prev,
+                                        [key]: { ...prev[key], reason: val },
+                                      }));
+                                    }}
+                                    placeholder="e.g. Screen broken on unboxing, driver dropped parcel"
+                                    className="w-full bg-slate-950 border border-rose-800/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-rose-500"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="pt-1 border-t border-slate-850">
+                        {(() => {
+                          const key = `${item.product?.sku || itemIdx}_nonserial`;
+                          const rep = damagedReports[key] || { status: "OK", reason: "" };
+                          return (
+                            <div className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-xs text-slate-300">Non-serialized line status:</span>
+                                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDamagedReports((prev) => ({
+                                        ...prev,
+                                        [key]: { ...prev[key], status: "OK" },
+                                      }))
+                                    }
+                                    className={`px-2.5 py-1 text-[10px] font-bold rounded transition-colors ${
+                                      rep.status === "OK"
+                                        ? "bg-emerald-600 text-white"
+                                        : "text-slate-400 hover:text-slate-200"
+                                    }`}
+                                  >
+                                    ✓ All OK
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDamagedReports((prev) => ({
+                                        ...prev,
+                                        [key]: { ...prev[key], status: "Damaged" },
+                                      }))
+                                    }
+                                    className={`px-2.5 py-1 text-[10px] font-bold rounded transition-colors ${
+                                      rep.status === "Damaged"
+                                        ? "bg-rose-600 text-white"
+                                        : "text-slate-400 hover:text-slate-200"
+                                    }`}
+                                  >
+                                    Damaged
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDamagedReports((prev) => ({
+                                        ...prev,
+                                        [key]: { ...prev[key], status: "Claim" },
+                                      }))
+                                    }
+                                    className={`px-2.5 py-1 text-[10px] font-bold rounded transition-colors ${
+                                      rep.status === "Claim"
+                                        ? "bg-amber-600 text-white"
+                                        : "text-slate-400 hover:text-slate-200"
+                                    }`}
+                                  >
+                                    Claim
+                                  </button>
+                                </div>
+                              </div>
+
+                              {rep.status !== "OK" && (
+                                <div>
+                                  <label className="block text-[10px] font-bold text-rose-300 uppercase tracking-wider mb-1">
+                                    Mandatory Reason for {rep.status} *
+                                  </label>
+                                  <input
+                                    type="text"
+                                    required
+                                    value={rep.reason}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setDamagedReports((prev) => ({
+                                        ...prev,
+                                        [key]: { ...prev[key], reason: val },
+                                      }));
+                                    }}
+                                    placeholder="e.g. Outer carton torn and unit damaged"
+                                    className="w-full bg-slate-950 border border-rose-800/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-rose-500"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  General Receiving Notes (Optional)
+                </label>
+                <textarea
+                  value={receiveDamageNotes}
+                  onChange={(e) => setReceiveDamageNotes(e.target.value)}
+                  placeholder="e.g. Checked with driver Ali on delivery"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+                  rows={2}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowReceiveDamageModal(false)}
+                className="px-4 py-2 bg-slate-950 border border-slate-800 hover:bg-slate-800 text-slate-300 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmReceiveDamage}
+                disabled={actionLoading}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {actionLoading ? "Processing..." : "Submit Receipt & Log Audit Trail"}
               </button>
             </div>
           </div>

@@ -20,6 +20,8 @@ interface ProductOption {
   condition: string;
   brand?: string;
   modelNumber?: string;
+  costPrice?: number;
+  sellingPrice?: number;
 }
 
 interface SerialOption {
@@ -145,6 +147,8 @@ export default function NewTransferPage() {
           condition: resData.data.product.condition || "New",
           brand: resData.data.product.brand,
           modelNumber: resData.data.product.modelNumber,
+          costPrice: resData.data.product.costPrice,
+          sellingPrice: resData.data.product.sellingPrice,
         };
 
         // Ensure product exists in selection list
@@ -784,56 +788,83 @@ export default function NewTransferPage() {
 
             {/* Added Items List */}
             {items.length > 0 && (
-              <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
+              <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden space-y-0">
                 <table className="w-full text-left text-xs text-slate-300">
                   <thead className="bg-slate-900 text-slate-400 uppercase border-b border-slate-800">
                     <tr>
                       <th className="py-2.5 px-4">Product</th>
                       <th className="py-2.5 px-4">Condition</th>
                       <th className="py-2.5 px-4">Qty</th>
+                      <th className="py-2.5 px-4 text-right">Unit Rate</th>
+                      <th className="py-2.5 px-4 text-right">Line Total</th>
                       <th className="py-2.5 px-4">Serials</th>
                       <th className="py-2.5 px-4 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {items.map((it, idx) => (
-                      <tr key={idx}>
-                        <td className="py-2.5 px-4 font-semibold text-slate-100">{it.product.name}</td>
-                        <td className="py-2.5 px-4">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-950 text-blue-300 border border-blue-800">
-                            {it.condition}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-4 font-mono font-bold text-blue-400">{it.quantity}</td>
-                        <td className="py-2.5 px-4">
-                          {it.serialNumbers.length > 0 ? (
-                            <div className="flex flex-wrap gap-1">
-                              {it.serialNumbers.map((s, i) => (
-                                <span
-                                  key={i}
-                                  className="px-1.5 py-0.5 bg-slate-900 text-blue-300 border border-slate-800 rounded font-mono text-[10px]"
-                                >
-                                  {s}
-                                </span>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-slate-500">—</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveItem(idx)}
-                            className="text-rose-400 hover:text-rose-300 text-xs font-semibold"
-                          >
-                            Remove
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {items.map((it, idx) => {
+                      const cost = it.product.costPrice;
+                      const selling = it.product.sellingPrice;
+                      const unitRate = (cost && cost > 1) ? cost : (selling || 0);
+                      const lineTotal = it.quantity * unitRate;
+                      return (
+                        <tr key={idx}>
+                          <td className="py-2.5 px-4 font-semibold text-slate-100">{it.product.name}</td>
+                          <td className="py-2.5 px-4">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-950 text-blue-300 border border-blue-800">
+                              {it.condition}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-4 font-mono font-bold text-blue-400">{it.quantity}</td>
+                          <td className="py-2.5 px-4 text-right font-mono text-slate-300">
+                            Rs. {unitRate.toLocaleString("en-PK")}
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-400">
+                            Rs. {lineTotal.toLocaleString("en-PK")}
+                          </td>
+                          <td className="py-2.5 px-4">
+                            {it.serialNumbers.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {it.serialNumbers.map((s, i) => (
+                                  <span
+                                    key={i}
+                                    className="px-1.5 py-0.5 bg-slate-900 text-blue-300 border border-slate-800 rounded font-mono text-[10px]"
+                                  >
+                                    {s}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-slate-500">—</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-4 text-right">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveItem(idx)}
+                              className="text-rose-400 hover:text-rose-300 text-xs font-semibold cursor-pointer"
+                            >
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
+                <div className="p-3 bg-slate-900/90 border-t border-slate-800 flex items-center justify-between text-xs font-mono">
+                  <span className="text-slate-400">
+                    Total Items: <strong className="text-blue-400">{items.reduce((sum, i) => sum + i.quantity, 0)}</strong>
+                  </span>
+                  <span className="px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg font-bold">
+                    Total Transfer Valuation: Rs. {items.reduce((sum, i) => {
+                      const cost = i.product.costPrice;
+                      const selling = i.product.sellingPrice;
+                      const rate = (cost && cost > 1) ? cost : (selling || 0);
+                      return sum + (i.quantity * rate);
+                    }, 0).toLocaleString("en-PK")}
+                  </span>
+                </div>
               </div>
             )}
           </div>

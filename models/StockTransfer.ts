@@ -18,6 +18,17 @@ export interface ITransferItem {
   serialNumbers?: string[];
 }
 
+export interface IDamagedReceiveItem {
+  product: Types.ObjectId;
+  productName?: string;
+  serialNumber?: string;
+  condition: string;
+  damageType: "Damaged" | "Claim";
+  reason: string;
+  reportedBy: string;
+  reportedAt: Date;
+}
+
 export interface IStockTransfer {
   _id?: Types.ObjectId;
   transferNumber: string; // e.g. TRF-20260827-001
@@ -45,6 +56,7 @@ export interface IStockTransfer {
   // Receiving Audit
   receivedBy?: string; // username
   receivedAt?: Date;
+  damagedReceiveLogs?: IDamagedReceiveItem[];
 
   // Linked Transfer Reference (for Return to Source or Direct Reject)
   linkedOriginalTransfer?: Types.ObjectId;
@@ -54,6 +66,24 @@ export interface IStockTransfer {
 }
 
 export type StockTransferDocument = Document & IStockTransfer;
+
+const DamagedReceiveItemSchema = new Schema(
+  {
+    product: {
+      type: Schema.Types.ObjectId,
+      ref: "Product",
+      required: true,
+    },
+    productName: { type: String, trim: true },
+    serialNumber: { type: String, trim: true },
+    condition: { type: String, default: "New" },
+    damageType: { type: String, enum: ["Damaged", "Claim"], required: true },
+    reason: { type: String, required: true, trim: true },
+    reportedBy: { type: String, required: true },
+    reportedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
 
 const TransferItemSchema = new Schema(
   {
@@ -164,6 +194,10 @@ const StockTransferSchema: Schema = new Schema(
     },
     receivedAt: {
       type: Date,
+    },
+    damagedReceiveLogs: {
+      type: [DamagedReceiveItemSchema],
+      default: [],
     },
     linkedOriginalTransfer: {
       type: Schema.Types.ObjectId,

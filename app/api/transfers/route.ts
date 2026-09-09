@@ -48,13 +48,51 @@ export async function GET(req: NextRequest) {
     const transfers = await StockTransfer.find(query)
       .populate("sourceLocation", "name code type")
       .populate("destinationLocation", "name code type")
-      .populate("items.product", "name sku barcode serialTracking condition")
+      .populate("items.product", "name sku barcode serialTracking condition costPrice sellingPrice")
       .populate("carrierUser", "name username role")
       .populate("linkedOriginalTransfer", "transferNumber status")
       .sort({ createdAt: -1 })
       .lean();
 
-    return NextResponse.json({ success: true, data: transfers });
+    const { batchCalculateProductWeightedPricing } = await import("@/lib/pricing");
+    const allProductIds = Array.from(
+      new Set(
+        transfers.flatMap((t: any) =>
+          (t.items || []).map((it: any) =>
+            it.product?._id ? it.product._id.toString() : (it.product ? it.product.toString() : null)
+          )
+        ).filter(Boolean)
+      )
+    ) as string[];
+
+    const batchPricing = await batchCalculateProductWeightedPricing(allProductIds);
+
+    const transfersWithPricing = transfers.map((tr: any) => ({
+      ...tr,
+      items: (tr.items || []).map((it: any) => {
+        if (!it.product) return it;
+        const pId = it.product._id ? it.product._id.toString() : it.product.toString();
+        const pricing = batchPricing[pId];
+        const dynamicCost = (pricing?.priceConfigured && pricing.avgCostPrice)
+          ? pricing.avgCostPrice
+          : ((it.product.costPrice && it.product.costPrice > 1) ? it.product.costPrice : (pricing?.avgSellingPrice || it.product.sellingPrice || 0));
+        const dynamicSelling = (pricing?.priceConfigured && pricing.avgSellingPrice)
+          ? pricing.avgSellingPrice
+          : ((it.product.sellingPrice && it.product.sellingPrice > 1) ? it.product.sellingPrice : 0);
+
+        return {
+          ...it,
+          product: {
+            ...it.product,
+            costPrice: dynamicCost,
+            sellingPrice: dynamicSelling,
+            weightedPricing: pricing,
+          },
+        };
+      }),
+    }));
+
+    return NextResponse.json({ success: true, data: transfersWithPricing });
   } catch (error: any) {
     return NextResponse.json(
       { success: false, error: error.message || "Failed to fetch stock transfers." },

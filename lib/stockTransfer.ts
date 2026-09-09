@@ -176,16 +176,26 @@ export async function executeDispatch({
   return transfer;
 }
 
+export interface DamagedReportInput {
+  productId: string;
+  serialNumber?: string;
+  condition?: string;
+  damageType: "Damaged" | "Claim";
+  reason: string;
+}
+
 /**
- * Execute Receive Action
+ * Execute Receive Action (Supports optional damage/claim report on receipt)
  */
 export async function executeReceive({
   transferId,
   receivingUsername,
+  damagedItems = [],
   notes,
 }: {
   transferId: string;
   receivingUsername: string;
+  damagedItems?: DamagedReportInput[];
   notes?: string;
 }) {
   const transfer = await StockTransfer.findById(transferId)
@@ -205,34 +215,56 @@ export async function executeReceive({
     throw new Error("Destination location not found.");
   }
 
-  // Add stock to Destination Location
+  const damagedReceiveLogs: any[] = [];
+
+  // Add stock to Destination Location (excluding damaged units)
   for (const item of transfer.items) {
     const product = await Product.findById(item.product);
+    const pStr = item.product.toString();
 
-    let inv = await Inventory.findOne({
-      product: item.product,
-      location: transfer.destinationLocation,
-      condition: item.condition,
-    });
+    // Determine damaged serials for this product line
+    const itemDamagedReports = damagedItems.filter(
+      (d) => d.productId === pStr || d.productId === product?._id.toString()
+    );
 
-    const beforeQty = inv ? inv.quantity : 0;
-    if (!inv) {
-      inv = new Inventory({
+    const damagedSerialsMap = new Map<string, DamagedReportInput>();
+    for (const d of itemDamagedReports) {
+      if (d.serialNumber) {
+        damagedSerialsMap.set(d.serialNumber.trim(), d);
+      }
+    }
+
+    const totalDamagedUnits = product?.serialTracking
+      ? damagedSerialsMap.size
+      : itemDamagedReports.length;
+
+    const goodQty = Math.max(0, item.quantity - totalDamagedUnits);
+
+    // 1. Update Destination Inventory only for GOOD / UNDAMAGED quantity
+    if (goodQty > 0) {
+      let inv = await Inventory.findOne({
         product: item.product,
         location: transfer.destinationLocation,
         condition: item.condition,
-        quantity: item.quantity,
-        serialTracking: product?.serialTracking || false,
-        status: "In Stock",
       });
-    } else {
-      inv.quantity += item.quantity;
-      inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
+
+      if (!inv) {
+        inv = new Inventory({
+          product: item.product,
+          location: transfer.destinationLocation,
+          condition: item.condition,
+          quantity: goodQty,
+          serialTracking: product?.serialTracking || false,
+          status: "In Stock",
+        });
+      } else {
+        inv.quantity += goodQty;
+        inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
+      }
+      await inv.save();
     }
 
-    await inv.save();
-
-    // Handle Serial Numbers update
+    // 2. Handle Serial Numbers status & audit update
     if (product?.serialTracking && item.serialNumbers && item.serialNumbers.length > 0) {
       for (const sn of item.serialNumbers) {
         const serialDoc = await SerialNumber.findOne({
@@ -241,11 +273,48 @@ export async function executeReceive({
         });
 
         if (serialDoc) {
-          serialDoc.status = "Available";
-          serialDoc.location = destLoc.name;
-          serialDoc.transactionReference = transfer.transferNumber;
-          await serialDoc.save();
+          const damageReport = damagedSerialsMap.get(sn.trim());
+
+          if (damageReport) {
+            // Mark as Damaged / Claim with full custody metadata
+            serialDoc.status = damageReport.damageType;
+            serialDoc.location = destLoc.name;
+            serialDoc.damageDate = new Date();
+            serialDoc.transactionReference = transfer.transferNumber;
+            serialDoc.notes = `[${damageReport.damageType} on Receipt] Receiver: ${receivingUsername} | Carrier: ${transfer.carrierName || "N/A"} | Reason: ${damageReport.reason.trim()}`;
+            await serialDoc.save();
+
+            damagedReceiveLogs.push({
+              product: item.product,
+              productName: product.name,
+              serialNumber: sn,
+              condition: item.condition,
+              damageType: damageReport.damageType,
+              reason: damageReport.reason.trim(),
+              reportedBy: receivingUsername,
+              reportedAt: new Date(),
+            });
+          } else {
+            // Good condition unit
+            serialDoc.status = "Available";
+            serialDoc.location = destLoc.name;
+            serialDoc.transactionReference = transfer.transferNumber;
+            await serialDoc.save();
+          }
         }
+      }
+    } else if (!product?.serialTracking && totalDamagedUnits > 0) {
+      // Non-serialized damaged logging
+      for (const report of itemDamagedReports) {
+        damagedReceiveLogs.push({
+          product: item.product,
+          productName: product?.name || "Product",
+          condition: item.condition,
+          damageType: report.damageType,
+          reason: report.reason.trim(),
+          reportedBy: receivingUsername,
+          reportedAt: new Date(),
+        });
       }
     }
   }
@@ -254,6 +323,9 @@ export async function executeReceive({
   transfer.status = "Received";
   transfer.receivedBy = receivingUsername;
   transfer.receivedAt = new Date();
+  if (damagedReceiveLogs.length > 0) {
+    transfer.damagedReceiveLogs = damagedReceiveLogs;
+  }
   if (notes) transfer.notes = notes;
 
   await transfer.save();

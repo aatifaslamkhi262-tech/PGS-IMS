@@ -16,11 +16,12 @@ export async function POST(
 
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
-    const { notes } = body;
+    const { notes, damagedItems } = body;
 
     const updatedTransfer = await executeReceive({
       transferId: id,
       receivingUsername: auth.user?.username || "receiver",
+      damagedItems,
       notes,
     });
 

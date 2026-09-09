@@ -11,7 +11,7 @@ interface TransferItem {
   destinationLocation?: { _id: string; name: string; code: string };
   status: string;
   items: Array<{
-    product: { name: string; sku: string; barcode: string; serialTracking: boolean };
+    product: { name: string; sku: string; barcode: string; serialTracking: boolean; costPrice?: number; sellingPrice?: number };
     condition: string;
     quantity: number;
     serialNumbers?: string[];
@@ -173,6 +173,7 @@ export default function TransfersPage() {
                     <th className="py-3.5 px-4 whitespace-nowrap">From</th>
                     <th className="py-3.5 px-4 whitespace-nowrap">To</th>
                     <th className="py-3.5 px-4">Items / Qty</th>
+                    <th className="py-3.5 px-4 text-right whitespace-nowrap">Total Valuation</th>
                     <th className="py-3.5 px-4 whitespace-nowrap">Carried By</th>
                     <th className="py-3.5 px-4 whitespace-nowrap">Dispatched By</th>
                     <th className="py-3.5 px-4 whitespace-nowrap">Status</th>
@@ -180,74 +181,85 @@ export default function TransfersPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
-                  {transfers.map((tr) => (
-                    <tr key={tr._id} className="hover:bg-slate-800/40 transition">
-                      <td className="py-3.5 px-4 font-mono font-bold text-indigo-400 whitespace-nowrap">
-                        <Link href={`/transfers/${tr._id}`} className="hover:underline">
-                          {tr.transferNumber}
-                        </Link>
-                      </td>
-                      <td className="py-3.5 px-4 whitespace-nowrap">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
-                            tr.type === "Return"
-                              ? "bg-amber-950 text-amber-300 border-amber-800"
-                              : tr.type === "Direct_Reject"
-                              ? "bg-rose-950 text-rose-300 border-rose-800"
-                              : "bg-indigo-950 text-indigo-300 border-indigo-800"
-                          }`}
-                        >
-                          {tr.type}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 font-medium text-slate-200 whitespace-nowrap">
-                        {tr.sourceLocation?.name || "N/A"}
-                      </td>
-                      <td className="py-3.5 px-4 font-medium text-slate-200 whitespace-nowrap">
-                        {tr.destinationLocation?.name || "N/A"}
-                      </td>
-                      <td className="py-3.5 px-4 max-w-xs">
-                        <div className="space-y-1">
-                          {tr.items.slice(0, 2).map((item, idx) => (
-                            <div key={idx} className="text-slate-300 truncate">
-                              <span className="font-semibold text-slate-100">{item.product?.name || "Item"}</span>{" "}
-                              <span className="text-slate-400">({item.condition})</span> x{item.quantity}
-                            </div>
-                          ))}
-                          {tr.items.length > 2 && (
-                            <div className="text-[11px] font-semibold text-indigo-400 pt-0.5">
-                              + {tr.items.length - 2} more item{tr.items.length - 2 > 1 ? "s" : ""} ({tr.items.reduce((acc, curr) => acc + (curr.quantity || 1), 0)} total qty)
-                            </div>
+                  {transfers.map((tr) => {
+                    const totalValuation = tr.items.reduce((sum, item) => {
+                      const cost = (item.product as any)?.costPrice;
+                      const selling = (item.product as any)?.sellingPrice;
+                      const rate = (cost && cost > 1) ? cost : (selling || 0);
+                      return sum + ((item.quantity || 1) * rate);
+                    }, 0);
+                    return (
+                      <tr key={tr._id} className="hover:bg-slate-800/40 transition">
+                        <td className="py-3.5 px-4 font-mono font-bold text-indigo-400 whitespace-nowrap">
+                          <Link href={`/transfers/${tr._id}`} className="hover:underline">
+                            {tr.transferNumber}
+                          </Link>
+                        </td>
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                              tr.type === "Return"
+                                ? "bg-amber-950 text-amber-300 border-amber-800"
+                                : tr.type === "Direct_Reject"
+                                ? "bg-rose-950 text-rose-300 border-rose-800"
+                                : "bg-indigo-950 text-indigo-300 border-indigo-800"
+                            }`}
+                          >
+                            {tr.type}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 font-medium text-slate-200 whitespace-nowrap">
+                          {tr.sourceLocation?.name || "N/A"}
+                        </td>
+                        <td className="py-3.5 px-4 font-medium text-slate-200 whitespace-nowrap">
+                          {tr.destinationLocation?.name || "N/A"}
+                        </td>
+                        <td className="py-3.5 px-4 max-w-xs">
+                          <div className="space-y-1">
+                            {tr.items.slice(0, 2).map((item, idx) => (
+                              <div key={idx} className="text-slate-300 truncate">
+                                <span className="font-semibold text-slate-100">{item.product?.name || "Item"}</span>{" "}
+                                <span className="text-slate-400">({item.condition})</span> x{item.quantity}
+                              </div>
+                            ))}
+                            {tr.items.length > 2 && (
+                              <div className="text-[11px] font-semibold text-indigo-400 pt-0.5">
+                                + {tr.items.length - 2} more item{tr.items.length - 2 > 1 ? "s" : ""} ({tr.items.reduce((acc, curr) => acc + (curr.quantity || 1), 0)} total qty)
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-400 whitespace-nowrap">
+                          Rs. {totalValuation.toLocaleString("en-PK")}
+                        </td>
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          {tr.carrierName ? (
+                            <div className="font-semibold text-emerald-400">🚶 {tr.carrierName}</div>
+                          ) : (
+                            <span className="text-slate-500">—</span>
                           )}
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-4 whitespace-nowrap">
-                        {tr.carrierName ? (
-                          <div className="font-semibold text-emerald-400">🚶 {tr.carrierName}</div>
-                        ) : (
-                          <span className="text-slate-500">—</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-400 whitespace-nowrap">{tr.dispatchedBy || tr.createdBy}</td>
-                      <td className="py-3.5 px-4 whitespace-nowrap">
-                        <span
-                          className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap ${getStatusBadge(
-                            tr.status
-                          )}`}
-                        >
-                          {tr.status.replace("_", " ")}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                        <Link
-                          href={`/transfers/${tr._id}`}
-                          className="inline-block px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition"
-                        >
-                          View Details →
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-400 whitespace-nowrap">{tr.dispatchedBy || tr.createdBy}</td>
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          <span
+                            className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap ${getStatusBadge(
+                              tr.status
+                            )}`}
+                          >
+                            {tr.status.replace("_", " ")}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                          <Link
+                            href={`/transfers/${tr._id}`}
+                            className="inline-block px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition"
+                          >
+                            View Details →
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
