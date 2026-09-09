@@ -38,12 +38,12 @@ export async function GET(
       if (!it.product) return it;
       const pId = it.product._id ? it.product._id.toString() : it.product.toString();
       const pricing = batchPricing[pId];
+      const dynamicSelling = (pricing?.priceConfigured && pricing.avgSellingPrice)
+        ? pricing.avgSellingPrice
+        : ((it.product.sellingPrice && it.product.sellingPrice > 1) ? it.product.sellingPrice : (pricing?.avgCostPrice || it.product.costPrice || 0));
       const dynamicCost = (pricing?.priceConfigured && pricing.avgCostPrice)
         ? pricing.avgCostPrice
         : ((it.product.costPrice && it.product.costPrice > 1) ? it.product.costPrice : (pricing?.avgSellingPrice || it.product.sellingPrice || 0));
-      const dynamicSelling = (pricing?.priceConfigured && pricing.avgSellingPrice)
-        ? pricing.avgSellingPrice
-        : ((it.product.sellingPrice && it.product.sellingPrice > 1) ? it.product.sellingPrice : 0);
 
       return {
         ...it,
