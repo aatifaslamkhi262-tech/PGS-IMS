@@ -18,7 +18,7 @@ export async function GET(
     const transfer = await StockTransfer.findById(id)
       .populate("sourceLocation", "name code type active")
       .populate("destinationLocation", "name code type active")
-      .populate("items.product", "name sku barcode serialTracking condition costPrice sellingPrice")
+      .populate("items.product", "name sku barcode serialTracking condition costPrice sellingPrice minSellingPrice manuallyEditedAt")
       .populate("carrierUser", "name username role")
       .populate("linkedOriginalTransfer", "transferNumber status sourceLocation destinationLocation");
 
@@ -26,7 +26,7 @@ export async function GET(
       return NextResponse.json({ success: false, error: "Stock transfer not found." }, { status: 404 });
     }
 
-    const { batchCalculateProductWeightedPricing } = await import("@/lib/pricing");
+    const { batchCalculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
     const productIds = transfer.items
       .map((it) => (it.product as any)?._id ? (it.product as any)._id.toString() : (it.product ? it.product.toString() : null))
       .filter(Boolean) as string[];
@@ -38,19 +38,16 @@ export async function GET(
       if (!it.product) return it;
       const pId = it.product._id ? it.product._id.toString() : it.product.toString();
       const pricing = batchPricing[pId];
-      const dynamicSelling = (pricing?.priceConfigured && pricing.avgSellingPrice)
-        ? pricing.avgSellingPrice
-        : ((it.product.sellingPrice && it.product.sellingPrice > 1) ? it.product.sellingPrice : (pricing?.avgCostPrice || it.product.costPrice || 0));
-      const dynamicCost = (pricing?.priceConfigured && pricing.avgCostPrice)
-        ? pricing.avgCostPrice
-        : ((it.product.costPrice && it.product.costPrice > 1) ? it.product.costPrice : (pricing?.avgSellingPrice || it.product.sellingPrice || 0));
+      const effective = resolveProductEffectivePricing(it.product, pricing);
 
       return {
         ...it,
         product: {
           ...it.product,
-          costPrice: dynamicCost,
-          sellingPrice: dynamicSelling,
+          costPrice: effective.costPrice,
+          sellingPrice: effective.sellingPrice,
+          minSellingPrice: effective.minSellingPrice,
+          pricingSource: effective.source,
           weightedPricing: pricing,
         },
       };

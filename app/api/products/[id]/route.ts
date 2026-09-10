@@ -31,8 +31,9 @@ export async function GET(
       );
     }
 
-    const { calculateProductWeightedPricing } = await import("@/lib/pricing");
+    const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
     const pricing = await calculateProductWeightedPricing(product._id.toString());
+    const effective = resolveProductEffectivePricing(product, pricing);
 
     const productWithPricing = {
       ...product,
@@ -40,9 +41,10 @@ export async function GET(
       brand: product.brand || "",
       modelNumber: product.modelNumber || product.model || "",
       priceConfigured: pricing.priceConfigured,
-      costPrice: product.costPrice ?? (pricing.priceConfigured ? pricing.avgCostPrice : 0),
-      sellingPrice: product.sellingPrice ?? (pricing.priceConfigured ? pricing.avgSellingPrice : 0),
-      minSellingPrice: product.minSellingPrice ?? (pricing.priceConfigured ? pricing.avgMinSellingPrice : 0),
+      costPrice: effective.costPrice,
+      sellingPrice: effective.sellingPrice,
+      minSellingPrice: effective.minSellingPrice,
+      pricingSource: effective.source,
       weightedPricing: pricing,
     };
 
@@ -205,6 +207,15 @@ export async function PUT(
         },
         { status: 400 }
       );
+    }
+
+    // Track if any price field was intentionally changed to a new value
+    const isCostPriceChanged = body.costPrice !== undefined && Number(body.costPrice) !== product.costPrice;
+    const isSellingPriceChanged = body.sellingPrice !== undefined && Number(body.sellingPrice) !== product.sellingPrice;
+    const isMinSellingPriceChanged = body.minSellingPrice !== undefined && Number(body.minSellingPrice) !== product.minSellingPrice;
+
+    if (isCostPriceChanged || isSellingPriceChanged || isMinSellingPriceChanged) {
+      product.manuallyEditedAt = new Date();
     }
 
     // Apply updates on SAME record ID

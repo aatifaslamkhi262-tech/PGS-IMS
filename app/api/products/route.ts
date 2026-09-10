@@ -109,7 +109,7 @@ export async function GET(req: NextRequest) {
       Product.countDocuments(query),
     ]);
 
-    const { batchCalculateProductWeightedPricing } = await import("@/lib/pricing");
+    const { batchCalculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
     const productIds = products.map((p) => p._id.toString());
     const batchPricing = await batchCalculateProductWeightedPricing(productIds);
 
@@ -120,16 +120,20 @@ export async function GET(req: NextRequest) {
         avgCostPrice: null,
         avgSellingPrice: null,
         avgMinSellingPrice: null,
+        lastInvoiceDate: null,
       };
+      const effective = resolveProductEffectivePricing(p as any, pricing);
+
       return {
         ...p,
         color: (p as any).color || "Unspecified",
         brand: (p as any).brand || "",
         modelNumber: (p as any).modelNumber || (p as any).model || "",
         priceConfigured: pricing.priceConfigured,
-        costPrice: (pricing.priceConfigured && pricing.avgCostPrice) ? pricing.avgCostPrice : ((p.costPrice && p.costPrice > 1) ? p.costPrice : (p.sellingPrice || 0)),
-        sellingPrice: (pricing.priceConfigured && pricing.avgSellingPrice) ? pricing.avgSellingPrice : (p.sellingPrice || 0),
-        minSellingPrice: (pricing.priceConfigured && pricing.avgMinSellingPrice) ? pricing.avgMinSellingPrice : (p.minSellingPrice || 0),
+        costPrice: effective.costPrice,
+        sellingPrice: effective.sellingPrice,
+        minSellingPrice: effective.minSellingPrice,
+        pricingSource: effective.source,
         weightedPricing: pricing,
       };
     });

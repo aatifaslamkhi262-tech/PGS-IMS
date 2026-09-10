@@ -156,17 +156,9 @@ export default function NewPurchaseInvoicePage() {
   };
 
   const addProductToLines = (product: ProductItem) => {
-    const effectiveCost = (product as any).weightedPricing?.priceConfigured && (product as any).weightedPricing.avgCostPrice
-      ? (product as any).weightedPricing.avgCostPrice
-      : (product.costPrice && product.costPrice > 1 ? product.costPrice : (product.costPrice || 0));
-
-    const effectiveSelling = (product as any).weightedPricing?.priceConfigured && (product as any).weightedPricing.avgSellingPrice
-      ? (product as any).weightedPricing.avgSellingPrice
-      : (product.sellingPrice && product.sellingPrice > 1 ? product.sellingPrice : (product.sellingPrice || 0));
-
-    const effectiveMinSelling = (product as any).weightedPricing?.priceConfigured && (product as any).weightedPricing.avgMinSellingPrice
-      ? (product as any).weightedPricing.avgMinSellingPrice
-      : (product.minSellingPrice && product.minSellingPrice > 1 ? product.minSellingPrice : (product.minSellingPrice || 0));
+    const effectiveCost = product.costPrice ?? 0;
+    const effectiveSelling = product.sellingPrice ?? 0;
+    const effectiveMinSelling = product.minSellingPrice ?? 0;
 
     setLines((prevLines) => {
       const existingIndex = prevLines.findIndex((l) => l.product === product._id);

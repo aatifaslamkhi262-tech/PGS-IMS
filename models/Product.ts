@@ -38,6 +38,7 @@ export interface IProduct {
   active: boolean;
   isDeleted: boolean;
   deletedAt?: Date;
+  manuallyEditedAt?: Date;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -139,6 +140,9 @@ const ProductSchema: Schema = new Schema(
       type: Boolean,
       default: false,
       index: true,
+    },
+    manuallyEditedAt: {
+      type: Date,
     },
     deletedAt: {
       type: Date,

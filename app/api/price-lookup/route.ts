@@ -29,14 +29,14 @@ export async function GET(req: NextRequest) {
       ];
     }
 
-    // Securely select only fields needed for price lookup
+    // Securely select fields needed for price lookup
     const products = await Product.find(query)
-      .select("_id name condition minSellingPrice sku barcode brand model modelNumber color")
+      .select("_id name condition costPrice sellingPrice minSellingPrice manuallyEditedAt sku barcode brand model modelNumber color")
       .sort({ name: 1 })
       .limit(100)
       .lean();
 
-    const { batchCalculateProductWeightedPricing } = await import("@/lib/pricing");
+    const { batchCalculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
     const isAuthorizedForCost = ["Admin", "Warehouse", "Accountant"].includes(auth.user?.role || "");
     const productIds = products.map((p) => p._id.toString());
     const batchPricing = await batchCalculateProductWeightedPricing(productIds);
@@ -48,7 +48,10 @@ export async function GET(req: NextRequest) {
         avgCostPrice: null,
         avgSellingPrice: null,
         avgMinSellingPrice: null,
+        lastInvoiceDate: null,
       };
+      const effective = resolveProductEffectivePricing(p as any, pricing);
+
       return {
         _id: p._id,
         name: p.name,
@@ -60,9 +63,10 @@ export async function GET(req: NextRequest) {
         sku: p.sku,
         barcode: p.barcode,
         priceConfigured: pricing.priceConfigured,
-        minSellingPrice: pricing.priceConfigured ? pricing.avgMinSellingPrice : 0,
-        sellingPrice: pricing.priceConfigured ? pricing.avgSellingPrice : 0,
-        ...(isAuthorizedForCost && { costPrice: pricing.priceConfigured ? pricing.avgCostPrice : 0 }),
+        minSellingPrice: effective.minSellingPrice,
+        sellingPrice: effective.sellingPrice,
+        pricingSource: effective.source,
+        ...(isAuthorizedForCost && { costPrice: effective.costPrice }),
       };
     });
 
