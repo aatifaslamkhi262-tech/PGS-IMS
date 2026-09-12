@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { StockTransfer } from "@/models/StockTransfer";
-import { generateTransferNumber } from "@/lib/stockTransfer";
+import { generateTransferNumber, validateTransferSerials } from "@/lib/stockTransfer";
 import { verifyRole } from "@/lib/auth/rbac";
 
 export async function GET(req: NextRequest) {
@@ -12,12 +12,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     }
 
+    // Auto-sync any unrestored stock for cancelled or rejected transfers
+    const { syncUnrestoredCancelledTransfers } = await import("@/lib/stockTransfer");
+    await syncUnrestoredCancelledTransfers().catch(console.error);
+
     const { searchParams } = new URL(req.url);
     const search = searchParams.get("search") || "";
     const status = searchParams.get("status") || "";
     const sourceLocation = searchParams.get("sourceLocation") || "";
     const destinationLocation = searchParams.get("destinationLocation") || "";
     const type = searchParams.get("type") || "";
+    const olderThanDays = searchParams.get("olderThanDays") || searchParams.get("dispatchedOlderThanDays") || "";
 
     const query: any = {};
     if (search.trim()) {
@@ -44,6 +49,13 @@ export async function GET(req: NextRequest) {
     if (type) {
       query.type = type;
     }
+    if (olderThanDays) {
+      const days = parseInt(olderThanDays, 10);
+      if (!isNaN(days) && days > 0) {
+        const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        query.dispatchedAt = { $lte: cutoff };
+      }
+    }
 
     const transfers = await StockTransfer.find(query)
       .populate("sourceLocation", "name code type")
@@ -67,27 +79,34 @@ export async function GET(req: NextRequest) {
 
     const batchPricing = await batchCalculateProductWeightedPricing(allProductIds);
 
-    const transfersWithPricing = transfers.map((tr: any) => ({
-      ...tr,
-      items: (tr.items || []).map((it: any) => {
-        if (!it.product) return it;
-        const pId = it.product._id ? it.product._id.toString() : it.product.toString();
-        const pricing = batchPricing[pId];
-        const effective = resolveProductEffectivePricing(it.product, pricing);
+    const transfersWithPricing = transfers.map((tr: any) => {
+      const ageInDays = tr.dispatchedAt
+        ? Math.floor((Date.now() - new Date(tr.dispatchedAt).getTime()) / (1000 * 60 * 60 * 24))
+        : 0;
 
-        return {
-          ...it,
-          product: {
-            ...it.product,
-            costPrice: effective.costPrice,
-            sellingPrice: effective.sellingPrice,
-            minSellingPrice: effective.minSellingPrice,
-            pricingSource: effective.source,
-            weightedPricing: pricing,
-          },
-        };
-      }),
-    }));
+      return {
+        ...tr,
+        ageInDays,
+        items: (tr.items || []).map((it: any) => {
+          if (!it.product) return it;
+          const pId = it.product._id ? it.product._id.toString() : it.product.toString();
+          const pricing = batchPricing[pId];
+          const effective = resolveProductEffectivePricing(it.product, pricing);
+
+          return {
+            ...it,
+            product: {
+              ...it.product,
+              costPrice: effective.costPrice,
+              sellingPrice: effective.sellingPrice,
+              minSellingPrice: effective.minSellingPrice,
+              pricingSource: effective.source,
+              weightedPricing: pricing,
+            },
+          };
+        }),
+      };
+    });
 
     return NextResponse.json({ success: true, data: transfersWithPricing });
   } catch (error: any) {
@@ -143,6 +162,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Server-side Serial Number & Location Validation
+    await validateTransferSerials({
+      sourceLocationId: sourceLocation,
+      items,
+    });
+
     const transferNumber = await generateTransferNumber();
     const initialStatus = requestedStatus === "Approved" && ["Admin", "Warehouse"].includes(auth.user?.role || "")
       ? "Approved"
@@ -174,7 +199,7 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     return NextResponse.json(
       { success: false, error: error.message || "Failed to create stock transfer." },
-      { status: 500 }
+      { status: 400 }
     );
   }
 }

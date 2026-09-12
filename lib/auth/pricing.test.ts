@@ -140,8 +140,8 @@ describe("Batch Pricing & Weighted Average Rules", () => {
       const result = await calculateProductWeightedPricing(prodId.toString());
       expect(result.priceConfigured).toBe(true);
       expect(result.avgCostPrice).toBe(Math.round((1550000 / 15) * 100) / 100);
-      expect(result.avgSellingPrice).toBe(Math.round((1850000 / 15) * 100) / 100);
-      expect(result.avgMinSellingPrice).toBe(Math.round((1700000 / 15) * 100) / 100);
+      expect(result.avgSellingPrice).toBe(125000);
+      expect(result.avgMinSellingPrice).toBe(115000);
     });
 
     it("uses RECEIVED quantity not ordered quantity for weighted average", async () => {

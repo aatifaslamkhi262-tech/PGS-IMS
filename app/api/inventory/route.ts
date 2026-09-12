@@ -15,6 +15,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     }
 
+    // Auto-sync any unrestored stock for cancelled or rejected transfers
+    const { syncUnrestoredCancelledTransfers } = await import("@/lib/stockTransfer");
+    await syncUnrestoredCancelledTransfers().catch(console.error);
+
     const { searchParams } = new URL(req.url);
     const search = searchParams.get("search") || "";
     const location = searchParams.get("location") || "";

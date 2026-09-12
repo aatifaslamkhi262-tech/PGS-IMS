@@ -129,9 +129,11 @@ describe("Stock Transfer Module & Audit Tests", () => {
     } as any);
 
     vi.spyOn(User, "findById").mockResolvedValue(carrierUserDoc as any);
-    vi.spyOn(Location, "findById")
-      .mockResolvedValueOnce(sourceLocDoc as any)
-      .mockResolvedValueOnce(destLocDoc as any);
+    vi.spyOn(Location, "findById").mockImplementation(((id: any) => {
+      const idStr = id ? id.toString() : "";
+      if (idStr === branch1LocId.toString()) return Promise.resolve(destLocDoc as any);
+      return Promise.resolve(sourceLocDoc as any);
+    }) as any);
 
     vi.spyOn(Product, "findById").mockResolvedValue({
       _id: nonSerialProdId,
@@ -235,9 +237,11 @@ describe("Stock Transfer Module & Audit Tests", () => {
       active: true,
     } as any);
 
-    vi.spyOn(Location, "findById")
-      .mockResolvedValueOnce(sourceLocDoc as any)
-      .mockResolvedValueOnce(destLocDoc as any);
+    vi.spyOn(Location, "findById").mockImplementation(((id: any) => {
+      const idStr = id ? id.toString() : "";
+      if (idStr === branch1LocId.toString()) return Promise.resolve(destLocDoc as any);
+      return Promise.resolve(sourceLocDoc as any);
+    }) as any);
 
     vi.spyOn(Product, "findById").mockResolvedValue({
       _id: nonSerialProdId,
@@ -313,15 +317,25 @@ describe("Stock Transfer Module & Audit Tests", () => {
       active: true,
     } as any);
 
-    vi.spyOn(Location, "findById")
-      .mockResolvedValueOnce(sourceLocDoc as any)
-      .mockResolvedValueOnce(destLocDoc as any);
+    vi.spyOn(Location, "findById").mockImplementation(((id: any) => {
+      const idStr = id ? id.toString() : "";
+      if (idStr === branch1LocId.toString()) return Promise.resolve(destLocDoc as any);
+      return Promise.resolve(sourceLocDoc as any);
+    }) as any);
 
     vi.spyOn(Product, "findById").mockResolvedValue({
       _id: serialProdId,
       name: "PS5 Console",
       serialTracking: true,
     } as any);
+
+    vi.spyOn(SerialNumber, "findOne").mockImplementation(((q: any) => {
+      if (q.serialNumber === "SN-1001") return Promise.resolve(serialDoc1 as any);
+      if (q.serialNumber === "SN-1002") return Promise.resolve(serialDoc2 as any);
+      return Promise.resolve(null);
+    }) as any);
+
+    vi.spyOn(StockTransfer, "findOne").mockResolvedValue(null);
 
     vi.spyOn(Inventory, "findOne").mockResolvedValue(invDoc as any);
 

@@ -37,40 +37,73 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
     throw new Error("Destination location is inactive or invalid.");
   }
 
-  // 3. Update Inventory, SerialNumbers, and InventoryMovement for each item
+  // 3. Update Inventory, SerialNumbers, and InventoryMovement for each item idempotently
   for (const item of receiving.items) {
     const productObj = await Product.findById(item.product, null, sessionOptions);
     if (!productObj) {
       throw new Error(`Product not found: ${item.product}`);
     }
 
-    // a. Check/Update Inventory
-    let inventory = await Inventory.findOne({
-      product: item.product,
-      location: receiving.location,
-      condition: item.condition,
-    }, null, sessionOptions);
-
-    const beforeQuantity = inventory ? inventory.quantity : 0;
-
-    if (!inventory) {
-      inventory = new Inventory({
+    // Check if this item's movement was already applied for this receiving (Idempotency Guard)
+    const existingMovement = await InventoryMovement.findOne(
+      {
+        referenceTransaction: receiving.receivingNumber,
         product: item.product,
-        location: receiving.location,
-        condition: item.condition,
-        quantity: item.quantityReceived,
-        serialTracking: productObj.serialTracking,
-        status: "In Stock",
-      });
+        type: "PURCHASE_RECEIVING",
+      },
+      null,
+      sessionOptions
+    );
+
+    let beforeQuantity = 0;
+    let afterQuantity = 0;
+
+    if (!existingMovement) {
+      // a. Check/Update Inventory
+      let inventory = await Inventory.findOne(
+        {
+          product: item.product,
+          location: receiving.location,
+          condition: item.condition,
+        },
+        null,
+        sessionOptions
+      );
+
+      beforeQuantity = inventory ? inventory.quantity : 0;
+
+      if (!inventory) {
+        inventory = new Inventory({
+          product: item.product,
+          location: receiving.location,
+          condition: item.condition,
+          quantity: item.quantityReceived,
+          serialTracking: productObj.serialTracking,
+          status: "In Stock",
+        });
+      } else {
+        inventory.quantity += item.quantityReceived;
+        inventory.status = inventory.quantity > 0 ? "In Stock" : "Out of Stock";
+      }
+
+      await inventory.save(sessionOptions);
+      afterQuantity = inventory.quantity;
     } else {
-      inventory.quantity += item.quantityReceived;
-      inventory.status = inventory.quantity > 0 ? "In Stock" : "Out of Stock";
+      // Stock was already applied in a previous/partial attempt - fetch current inventory
+      const currentInv = await Inventory.findOne(
+        {
+          product: item.product,
+          location: receiving.location,
+          condition: item.condition,
+        },
+        null,
+        sessionOptions
+      );
+      beforeQuantity = currentInv ? currentInv.quantity : 0;
+      afterQuantity = beforeQuantity;
     }
 
-    await inventory.save(sessionOptions);
-    const afterQuantity = inventory.quantity;
-
-    // b. If serialized, check and insert SerialNumbers
+    // b. If serialized, check and insert SerialNumbers idempotently
     if (productObj.serialTracking) {
       if (!item.serialNumbers || item.serialNumbers.length !== item.quantityReceived) {
         throw new Error(`Product "${productObj.name}" requires exact ${item.quantityReceived} serial numbers but they are missing or length mismatch.`);
@@ -79,10 +112,14 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
       for (const sn of item.serialNumbers) {
         const existingSerial = await SerialNumber.findOne({ serialNumber: sn }, null, sessionOptions);
         if (existingSerial) {
+          if (existingSerial.transactionReference === receiving.receivingNumber) {
+            // Already created during partial/previous attempt of this receiving - skip duplicate creation
+            continue;
+          }
           throw new Error(`Serial number "${sn}" already exists in the system (Product ID: ${existingSerial.product}). Duplicate serial rejected.`);
         }
 
-        // Create serial number as Available
+        // Create serial number as Available with location name & transaction reference
         if (session) {
           await SerialNumber.create(
             [
@@ -108,46 +145,48 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
       }
     }
 
-    // c. Create InventoryMovement record
-    if (session) {
-      await InventoryMovement.create(
-        [
-          {
-            product: item.product,
-            quantity: item.quantityReceived,
-            serialNumbers: item.serialNumbers || [],
-            sourceName: "Supplier",
-            destinationLocation: receiving.location,
-            destinationName: locationObj.name,
-            type: "PURCHASE_RECEIVING",
-            referenceTransaction: receiving.receivingNumber,
-            beforeQuantity,
-            afterQuantity,
-            performedBy: receiving.createdBy,
-            approvedBy: approvedByUsername,
-            condition: item.condition,
-            date: new Date(),
-          },
-        ],
-        { session }
-      );
-    } else {
-      await InventoryMovement.create({
-        product: item.product,
-        quantity: item.quantityReceived,
-        serialNumbers: item.serialNumbers || [],
-        sourceName: "Supplier",
-        destinationLocation: receiving.location,
-        destinationName: locationObj.name,
-        type: "PURCHASE_RECEIVING",
-        referenceTransaction: receiving.receivingNumber,
-        beforeQuantity,
-        afterQuantity,
-        performedBy: receiving.createdBy,
-        approvedBy: approvedByUsername,
-        condition: item.condition,
-        date: new Date(),
-      });
+    // c. Create InventoryMovement record if not already created
+    if (!existingMovement) {
+      if (session) {
+        await InventoryMovement.create(
+          [
+            {
+              product: item.product,
+              quantity: item.quantityReceived,
+              serialNumbers: item.serialNumbers || [],
+              sourceName: "Supplier",
+              destinationLocation: receiving.location,
+              destinationName: locationObj.name,
+              type: "PURCHASE_RECEIVING",
+              referenceTransaction: receiving.receivingNumber,
+              beforeQuantity,
+              afterQuantity,
+              performedBy: receiving.createdBy,
+              approvedBy: approvedByUsername,
+              condition: item.condition,
+              date: new Date(),
+            },
+          ],
+          { session }
+        );
+      } else {
+        await InventoryMovement.create({
+          product: item.product,
+          quantity: item.quantityReceived,
+          serialNumbers: item.serialNumbers || [],
+          sourceName: "Supplier",
+          destinationLocation: receiving.location,
+          destinationName: locationObj.name,
+          type: "PURCHASE_RECEIVING",
+          referenceTransaction: receiving.receivingNumber,
+          beforeQuantity,
+          afterQuantity,
+          performedBy: receiving.createdBy,
+          approvedBy: approvedByUsername,
+          condition: item.condition,
+          date: new Date(),
+        });
+      }
     }
   }
 

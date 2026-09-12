@@ -99,6 +99,14 @@ export async function PUT(
       transfer.status = requestedStatus;
     }
 
+    // Server-side Serial Number & Location Validation
+    const { validateTransferSerials } = await import("@/lib/stockTransfer");
+    await validateTransferSerials({
+      sourceLocationId: transfer.sourceLocation.toString(),
+      items: transfer.items,
+      currentTransferId: transfer._id.toString(),
+    });
+
     await transfer.save();
 
     const updated = await StockTransfer.findById(transfer._id)
@@ -132,11 +140,20 @@ export async function DELETE(
       return NextResponse.json({ success: false, error: "Stock transfer not found." }, { status: 404 });
     }
 
-    if (transfer.status !== "Draft" && transfer.status !== "Rejected") {
+    if (transfer.status === "Received") {
       return NextResponse.json(
-        { success: false, error: `Cannot delete transfer in '${transfer.status}' status. Only Draft or Rejected transfers can be deleted.` },
+        { success: false, error: "Cannot delete a completed ('Received') transfer. Please process a Return to Source instead." },
         { status: 400 }
       );
+    }
+
+    if (transfer.status === "Dispatched") {
+      const { executeCancelTransfer } = await import("@/lib/stockTransfer");
+      await executeCancelTransfer({
+        transferId: id,
+        actionUsername: auth.user?.username || "admin",
+        reason: "Transfer deleted by admin (stock restored)",
+      });
     }
 
     await StockTransfer.findByIdAndDelete(id);

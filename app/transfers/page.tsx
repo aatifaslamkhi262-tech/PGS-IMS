@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronUp, Package, ExternalLink, User, Clock, CheckCircle2, Truck } from "lucide-react";
+import { ChevronDown, ChevronUp, Package, ExternalLink, User, Clock, CheckCircle2, Truck, Trash2, XCircle } from "lucide-react";
 
 interface TransferItem {
   _id?: string;
@@ -38,6 +38,49 @@ export default function TransfersPage() {
   const toggleExpand = (id?: string) => {
     if (!id) return;
     setExpandedTransferId((prev) => (prev === id ? null : id));
+  };
+
+  const handleDeleteTransfer = async (id: string, transferNumber: string, isDispatched: boolean) => {
+    const confirmMsg = isDispatched
+      ? `Deleting dispatched transfer ${transferNumber} will revert deducted stock back to Source location and release serial numbers to Available status. Are you sure you want to delete?`
+      : `Are you sure you want to delete transfer ${transferNumber}?`;
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      const res = await fetch(`/api/transfers/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        alert("Transfer deleted successfully.");
+        fetchTransfers();
+      } else {
+        alert("Error: " + data.error);
+      }
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    }
+  };
+
+  const handleCancelTransfer = async (id: string, transferNumber: string) => {
+    const reasonPrompt = prompt(`Enter reason for cancelling transfer ${transferNumber}:`, "Cancelled by user");
+    if (reasonPrompt === null) return;
+
+    try {
+      const res = await fetch(`/api/transfers/${id}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reasonPrompt }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert("Transfer cancelled successfully. Stock & serials restored to source location.");
+        fetchTransfers();
+      } else {
+        alert("Error: " + data.error);
+      }
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    }
   };
 
   const fetchTransfers = async () => {
@@ -249,13 +292,39 @@ export default function TransfersPage() {
                             {isExpanded ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
                           </button>
                         </div>
-                        <Link
-                          href={`/transfers/${tr._id}`}
-                          className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 font-semibold border border-indigo-500/30 text-xs flex items-center gap-1"
-                        >
-                          <span>Full Audit</span>
-                          <ExternalLink className="w-3 h-3 shrink-0" />
-                        </Link>
+                        <div className="flex items-center gap-1.5">
+                          {tr.status !== "Received" && tr.status !== "Cancelled" && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCancelTransfer(tr._id!, tr.transferNumber);
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 text-rose-300 font-semibold border border-rose-800/80 text-xs flex items-center gap-1 cursor-pointer"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>Cancel</span>
+                            </button>
+                          )}
+                          {tr.status !== "Received" && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteTransfer(tr._id!, tr.transferNumber, tr.status === "Dispatched");
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 border border-slate-700 text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-slate-400" />
+                              <span>Delete</span>
+                            </button>
+                          )}
+                          <Link
+                            href={`/transfers/${tr._id}`}
+                            className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 font-semibold border border-indigo-500/30 text-xs flex items-center gap-1"
+                          >
+                            <span>Full Audit</span>
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                          </Link>
+                        </div>
                       </div>
 
                       {/* Expandable Mobile Accordion Drawer */}
@@ -455,12 +524,34 @@ export default function TransfersPage() {
                               </span>
                             </td>
                             <td className="py-3.5 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                              <Link
-                                href={`/transfers/${tr._id}`}
-                                className="inline-block px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition"
-                              >
-                                Full Audit →
-                              </Link>
+                              <div className="flex items-center justify-end gap-1.5">
+                                {tr.status !== "Received" && tr.status !== "Cancelled" && (
+                                  <button
+                                    onClick={() => handleCancelTransfer(tr._id!, tr.transferNumber)}
+                                    title="Cancel & Revert Stock"
+                                    className="px-2.5 py-1 rounded-md bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 text-xs font-semibold transition cursor-pointer flex items-center gap-1"
+                                  >
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    <span>Cancel</span>
+                                  </button>
+                                )}
+                                {tr.status !== "Received" && (
+                                  <button
+                                    onClick={() => handleDeleteTransfer(tr._id!, tr.transferNumber, tr.status === "Dispatched")}
+                                    title="Delete Transfer"
+                                    className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 border border-slate-700 text-xs font-semibold transition cursor-pointer flex items-center gap-1"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5 text-slate-400" />
+                                    <span>Delete</span>
+                                  </button>
+                                )}
+                                <Link
+                                  href={`/transfers/${tr._id}`}
+                                  className="inline-block px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition"
+                                >
+                                  Audit →
+                                </Link>
+                              </div>
                             </td>
                           </tr>
 

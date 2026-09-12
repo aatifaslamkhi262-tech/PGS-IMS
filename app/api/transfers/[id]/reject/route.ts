@@ -18,27 +18,17 @@ export async function POST(
     const body = await req.json().catch(() => ({}));
     const reason = body.reason || "Rejected by reviewer";
 
-    const transfer = await StockTransfer.findById(id);
-    if (!transfer) {
-      return NextResponse.json({ success: false, error: "Transfer not found." }, { status: 404 });
-    }
-
-    if (transfer.status !== "Pending_Approval" && transfer.status !== "Draft") {
-      return NextResponse.json(
-        { success: false, error: `Transfer cannot be rejected from status '${transfer.status}'.` },
-        { status: 400 }
-      );
-    }
-
-    transfer.status = "Rejected";
-    transfer.rejectedBy = auth.user?.username || "admin";
-    transfer.rejectionReason = reason;
-    await transfer.save();
+    const { executeCancelTransfer } = await import("@/lib/stockTransfer");
+    const updatedTransfer = await executeCancelTransfer({
+      transferId: id,
+      actionUsername: auth.user?.username || "admin",
+      reason,
+    });
 
     return NextResponse.json({
       success: true,
-      message: "Transfer rejected successfully.",
-      data: transfer,
+      message: "Transfer cancelled/rejected successfully.",
+      data: updatedTransfer,
     });
   } catch (error: any) {
     return NextResponse.json(

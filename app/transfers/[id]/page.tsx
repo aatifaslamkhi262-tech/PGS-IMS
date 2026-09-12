@@ -15,6 +15,7 @@ import {
   Package,
   AlertTriangle,
   Search,
+  Trash2,
 } from "lucide-react";
 
 interface UserOption {
@@ -354,6 +355,54 @@ export default function TransferDetailPage() {
     }
   };
 
+  const handleReject = async () => {
+    const reasonPrompt = prompt("Enter reason for cancelling/rejecting this transfer:", "Cancelled by reviewer");
+    if (reasonPrompt === null) return;
+
+    try {
+      setActionLoading(true);
+      const res = await fetch(`/api/transfers/${params.id}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reasonPrompt }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert("Transfer cancelled/rejected successfully.");
+        fetchTransferDetails();
+      } else {
+        alert("Error: " + data.error);
+      }
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    const confirmMsg = transfer?.status === "Dispatched"
+      ? "Deleting a dispatched transfer will revert the deducted stock back to Source location and release serial numbers to Available status. Are you sure you want to delete this transfer?"
+      : "Are you sure you want to delete this transfer record?";
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      setActionLoading(true);
+      const res = await fetch(`/api/transfers/${params.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        alert("Transfer deleted successfully.");
+        router.push("/transfers");
+      } else {
+        alert("Error: " + data.error);
+      }
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-3">
@@ -431,27 +480,46 @@ export default function TransferDetailPage() {
         </div>
 
         {/* Action Buttons Toolbar */}
-        {(transfer.status === "Pending_Approval" || transfer.status === "Approved" || transfer.status === "Dispatched" || transfer.status === "Received") && (
+        {(transfer.status === "Pending_Approval" || transfer.status === "Approved" || transfer.status === "Dispatched" || transfer.status === "Received" || transfer.status === "Draft" || transfer.status === "Rejected") && (
           <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center gap-2.5">
             {transfer.status === "Pending_Approval" && (
-              <button
-                onClick={handleApprove}
-                disabled={actionLoading}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
-              >
-                Approve Transfer
-              </button>
+              <>
+                <button
+                  onClick={handleApprove}
+                  disabled={actionLoading}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Approve Transfer
+                </button>
+                <button
+                  onClick={handleReject}
+                  disabled={actionLoading}
+                  className="px-4 py-2 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 font-semibold text-xs rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Reject Transfer
+                </button>
+              </>
             )}
 
             {transfer.status === "Approved" && (
-              <button
-                onClick={() => setShowDispatchModal(true)}
-                disabled={actionLoading}
-                className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
-              >
-                <Truck className="w-4 h-4" />
-                <span>Dispatch Stock (Select Carrier)</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  onClick={() => setShowDispatchModal(true)}
+                  disabled={actionLoading}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Truck className="w-4 h-4" />
+                  <span>Dispatch Stock (Select Carrier)</span>
+                </button>
+                <button
+                  onClick={handleReject}
+                  disabled={actionLoading}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 font-semibold text-xs rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <XCircle className="w-4 h-4" />
+                  <span>Cancel / Reject Transfer</span>
+                </button>
+              </div>
             )}
 
             {transfer.status === "Dispatched" && (
@@ -473,14 +541,25 @@ export default function TransferDetailPage() {
                   <span>Receive & Report Damage / Claim</span>
                 </button>
                 <button
-                  onClick={handleDirectReject}
+                  onClick={handleReject}
                   disabled={actionLoading}
                   className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 font-semibold text-xs rounded-xl transition-colors cursor-pointer disabled:opacity-50"
                 >
                   <XCircle className="w-4 h-4" />
-                  <span>Reject / Send Back</span>
+                  <span>Cancel / Revert Transfer</span>
                 </button>
               </div>
+            )}
+
+            {transfer.status !== "Received" && (
+              <button
+                onClick={handleDelete}
+                disabled={actionLoading}
+                className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-rose-900/50 text-slate-300 hover:text-rose-200 border border-slate-700 hover:border-rose-800 font-semibold text-xs rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <Trash2 className="w-4 h-4 text-slate-400 group-hover:text-rose-300" />
+                <span>Delete Transfer</span>
+              </button>
             )}
 
             {transfer.status === "Received" && (
