@@ -46,7 +46,7 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
 
     expect(result.source).toBe("MANUAL_OVERRIDE");
     expect(result.sellingPrice).toBe(12500);
-    expect(result.costPrice).toBe(8000); // Weighted cost is preserved even under manual selling override!
+    expect(result.costPrice).toBe(10000); // Manual cost override wins when manual edit is newer than invoice!
     expect(result.minSellingPrice).toBe(12000);
   });
 
@@ -211,16 +211,17 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
     expect(effAfterInv2.sellingPrice).toBe(13000); // Latest invoice selling (NOT averaged 12,333!)
     expect(effAfterInv2.minSellingPrice).toBe(12000); // Latest invoice min selling (NOT averaged 11,333!)
 
-    // 4. MANUAL EDIT: Selling = 15,000, Min Selling = 14,000
+    // 4. MANUAL EDIT: Cost = 14,000, Selling = 15,000, Min Selling = 14,000
     product = {
       ...product,
+      costPrice: 14000,
       sellingPrice: 15000,
       minSellingPrice: 14000,
       manuallyEditedAt: new Date("2026-09-03T10:00:00Z"), // Newer than INV-02 (2026-09-02)
     };
 
     let effAfterManual = resolveProductEffectivePricing(product, pricingAfterInv2);
-    expect(effAfterManual.costPrice).toBe(9333.33); // Cost remains weighted
+    expect(effAfterManual.costPrice).toBe(14000); // Manual override cost wins
     expect(effAfterManual.sellingPrice).toBe(15000); // Manual override wins
     expect(effAfterManual.minSellingPrice).toBe(14000);
 

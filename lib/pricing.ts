@@ -36,9 +36,7 @@ export function resolveProductEffectivePricing(
   // Case B: Manual edit exists AND manual edit timestamp is NEWER than latest invoice/receiving date
   if (manualDate > 0 && manualDate > invoiceDate) {
     return {
-      costPrice: (weightedPricing?.priceConfigured && weightedPricing.avgCostPrice !== null && weightedPricing.avgCostPrice !== undefined)
-        ? weightedPricing.avgCostPrice
-        : (product?.costPrice ?? 0),
+      costPrice: product?.costPrice ?? 0,
       sellingPrice: product?.sellingPrice ?? 0,
       minSellingPrice: product?.minSellingPrice ?? 0,
       source: "MANUAL_OVERRIDE",

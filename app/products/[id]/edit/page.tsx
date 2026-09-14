@@ -57,6 +57,9 @@ export default function EditProductPage({
   const [colorSelection, setColorSelection] = useState("");
   const [customColor, setCustomColor] = useState("");
   const [costPrice, setCostPrice] = useState("");
+  const [initialCost, setInitialCost] = useState<number | null>(null);
+  const [costReason, setCostReason] = useState("");
+  const [costType, setCostType] = useState<"MANUAL_OVERRIDE" | "HISTORICAL_CORRECTION">("MANUAL_OVERRIDE");
   const [sellingPrice, setSellingPrice] = useState("");
   const [minSellingPrice, setMinSellingPrice] = useState("");
   const [images, setImages] = useState<ProductImage[]>([]);
@@ -151,6 +154,7 @@ export default function EditProductPage({
         }
 
         setCostPrice(p.costPrice !== undefined ? String(p.costPrice) : "");
+        setInitialCost(p.costPrice !== undefined ? Number(p.costPrice) : 0);
         setSellingPrice(p.sellingPrice !== undefined ? String(p.sellingPrice) : "");
         setMinSellingPrice(
           p.minSellingPrice !== undefined ? String(p.minSellingPrice) : ""
@@ -193,6 +197,8 @@ export default function EditProductPage({
     const cPrice = parseFloat(costPrice);
     if (costPrice === "" || isNaN(cPrice) || cPrice < 0) {
       newErrors.costPrice = "Cost Price must be a valid number >= 0.";
+    } else if (initialCost !== null && cPrice !== initialCost && !costReason.trim()) {
+      newErrors.costReason = "Reason for Cost Adjustment is required when changing cost price.";
     }
 
     const sPrice = parseFloat(sellingPrice);
@@ -236,6 +242,9 @@ export default function EditProductPage({
         productGroup: productGroup || null,
         condition: condition || DEFAULT_PRODUCT_CONDITION,
         costPrice: parseFloat(costPrice),
+        costReason: costReason.trim(),
+        costType: costType,
+        costReference: "Manual Product Directory Edit",
         sellingPrice: parseFloat(sellingPrice),
         minSellingPrice: parseFloat(minSellingPrice),
         images: images,
@@ -703,6 +712,51 @@ export default function EditProductPage({
               )}
             </div>
           </div>
+
+          {/* Conditional Cost Adjustment Reason & Type Fields */}
+          {initialCost !== null && parseFloat(costPrice) !== initialCost && (
+            <div className="bg-slate-950 p-4 rounded-xl border border-amber-500/30 space-y-4 animate-in fade-in duration-150">
+              <div className="flex items-center gap-2 text-amber-400 text-xs font-bold uppercase tracking-wider">
+                <AlertCircle className="w-4 h-4" />
+                <span>Cost Adjustment Audit Information Required</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Adjustment Type <span className="text-rose-400">*</span>
+                  </label>
+                  <select
+                    value={costType}
+                    onChange={(e) => setCostType(e.target.value as "MANUAL_OVERRIDE" | "HISTORICAL_CORRECTION")}
+                    className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-slate-100 text-sm focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="MANUAL_OVERRIDE">Manual Override (Current Stock Cost Edit)</option>
+                    <option value="HISTORICAL_CORRECTION">Historical Correction (Past Transaction Correction)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Reason for Cost Adjustment <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={costReason}
+                    onChange={(e) => {
+                      setCostReason(e.target.value);
+                      if (errors.costReason) setErrors((prev) => ({ ...prev, costReason: "" }));
+                    }}
+                    placeholder="e.g. Market price surge, physical audit write-down, vendor correction"
+                    className={`w-full px-3.5 py-2.5 bg-slate-900 border rounded-xl text-slate-100 text-sm focus:outline-none focus:border-indigo-500 ${
+                      errors.costReason ? "border-rose-500" : "border-slate-800"
+                    }`}
+                  />
+                  {errors.costReason && (
+                    <p className="text-xs text-rose-400 mt-1">{errors.costReason}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Section 4: Media & Description */}

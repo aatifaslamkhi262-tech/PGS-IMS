@@ -12,7 +12,7 @@ export async function GET(
 ) {
   try {
     await dbConnect();
-    const auth = await verifyRole(["Admin", "Warehouse"]);
+    const auth = await verifyRole(["Admin", "Warehouse", "Owner", "Accountant"]);
     if (!auth.authorized) {
       return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     }
@@ -63,7 +63,7 @@ export async function PUT(
 ) {
   try {
     await dbConnect();
-    const auth = await verifyRole(["Admin", "Warehouse"]);
+    const auth = await verifyRole(["Admin", "Warehouse", "Owner", "Accountant"]);
     if (!auth.authorized) {
       return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     }
@@ -216,6 +216,24 @@ export async function PUT(
 
     if (isCostPriceChanged || isSellingPriceChanged || isMinSellingPriceChanged) {
       product.manuallyEditedAt = new Date();
+    }
+
+    if (isCostPriceChanged) {
+      const { CostAdjustment } = await import("@/models/CostAdjustment");
+      const costType = body.costType === "HISTORICAL_CORRECTION" ? "HISTORICAL_CORRECTION" : "MANUAL_OVERRIDE";
+      const reason = (body.costReason || body.reason || "").trim() || "Manual Cost Adjustment in Product Directory";
+      const reference = (body.costReference || body.reference || "").trim() || "Manual Product Directory Edit";
+
+      await CostAdjustment.create({
+        product: product._id,
+        previousCost: product.costPrice,
+        newCost: costPrice,
+        costType,
+        reason,
+        changedBy: auth.user?.userId,
+        userRole: auth.user?.role || "Admin",
+        reference,
+      });
     }
 
     // Apply updates on SAME record ID

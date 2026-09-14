@@ -39,15 +39,15 @@ interface InvoiceDetail {
   supplier: { _id: string; name: string; code: string; contactPerson?: string; phone?: string; email?: string; address?: string };
   invoiceDate: string;
   status:
-    | "Draft"
-    | "Pending_Approval"
-    | "Approved"
-    | "Rejected"
-    | "Ready_For_Receiving"
-    | "Receiving"
-    | "Receiving_Pending_Approval"
-    | "Receiving_Approved"
-    | "Inventory_Updated";
+  | "Draft"
+  | "Pending_Approval"
+  | "Approved"
+  | "Rejected"
+  | "Ready_For_Receiving"
+  | "Receiving"
+  | "Receiving_Pending_Approval"
+  | "Receiving_Approved"
+  | "Inventory_Updated";
   items: InvoiceLineItem[];
   subtotal: number;
   total: number;
@@ -522,15 +522,14 @@ export default function PurchaseInvoiceDetailPage() {
                             <td className="p-3 text-slate-450">{new Date(rec.createdAt).toLocaleDateString()}</td>
                             <td className="p-3">
                               <span
-                                className={`px-2 py-0.5 text-[9px] font-bold rounded-sm border ${
-                                  rec.status === "Approved"
+                                className={`px-2 py-0.5 text-[9px] font-bold rounded-sm border ${rec.status === "Approved"
                                     ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
                                     : rec.status === "Pending_Approval"
-                                    ? "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse"
-                                    : rec.status === "Rejected"
-                                    ? "bg-rose-500/10 text-rose-400 border-rose-500/20"
-                                    : "bg-slate-850 text-slate-400 border-slate-700"
-                                }`}
+                                      ? "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse"
+                                      : rec.status === "Rejected"
+                                        ? "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                                        : "bg-slate-850 text-slate-400 border-slate-700"
+                                  }`}
                               >
                                 {rec.status.replace("_", " ")}
                               </span>

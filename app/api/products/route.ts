@@ -41,7 +41,7 @@ async function generateSystemBarcode(): Promise<string> {
 export async function GET(req: NextRequest) {
   try {
     await dbConnect();
-    const auth = await verifyRole(["Admin", "Warehouse"]);
+    const auth = await verifyRole(["Admin", "Warehouse", "Owner", "Accountant"]);
     if (!auth.authorized) {
       return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     }
@@ -159,7 +159,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     await dbConnect();
-    const auth = await verifyRole(["Admin", "Warehouse"]);
+    const auth = await verifyRole(["Admin", "Warehouse", "Owner", "Accountant"]);
     if (!auth.authorized) {
       return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     }

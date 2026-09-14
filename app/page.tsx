@@ -23,10 +23,12 @@ import {
   Truck,
   Users,
   BarChart3,
+  History,
 } from "lucide-react";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { ToastContainer, ToastMessage } from "@/components/Toast";
 import { CameraBarcodeScannerModal } from "@/components/CameraBarcodeScannerModal";
+import { CostAuditHistoryModal } from "@/components/CostAuditHistoryModal";
 import { Pagination } from "@/components/Pagination";
 import { TableSkeleton } from "@/components/TableSkeleton";
 import {
@@ -49,6 +51,8 @@ interface ProductItem {
   costPrice: number;
   sellingPrice: number;
   minSellingPrice: number;
+  pricingSource?: string;
+  weightedPricing?: any;
   active: boolean;
   images: ProductImage[] | string[];
   category?: { _id: string; name: string };
@@ -88,6 +92,11 @@ export default function ProductListPage() {
   const [deleteProduct, setDeleteProduct] = useState<ProductItem | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [cameraScannerOpen, setCameraScannerOpen] = useState(false);
+  const [auditModal, setAuditModal] = useState<{
+    isOpen: boolean;
+    productId: string;
+    productName: string;
+  }>({ isOpen: false, productId: "", productName: "" });
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const addToast = (type: "success" | "error" | "info", text: string) => {
@@ -312,6 +321,14 @@ export default function ProductListPage() {
         isLoading={deleting}
         onConfirm={handleConfirmDelete}
         onCancel={() => setDeleteProduct(null)}
+      />
+
+      {/* Cost Adjustment Audit Trail History Modal */}
+      <CostAuditHistoryModal
+        isOpen={auditModal.isOpen}
+        onClose={() => setAuditModal({ isOpen: false, productId: "", productName: "" })}
+        productId={auditModal.productId}
+        productName={auditModal.productName}
       />
 
       {/* Header Section */}
@@ -784,10 +801,26 @@ export default function ProductListPage() {
                       </td>
 
                       {/* Internal Cost Price */}
-                      <td className="px-4 py-4">
-                        <span className="text-xs font-semibold text-slate-400 bg-slate-950 px-2 py-1 rounded border border-slate-800">
-                          Rs. {p.costPrice.toLocaleString("en-PK")}
-                        </span>
+                      <td className="px-4 py-4 space-y-1">
+                        <div>
+                          <span className="text-xs font-semibold text-slate-300 bg-slate-950 px-2 py-1 rounded border border-slate-800 font-mono">
+                            Rs. {p.costPrice.toLocaleString("en-PK")}
+                          </span>
+                        </div>
+                        {p.pricingSource === "MANUAL_OVERRIDE" && (
+                          <div>
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                              <Tag className="w-2.5 h-2.5" /> Manual Override
+                            </span>
+                          </div>
+                        )}
+                        {p.pricingSource === "WEIGHTED_AVERAGE" && (
+                          <div>
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              Weighted Avg
+                            </span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Status */}
@@ -806,6 +839,14 @@ export default function ProductListPage() {
                       {/* Actions */}
                       <td className="px-5 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setAuditModal({ isOpen: true, productId: p._id, productName: p.name })}
+                            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition-colors"
+                            title="View Cost Audit History"
+                          >
+                            <History className="w-4 h-4 text-amber-400" />
+                          </button>
                           <Link
                             href={`/products/${p._id}`}
                             className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition-colors"
