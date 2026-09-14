@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
-import { Search, Tag, RefreshCw, AlertCircle, ShoppingBag, ScanBarcode, Truck, Calendar, FileText, Layers, ShieldCheck, User } from "lucide-react";
+import { Search, Tag, RefreshCw, AlertCircle, ShoppingBag, ScanBarcode, Truck, Calendar, FileText, Layers, ShieldCheck, User, Camera } from "lucide-react";
 import { ToastContainer, ToastMessage } from "@/components/Toast";
+import { CameraBarcodeScannerModal } from "@/components/CameraBarcodeScannerModal";
 import { getConditionBadgeClasses, type ProductCondition } from "@/lib/productCondition";
 
 interface ProvenanceDetails {
@@ -80,9 +81,15 @@ export default function UnifiedPriceLookupPage() {
   // States for search and resolution
   const [resolvedItem, setResolvedItem] = useState<ResolvedItem | null>(null);
   const [searchResults, setSearchResults] = useState<SimpleProduct[]>([]);
+  const [cameraScannerOpen, setCameraScannerOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleCameraScanSuccess = (scannedCode: string) => {
+    setSearchInput(scannedCode);
+    addToast("success", `Scanned Code: ${scannedCode}`);
+  };
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -219,6 +226,13 @@ export default function UnifiedPriceLookupPage() {
     <div className="max-w-4xl mx-auto space-y-6 pb-16">
       <ToastContainer toasts={toasts} onClose={removeToast} />
 
+      {/* Camera Barcode Scanner Modal for Mobile */}
+      <CameraBarcodeScannerModal
+        isOpen={cameraScannerOpen}
+        onClose={() => setCameraScannerOpen(false)}
+        onScanSuccess={handleCameraScanSuccess}
+      />
+
       {/* Header Panel */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-sm">
         <div>
@@ -230,10 +244,19 @@ export default function UnifiedPriceLookupPage() {
             Search by product name, or scan product barcodes and serial numbers directly.
           </p>
         </div>
-        <div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setCameraScannerOpen(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-xl font-semibold text-xs transition-colors shrink-0 cursor-pointer"
+            title="Scan barcode/serial using phone/laptop camera"
+          >
+            <Camera className="w-4 h-4 text-indigo-400" />
+            <span>Scan with Camera</span>
+          </button>
           <button
             onClick={handleClear}
-            className="p-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-slate-300 transition-colors text-xs font-semibold cursor-pointer"
+            className="p-2 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-slate-300 transition-colors text-xs font-semibold cursor-pointer"
           >
             Clear Lookup
           </button>
@@ -242,9 +265,19 @@ export default function UnifiedPriceLookupPage() {
 
       {/* Unified Search/Scan Input */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-sm space-y-2">
-        <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
-          Search or Scan Input
-        </label>
+        <div className="flex items-center justify-between">
+          <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
+            Search or Scan Input
+          </label>
+          <button
+            type="button"
+            onClick={() => setCameraScannerOpen(true)}
+            className="sm:hidden flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold"
+          >
+            <Camera className="w-3.5 h-3.5" />
+            <span>Scan Camera</span>
+          </button>
+        </div>
         <div className="relative flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 focus-within:border-indigo-500 transition-colors">
           <ScanBarcode className="w-5 h-5 text-slate-500 shrink-0" />
           <input
@@ -256,6 +289,14 @@ export default function UnifiedPriceLookupPage() {
             className="w-full bg-transparent border-0 text-slate-100 text-sm focus:outline-none placeholder-slate-500 py-1 font-mono"
             autoFocus
           />
+          <button
+            type="button"
+            onClick={() => setCameraScannerOpen(true)}
+            className="p-1.5 text-slate-400 hover:text-indigo-400 transition-colors"
+            title="Scan with Camera"
+          >
+            <Camera className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
