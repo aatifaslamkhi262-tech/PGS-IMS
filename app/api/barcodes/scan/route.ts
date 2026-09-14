@@ -80,16 +80,17 @@ export async function GET(req: NextRequest) {
       }
 
       // ── Product-level weighted average (same logic as barcode/name lookup) ──
-      const { calculateProductWeightedPricing } = await import("@/lib/pricing");
+      const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
       const productId = (serialRecord.product as any)._id.toString();
       const pricingResult = await calculateProductWeightedPricing(productId);
+      const effective = resolveProductEffectivePricing(serialRecord.product as any, pricingResult);
 
       const safeWeightedPricing = {
         priceConfigured: pricingResult.priceConfigured,
-        sellingPrice: pricingResult.priceConfigured ? pricingResult.avgSellingPrice : 0,
-        minSellingPrice: pricingResult.priceConfigured ? pricingResult.avgMinSellingPrice : 0,
+        sellingPrice: effective.sellingPrice,
+        minSellingPrice: effective.minSellingPrice,
         ...(isAuthorizedForProvenance && {
-          costPrice: pricingResult.priceConfigured ? pricingResult.avgCostPrice : 0,
+          costPrice: effective.costPrice,
         }),
       };
 
@@ -106,6 +107,9 @@ export async function GET(req: NextRequest) {
         model: (serialRecord.product as any).model || (serialRecord.product as any).modelNumber || "",
         serialTracking: (serialRecord.product as any).serialTracking,
         description: (serialRecord.product as any).description,
+        sellingPrice: effective.sellingPrice,
+        minSellingPrice: effective.minSellingPrice,
+        ...(isAuthorizedForProvenance && { costPrice: effective.costPrice }),
       };
 
       return NextResponse.json({
@@ -184,20 +188,17 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Dynamic quantity-weighted average calculation
-    const { calculateProductWeightedPricing } = await import("@/lib/pricing");
+    // Dynamic quantity-weighted average calculation & effective precedence resolution
+    const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
     const pricingResult = await calculateProductWeightedPricing(product._id.toString());
-
-    const effectiveCost = (pricingResult.priceConfigured && pricingResult.avgCostPrice) ? pricingResult.avgCostPrice : (product.costPrice && product.costPrice > 1 ? product.costPrice : (product.costPrice || 0));
-    const effectiveSelling = (pricingResult.priceConfigured && pricingResult.avgSellingPrice) ? pricingResult.avgSellingPrice : (product.sellingPrice && product.sellingPrice > 1 ? product.sellingPrice : (product.sellingPrice || 0));
-    const effectiveMinSelling = (pricingResult.priceConfigured && pricingResult.avgMinSellingPrice) ? pricingResult.avgMinSellingPrice : (product.minSellingPrice && product.minSellingPrice > 1 ? product.minSellingPrice : (product.minSellingPrice || 0));
+    const effective = resolveProductEffectivePricing(product as any, pricingResult);
 
     // Project safe product details for restricted roles
     const safeProduct = isAuthorizedForProvenance ? {
       ...product,
-      costPrice: effectiveCost,
-      sellingPrice: effectiveSelling,
-      minSellingPrice: effectiveMinSelling,
+      costPrice: effective.costPrice,
+      sellingPrice: effective.sellingPrice,
+      minSellingPrice: effective.minSellingPrice,
       color: product.color || "Unspecified",
       brand: product.brand || "",
       modelNumber: product.modelNumber || product.model || "",
@@ -208,9 +209,9 @@ export async function GET(req: NextRequest) {
       sku: product.sku,
       barcode: product.barcode,
       condition: product.condition,
-      costPrice: effectiveCost,
-      sellingPrice: effectiveSelling,
-      minSellingPrice: effectiveMinSelling,
+      costPrice: effective.costPrice,
+      sellingPrice: effective.sellingPrice,
+      minSellingPrice: effective.minSellingPrice,
       color: product.color || "Unspecified",
       brand: product.brand || "",
       modelNumber: product.modelNumber || product.model || "",
@@ -221,9 +222,9 @@ export async function GET(req: NextRequest) {
 
     const safePricing = {
       priceConfigured: pricingResult.priceConfigured,
-      sellingPrice: pricingResult.priceConfigured ? pricingResult.avgSellingPrice : 0,
-      minSellingPrice: pricingResult.priceConfigured ? pricingResult.avgMinSellingPrice : 0,
-      ...(isAuthorizedForProvenance && { costPrice: pricingResult.priceConfigured ? pricingResult.avgCostPrice : 0 }),
+      sellingPrice: effective.sellingPrice,
+      minSellingPrice: effective.minSellingPrice,
+      ...(isAuthorizedForProvenance && { costPrice: effective.costPrice }),
     };
 
     return NextResponse.json({

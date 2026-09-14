@@ -314,17 +314,21 @@ export default function UnifiedPriceLookupPage() {
               <div>
                 <span className="block text-[9px] font-extrabold text-slate-500 uppercase tracking-wider mb-0.5">Selling Price</span>
                 <span className="text-base font-extrabold text-indigo-400">
-                  {resolvedItem.priceConfigured && resolvedItem.weightedPricing
-                    ? `Rs. ${resolvedItem.weightedPricing.sellingPrice.toLocaleString("en-PK")}`
-                    : "Price Not Configured"}
+                  {resolvedItem.product.sellingPrice !== undefined && resolvedItem.product.sellingPrice !== null
+                    ? `Rs. ${resolvedItem.product.sellingPrice.toLocaleString("en-PK")}`
+                    : (resolvedItem.priceConfigured && resolvedItem.weightedPricing
+                      ? `Rs. ${resolvedItem.weightedPricing.sellingPrice.toLocaleString("en-PK")}`
+                      : "Price Not Configured")}
                 </span>
               </div>
               <div>
                 <span className="block text-[9px] font-extrabold text-slate-500 uppercase tracking-wider mb-0.5">Minimum Selling Price</span>
                 <span className="text-base font-extrabold text-indigo-400">
-                  {resolvedItem.priceConfigured && resolvedItem.weightedPricing
-                    ? `Rs. ${resolvedItem.weightedPricing.minSellingPrice.toLocaleString("en-PK")}`
-                    : "Price Not Configured"}
+                  {resolvedItem.product.minSellingPrice !== undefined && resolvedItem.product.minSellingPrice !== null
+                    ? `Rs. ${resolvedItem.product.minSellingPrice.toLocaleString("en-PK")}`
+                    : (resolvedItem.priceConfigured && resolvedItem.weightedPricing
+                      ? `Rs. ${resolvedItem.weightedPricing.minSellingPrice.toLocaleString("en-PK")}`
+                      : "Price Not Configured")}
                 </span>
               </div>
               {isAuthorizedForProvenance && (
