@@ -219,14 +219,23 @@ export async function PUT(
     }
 
     if (isCostPriceChanged) {
+      product.costBaselineAmount = costPrice;
+      product.costBaselineQty = 1;
+      product.costBaselineAt = new Date();
+
+      const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
       const { CostAdjustment } = await import("@/models/CostAdjustment");
+
+      const pricingBeforeEdit = await calculateProductWeightedPricing(product._id.toString());
+      const effectiveBeforeEdit = resolveProductEffectivePricing(product, pricingBeforeEdit);
+
       const costType = body.costType === "HISTORICAL_CORRECTION" ? "HISTORICAL_CORRECTION" : "MANUAL_OVERRIDE";
       const reason = (body.costReason || body.reason || "").trim() || "Manual Cost Adjustment in Product Directory";
       const reference = (body.costReference || body.reference || "").trim() || "Manual Product Directory Edit";
 
       await CostAdjustment.create({
         product: product._id,
-        previousCost: product.costPrice,
+        previousCost: effectiveBeforeEdit.costPrice,
         newCost: costPrice,
         costType,
         reason,

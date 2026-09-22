@@ -66,14 +66,16 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json().catch(() => ({}));
-    const { invoiceNumber, supplier, invoiceDate, items, notes } = body;
+    const { invoiceNumber, receivingType, supplier, customerName, customerPhone, invoiceDate, items, notes } = body;
+
+    const actualReceivingType = receivingType || "SUPPLIER_PURCHASE";
 
     // Field Validations
     if (!invoiceNumber || !invoiceNumber.trim()) {
       return NextResponse.json({ success: false, error: "Invoice Number is required." }, { status: 400 });
     }
-    if (!supplier) {
-      return NextResponse.json({ success: false, error: "Supplier is required." }, { status: 400 });
+    if (actualReceivingType === "SUPPLIER_PURCHASE" && !supplier) {
+      return NextResponse.json({ success: false, error: "Supplier is required for Supplier Purchase." }, { status: 400 });
     }
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ success: false, error: "At least one product line item is required." }, { status: 400 });
@@ -134,7 +136,10 @@ export async function POST(req: NextRequest) {
     // Save Draft
     const invoice = await PurchaseInvoice.create({
       invoiceNumber: cleanInvoiceNumber,
-      supplier,
+      receivingType: actualReceivingType,
+      supplier: supplier || undefined,
+      customerName: customerName?.trim() || undefined,
+      customerPhone: customerPhone?.trim() || undefined,
       invoiceDate: invoiceDate ? new Date(invoiceDate) : new Date(),
       status: "Draft",
       items: validatedItems,

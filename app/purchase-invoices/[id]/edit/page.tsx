@@ -289,6 +289,8 @@ export default function EditPurchaseInvoicePage() {
     return lines.reduce((sum, l) => sum + l.amount, 0);
   };
 
+  const [reason, setReason] = useState("");
+
   const handleUpdate = async (resubmit = false) => {
     if (!selectedSupplier) {
       setError("Please select a Supplier.");
@@ -300,6 +302,12 @@ export default function EditPurchaseInvoicePage() {
     }
     if (lines.length === 0) {
       setError("At least one product line item is required.");
+      return;
+    }
+
+    const isApprovedStatus = ["Approved", "Ready_For_Receiving", "Receiving_Approved", "Inventory_Updated"].includes(status);
+    if (isApprovedStatus && !reason.trim()) {
+      setError("A mandatory Reason is required for historical cost corrections on approved invoices.");
       return;
     }
 
@@ -327,6 +335,7 @@ export default function EditPurchaseInvoicePage() {
       supplier: selectedSupplier,
       invoiceDate: new Date(invoiceDate).toISOString(),
       notes: notes.trim() || undefined,
+      reason: reason.trim() || undefined,
       items: lines.map((l) => ({
         product: l.product,
         name: l.name,
@@ -671,10 +680,30 @@ export default function EditPurchaseInvoicePage() {
                   placeholder="Add any internal remarks or memo for this purchase..."
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  rows={4}
+                  rows={3}
                   className="w-full px-2.5 py-2 bg-slate-950 border border-slate-850 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 resize-none leading-normal"
                 />
               </div>
+
+              {/* Mandatory Reason for Historical Cost Correction */}
+              {["Approved", "Ready_For_Receiving", "Receiving_Approved", "Inventory_Updated"].includes(status) && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-1.5">
+                  <label className="block text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    <span>Reason for Historical Correction *</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Enter reason for modifying approved invoice cost..."
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    className="w-full px-2.5 py-2 bg-slate-950 border border-amber-500/30 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+                  />
+                  <p className="text-[10px] text-amber-300/80">
+                    Modifying costs on approved invoices will create an immutable audit log.
+                  </p>
+                </div>
+              )}
 
               {/* Financial calculations */}
               <div className="pt-4 border-t border-slate-800 space-y-2">

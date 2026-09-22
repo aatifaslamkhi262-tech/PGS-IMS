@@ -43,6 +43,17 @@ interface InventoryProduct {
   status: "In Stock" | "Out of Stock";
 }
 
+interface CachedInventoryData {
+  data: InventoryProduct[];
+  total: number;
+  totalPages: number;
+  key: string;
+}
+
+let inventoryCache: CachedInventoryData | null = null;
+let locationsCache: { _id: string; name: string }[] | null = null;
+let categoriesCache: { _id: string; name: string }[] | null = null;
+
 export default function InventoryPage() {
   const [inventory, setInventory] = useState<InventoryProduct[]>([]);
   const [locations, setLocations] = useState<{ _id: string; name: string }[]>([]);
@@ -86,10 +97,14 @@ export default function InventoryPage() {
 
   // Fetch Locations for filters
   const fetchLocations = async () => {
+    if (locationsCache) {
+      setLocations(locationsCache);
+    }
     try {
       const res = await fetch("/api/locations?activeOnly=true");
       const data = await res.json();
       if (data.success) {
+        locationsCache = data.data;
         setLocations(data.data);
       }
     } catch {
@@ -99,10 +114,14 @@ export default function InventoryPage() {
 
   // Fetch Categories for filters
   const fetchCategories = async () => {
+    if (categoriesCache) {
+      setCategories(categoriesCache);
+    }
     try {
       const res = await fetch("/api/categories");
       const data = await res.json();
       if (data.success) {
+        categoriesCache = data.data;
         setCategories(data.data);
       }
     } catch {
@@ -125,8 +144,19 @@ export default function InventoryPage() {
 
   // Fetch Inventory List with AbortSignal to avoid out-of-order race conditions
   const fetchInventory = async (signal?: AbortSignal) => {
-    setLoading(true);
+    const cacheKey = `${debouncedSearch}|${selectedLocation}|${selectedCondition}|${selectedCategory}|${selectedSerialized}|${selectedStatus}|${currentPage}|${itemsPerPage}`;
+
+    const hasCache = Boolean(inventoryCache && inventoryCache.key === cacheKey);
+    if (hasCache && inventoryCache) {
+      setInventory(inventoryCache.data);
+      setTotalItems(inventoryCache.total);
+      setTotalPages(inventoryCache.totalPages);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     setError("");
+
     try {
       const params = new URLSearchParams();
       if (debouncedSearch.trim()) params.append("search", debouncedSearch.trim());
@@ -145,16 +175,26 @@ export default function InventoryPage() {
 
       if (data.success) {
         setInventory(data.data);
-        if (data.pagination) {
-          setTotalItems(data.pagination.total);
-          setTotalPages(data.pagination.totalPages);
-        }
+        const total = data.pagination?.total || 0;
+        const totalPages = data.pagination?.totalPages || 1;
+        setTotalItems(total);
+        setTotalPages(totalPages);
+        inventoryCache = {
+          data: data.data,
+          total,
+          totalPages,
+          key: cacheKey,
+        };
       } else {
-        setError(data.error || "Failed to load inventory registry.");
+        if (!hasCache) {
+          setError(data.error || "Failed to load inventory registry.");
+        }
       }
     } catch (err: any) {
       if (err.name === "AbortError" || signal?.aborted) return;
-      setError("Failed to fetch inventory from server.");
+      if (!hasCache) {
+        setError("Failed to fetch inventory from server.");
+      }
     } finally {
       if (!signal?.aborted) {
         setLoading(false);
@@ -200,6 +240,8 @@ export default function InventoryPage() {
         setNewLocName("");
         setNewLocCode("");
         setNewLocType("Branch");
+        locationsCache = null;
+        inventoryCache = null;
         // Refresh locations filter list
         fetchLocations();
         // Refresh inventory table to show the new location column

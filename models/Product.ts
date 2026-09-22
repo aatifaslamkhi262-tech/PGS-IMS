@@ -37,8 +37,11 @@ export interface IProduct {
   description?: string;
   active: boolean;
   isDeleted: boolean;
-  deletedAt?: Date;
   manuallyEditedAt?: Date;
+  costBaselineAmount?: number;
+  costBaselineQty?: number;
+  costBaselineAt?: Date;
+  deletedAt?: Date;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -142,6 +145,15 @@ const ProductSchema: Schema = new Schema(
       index: true,
     },
     manuallyEditedAt: {
+      type: Date,
+    },
+    costBaselineAmount: {
+      type: Number,
+    },
+    costBaselineQty: {
+      type: Number,
+    },
+    costBaselineAt: {
       type: Date,
     },
     deletedAt: {

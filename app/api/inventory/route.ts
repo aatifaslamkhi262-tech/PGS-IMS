@@ -15,10 +15,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     }
 
-    // Auto-sync any unrestored stock for cancelled or rejected transfers
-    const { syncUnrestoredCancelledTransfers } = await import("@/lib/stockTransfer");
-    await syncUnrestoredCancelledTransfers().catch(console.error);
-
     const { searchParams } = new URL(req.url);
     const search = searchParams.get("search") || "";
     const location = searchParams.get("location") || "";
@@ -40,11 +36,29 @@ export async function GET(req: NextRequest) {
         serialNumber: new RegExp(escapedSearch, "i"),
       })
         .select("product")
+        .limit(100)
         .lean();
       serialProductIds = matchingSerials.map((s) => s.product.toString());
     }
 
-    // 2. Query products first to apply filters
+    // 2. Resolve Status Filter at DB level using distinct Inventory product IDs
+    let statusProductQuery: any = null;
+    if (status) {
+      const invFilter: any = { quantity: { $gt: 0 } };
+      if (location) invFilter.location = location;
+      if (condition) invFilter.condition = condition;
+
+      const inStockProductIdsRaw = await Inventory.distinct("product", invFilter);
+      const inStockProductIds = inStockProductIdsRaw.map((id: any) => id.toString());
+
+      if (status === "In Stock") {
+        statusProductQuery = { $in: inStockProductIds };
+      } else if (status === "Out of Stock") {
+        statusProductQuery = { $nin: inStockProductIds };
+      }
+    }
+
+    // 3. Query products first to apply filters
     const prodQuery: any = { isDeleted: false };
     if (search.trim()) {
       const cleanSearch = search.trim();
@@ -53,12 +67,9 @@ export async function GET(req: NextRequest) {
       prodQuery.$or = [
         { name: searchRegex },
         { sku: searchRegex },
-        { barcode: cleanSearch },
         { barcode: searchRegex },
-        { model: searchRegex },
         { modelNumber: searchRegex },
-        { brand: searchRegex },
-        { color: searchRegex },
+        { model: searchRegex },
       ];
       if (serialProductIds.length > 0) {
         prodQuery.$or.push({ _id: { $in: serialProductIds } });
@@ -72,30 +83,21 @@ export async function GET(req: NextRequest) {
     } else if (serialized === "false") {
       prodQuery.serialTracking = false;
     }
-
-    // Apply DB-level pagination when no status filter is active
-    let pageProducts = [];
-    let total = 0;
-    let validPage = page;
-    let totalPages = 1;
-    let skip = 0;
-
-    if (!status) {
-      total = await Product.countDocuments(prodQuery);
-      totalPages = Math.ceil(total / limit) || 1;
-      validPage = Math.max(1, Math.min(page, totalPages));
-      skip = (validPage - 1) * limit;
-
-      pageProducts = await Product.find(prodQuery)
-        .select("name sku barcode category condition serialTracking active brand model modelNumber color")
-        .skip(skip)
-        .limit(limit)
-        .lean();
-    } else {
-      pageProducts = await Product.find(prodQuery)
-        .select("name sku barcode category condition serialTracking active brand model modelNumber color")
-        .lean();
+    if (statusProductQuery) {
+      prodQuery._id = statusProductQuery;
     }
+
+    // DB-level pagination always active
+    const total = await Product.countDocuments(prodQuery);
+    const totalPages = Math.ceil(total / limit) || 1;
+    const validPage = Math.max(1, Math.min(page, totalPages));
+    const skip = (validPage - 1) * limit;
+
+    const pageProducts = await Product.find(prodQuery)
+      .select("name sku barcode category condition serialTracking active brand model modelNumber color")
+      .skip(skip)
+      .limit(limit)
+      .lean();
 
     const productIds = pageProducts.map((p) => p._id.toString());
 
@@ -113,7 +115,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // 3. Query inventory items for these products
+    // 4. Query inventory items for these products on the current page
     const invQuery: any = { product: { $in: productIds } };
     if (location) {
       invQuery.location = location;
@@ -136,25 +138,28 @@ export async function GET(req: NextRequest) {
       inventoryMap[pStr].push(item);
     }
 
-    // 4. Load all locations to build full breakdown
+    // 5. Load all locations to build full breakdown
     const allLocations = await Location.find({ active: true }).select("name code type").lean();
 
-    // 5. Build output data
+    // 6. Build output data
     const result = [];
     for (const prod of pageProducts) {
       const pStr = prod._id.toString();
       const stockLines = inventoryMap[pStr] || [];
 
-      // Calculate totals
+      // Calculate total quantity
       const totalQty = stockLines.reduce((sum, line) => sum + line.quantity, 0);
 
-      // Status filter
-      if (status === "In Stock" && totalQty === 0) continue;
-      if (status === "Out of Stock" && totalQty > 0) continue;
+      // Build location breakdown using O(1) Map lookup
+      const stockByLocationMap = new Map<string, any>();
+      for (const line of stockLines) {
+        if (line.location && line.location._id) {
+          stockByLocationMap.set(line.location._id.toString(), line);
+        }
+      }
 
-      // Build location breakdown
       const breakdown = allLocations.map((loc) => {
-        const line = stockLines.find((sl) => sl.location._id.toString() === loc._id.toString());
+        const line = stockByLocationMap.get(loc._id.toString());
         return {
           locationId: loc._id,
           locationName: loc.name,
@@ -183,18 +188,9 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    let finalData = result;
-    if (status) {
-      total = result.length;
-      totalPages = Math.ceil(total / limit) || 1;
-      validPage = Math.max(1, Math.min(page, totalPages));
-      skip = (validPage - 1) * limit;
-      finalData = result.slice(skip, skip + limit);
-    }
-
     return NextResponse.json({
       success: true,
-      data: finalData,
+      data: result,
       pagination: {
         total,
         page: validPage,

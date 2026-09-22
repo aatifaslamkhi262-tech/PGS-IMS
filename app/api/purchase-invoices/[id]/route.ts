@@ -40,25 +40,27 @@ export async function PUT(
 ) {
   try {
     await dbConnect();
-    // Admin, Warehouse, and Accountant can edit
-    const auth = await verifyRole(["Admin", "Warehouse", "Accountant"]);
+    // Admin, Warehouse, Accountant, and Owner can edit
+    const auth = await verifyRole(["Admin", "Warehouse", "Accountant", "Owner"]);
     if (!auth.authorized) {
       return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     }
 
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
-    const { invoiceNumber, supplier, invoiceDate, items, notes } = body;
+    const { invoiceNumber, supplier, invoiceDate, items, notes, reason } = body;
 
     const invoice = await PurchaseInvoice.findById(id);
     if (!invoice) {
       return NextResponse.json({ success: false, error: "Purchase Invoice not found." }, { status: 404 });
     }
 
-    // Business rule: Once approved, edits are strictly blocked.
-    if (invoice.status === "Approved") {
+    const isApprovedStatus = ["Approved", "Ready_For_Receiving", "Receiving_Approved", "Inventory_Updated"].includes(invoice.status);
+
+    // Business rule: Once approved, edits require a mandatory reason and log CostAdjustment audit entries
+    if (isApprovedStatus && (!reason || !reason.trim())) {
       return NextResponse.json(
-        { success: false, error: "Approved invoices cannot be modified." },
+        { success: false, error: "A mandatory reason is required for historical cost corrections on approved invoices." },
         { status: 400 }
       );
     }
@@ -143,6 +145,28 @@ export async function PUT(
           minSellingPrice: Number(item.minSellingPrice),
           amount,
         });
+      }
+
+      // Check cost changes for approved invoice historical correction logging
+      if (isApprovedStatus) {
+        const { CostAdjustment } = await import("@/models/CostAdjustment");
+        for (const newItem of validatedItems) {
+          const oldItem = (invoice.items || []).find(
+            (it: any) => it.product && it.product.toString() === newItem.product.toString()
+          );
+          if (oldItem && oldItem.unitCost !== newItem.unitCost) {
+            await CostAdjustment.create({
+              product: newItem.product,
+              previousCost: oldItem.unitCost,
+              newCost: newItem.unitCost,
+              costType: "HISTORICAL_CORRECTION",
+              reason: reason.trim(),
+              changedBy: auth.user?.userId,
+              userRole: auth.user?.role || "Admin",
+              reference: `Invoice ${invoice.invoiceNumber}`,
+            });
+          }
+        }
       }
 
       invoice.items = validatedItems;

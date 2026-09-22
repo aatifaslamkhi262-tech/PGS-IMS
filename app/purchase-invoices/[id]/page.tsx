@@ -273,13 +273,15 @@ export default function PurchaseInvoiceDetailPage() {
   const isAdmin = userRole === "Admin";
   const isWarehouse = userRole === "Warehouse";
   const isAccountant = userRole === "Accountant";
+  const isOwner = userRole === "Owner";
 
   const isDraft = invoice?.status === "Draft" || invoice?.status === "Rejected";
   const isPending = invoice?.status === "Pending_Approval";
 
-  const canSubmit = isDraft && (isAdmin || isWarehouse);
-  const canDelete = isDraft && (isAdmin || isWarehouse);
-  const canApproveReject = isPending && (isAdmin || isAccountant);
+  const canSubmit = isDraft && (isAdmin || isWarehouse || isOwner);
+  const canDelete = isDraft && (isAdmin || isWarehouse || isOwner);
+  const canApproveReject = isPending && (isAdmin || isAccountant || isOwner);
+  const canEdit = isAdmin || isWarehouse || isAccountant || isOwner;
 
   if (loading) {
     return (
@@ -336,13 +338,13 @@ export default function PurchaseInvoiceDetailPage() {
 
         {/* Mutation Actions */}
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-          {isDraft && (isAdmin || isWarehouse) && (
+          {canEdit && (
             <Link
               href={`/purchase-invoices/${id}/edit`}
               className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 border border-slate-800 bg-slate-900 hover:bg-slate-850 text-indigo-400 hover:text-indigo-300 rounded-lg text-xs font-semibold transition-colors"
             >
               <CornerDownLeft className="w-3.5 h-3.5" />
-              <span>Edit / Revise</span>
+              <span>{isDraft ? "Edit / Revise" : "Edit / Historical Correction"}</span>
             </Link>
           )}
 

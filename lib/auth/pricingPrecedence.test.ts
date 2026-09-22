@@ -259,4 +259,57 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
     expect(effAfterInv4.sellingPrice).toBe(18000); // Latest invoice selling (NOT averaged!)
     expect(effAfterInv4.minSellingPrice).toBe(17000); // Latest invoice min selling (NOT averaged!)
   });
+
+  it("Case I (Moving Baseline Average): Inv 1 (4k) -> Manual Baseline (6k) -> Inv 3 (8k) = 7k -> Inv 4 (10k) = 8k", () => {
+    const productId = "PROD_MOVING_BASE_123";
+
+    const rec1 = {
+      approvedAt: new Date("2026-09-01T10:00:00Z"),
+      items: [{ product: productId, quantityReceived: 1, condition: "New" }],
+      purchaseInvoice: {
+        createdAt: new Date("2026-09-01T10:00:00Z"),
+        items: [{ product: productId, condition: "New", unitCost: 4000 }],
+      },
+    };
+
+    const productBaseline = {
+      costPrice: 6000,
+      costBaselineAmount: 6000,
+      costBaselineQty: 1,
+      costBaselineAt: new Date("2026-09-12T10:00:00Z"),
+      manuallyEditedAt: new Date("2026-09-12T10:00:00Z"),
+    };
+
+    const rec3 = {
+      approvedAt: new Date("2026-09-15T10:00:00Z"),
+      items: [{ product: productId, quantityReceived: 1, condition: "New" }],
+      purchaseInvoice: {
+        createdAt: new Date("2026-09-15T10:00:00Z"),
+        items: [{ product: productId, condition: "New", unitCost: 8000 }],
+      },
+    };
+
+    let pricingAfterInv3 = calculateProductWeightedPricingFromReceivings(
+      productId,
+      [rec1, rec3],
+      productBaseline
+    );
+    expect(pricingAfterInv3.avgCostPrice).toBe(7000); // (1*6k + 1*8k) / 2 = 7,000
+
+    const rec4 = {
+      approvedAt: new Date("2026-09-18T10:00:00Z"),
+      items: [{ product: productId, quantityReceived: 1, condition: "New" }],
+      purchaseInvoice: {
+        createdAt: new Date("2026-09-18T10:00:00Z"),
+        items: [{ product: productId, condition: "New", unitCost: 10000 }],
+      },
+    };
+
+    let pricingAfterInv4 = calculateProductWeightedPricingFromReceivings(
+      productId,
+      [rec1, rec3, rec4],
+      productBaseline
+    );
+    expect(pricingAfterInv4.avgCostPrice).toBe(8000); // (1*6k + 1*8k + 1*10k) / 3 = 8,000
+  });
 });

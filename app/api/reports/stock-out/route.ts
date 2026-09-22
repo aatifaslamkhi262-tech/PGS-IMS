@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
     if (type) {
       query.type = type;
     } else {
-      query.type = { $in: ["TRANSFER", "DAMAGE", "RETURN", "SALE"] };
+      query.type = { $in: ["TRANSFER", "DAMAGE", "RETURN", "ADJUSTMENT"] };
     }
 
     if (product) {
@@ -101,25 +101,45 @@ export async function GET(req: NextRequest) {
 
     const result = movements.map((m) => {
       const tr = m.referenceTransaction ? transferMap[m.referenceTransaction] : null;
+      const isSale =
+        (m.type as string) === "SALE" ||
+        Boolean(
+          m.referenceTransaction &&
+            (m.referenceTransaction.startsWith("INV-") ||
+              m.referenceTransaction.startsWith("SALE-"))
+        );
+
+      const displayType = isSale
+        ? "Customer Sale"
+        : m.type === "TRANSFER" && tr?.type === "Return"
+        ? "Transfer Return"
+        : m.type === "TRANSFER"
+        ? "Stock Transfer"
+        : m.type === "DAMAGE"
+        ? "Damage / Loss"
+        : m.type === "RETURN"
+        ? "Sales Return"
+        : m.type;
+
       return {
         _id: m._id,
         date: m.date,
         reference: m.referenceTransaction || "N/A",
-        type: m.type === "TRANSFER" && tr?.type === "Return" ? "Transfer Return" : m.type === "TRANSFER" ? "Stock Transfer" : m.type,
+        type: displayType,
         sourceLocation: m.sourceLocation,
         sourceName: m.sourceName,
         destinationLocation: m.destinationLocation,
-        destinationName: m.destinationName,
+        destinationName: m.destinationName || (isSale ? "Walk-in Customer" : "N/A"),
         product: m.product,
         quantity: m.quantity,
         condition: m.condition || (m.product as any)?.condition || "New",
         serialNumbers: m.serialNumbers || [],
-        carrierUser: m.carrierUser,
-        carrierName: m.carrierName || tr?.carrierName || "N/A",
-        carrierUsername: m.carrierUsername || tr?.carrierUsername || "N/A",
+        carrierUser: isSale ? null : m.carrierUser,
+        carrierName: isSale ? "—" : m.carrierName || tr?.carrierName || "N/A",
+        carrierUsername: isSale ? "—" : m.carrierUsername || tr?.carrierUsername || "N/A",
         dispatchedBy: m.dispatchedBy || m.performedBy || tr?.dispatchedBy || "N/A",
         performedBy: m.performedBy,
-        reason: tr?.reason || m.notes || "Stock Out Movement",
+        reason: isSale ? "POS Counter Sale" : tr?.reason || m.notes || "Stock Out Movement",
         transferDetails: tr || null,
       };
     });

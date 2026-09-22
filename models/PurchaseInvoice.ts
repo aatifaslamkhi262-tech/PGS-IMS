@@ -36,7 +36,10 @@ export interface IPurchaseInvoiceItem {
 
 export interface IPurchaseInvoice {
   invoiceNumber: string;
-  supplier: Types.ObjectId;
+  receivingType?: "SUPPLIER_PURCHASE" | "CUSTOMER_BUYBACK" | "CUSTOMER_RETURN";
+  supplier?: Types.ObjectId;
+  customerName?: string;
+  customerPhone?: string;
   invoiceDate: Date;
   status: PurchaseInvoiceStatus;
   items: IPurchaseInvoiceItem[];
@@ -131,10 +134,28 @@ const PurchaseInvoiceSchema = new Schema<IPurchaseInvoice>(
       unique: true,
       trim: true,
     },
+    receivingType: {
+      type: String,
+      enum: ["SUPPLIER_PURCHASE", "CUSTOMER_BUYBACK", "CUSTOMER_RETURN"],
+      default: "SUPPLIER_PURCHASE",
+    },
     supplier: {
       type: Schema.Types.ObjectId,
       ref: "Supplier",
-      required: [true, "Supplier reference is required"],
+      required: [
+        function (this: any) {
+          return !this.receivingType || this.receivingType === "SUPPLIER_PURCHASE";
+        },
+        "Supplier reference is required",
+      ],
+    },
+    customerName: {
+      type: String,
+      trim: true,
+    },
+    customerPhone: {
+      type: String,
+      trim: true,
     },
     invoiceDate: {
       type: Date,

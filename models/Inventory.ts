@@ -3,8 +3,10 @@ import mongoose, { Schema, Document, Model, Types } from "mongoose";
 export interface IInventory {
   product: Types.ObjectId;
   location: Types.ObjectId;
-  condition: string; // "New" | "Used"
+  condition: string; // "New" | "Used" | "Refurbished" | "Defective"
   quantity: number;
+  averageCost: number;
+  totalCostValue: number;
   serialTracking: boolean;
   status: "In Stock" | "Out of Stock";
   createdAt?: Date;
@@ -34,6 +36,16 @@ const InventorySchema: Schema = new Schema(
       required: [true, "Quantity is required"],
       min: [0, "Quantity cannot be negative"],
       default: 0,
+    },
+    averageCost: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalCostValue: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     serialTracking: {
       type: Boolean,

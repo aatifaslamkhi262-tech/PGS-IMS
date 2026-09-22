@@ -12,6 +12,17 @@ import {
   CheckSquare,
   Tag,
   ShoppingBag,
+  ShoppingCart,
+  Clock,
+  Wallet,
+  Calendar,
+  ArrowRightLeft,
+  Globe,
+  ChevronDown,
+  LayoutDashboard,
+  BarChart3,
+  Users,
+  Handshake,
 } from "lucide-react";
 
 interface NavbarProps {
@@ -22,6 +33,7 @@ export const Navbar: React.FC<NavbarProps> = () => {
   const pathname = usePathname();
   const [user, setUser] = useState<{ username: string; role: string } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
 
   // Fetch session on mount
   useEffect(() => {
@@ -55,7 +67,6 @@ export const Navbar: React.FC<NavbarProps> = () => {
     }
   };
 
-  // Helper checks for RBAC
   const isAdmin = user?.role === "Admin";
   const isWarehouse = user?.role === "Warehouse";
   const isAccountant = user?.role === "Accountant";
@@ -79,142 +90,305 @@ export const Navbar: React.FC<NavbarProps> = () => {
     );
   }
 
+  // Active checks for categories
+  const isSalesActive =
+    pathname === "/pos" ||
+    pathname === "/warehouse-queue" ||
+    pathname.startsWith("/sales/");
+
+  const isInventoryActive =
+    pathname === "/" ||
+    pathname === "/price-lookup" ||
+    pathname.startsWith("/inventory") ||
+    pathname.startsWith("/transfers");
+
+  const isPurchasesActive =
+    pathname.startsWith("/purchase-invoices") ||
+    pathname.startsWith("/suppliers") ||
+    pathname.startsWith("/approvals");
+
+  const isReportsActive = pathname.startsWith("/reports");
+
   return (
     <>
       {/* Top Header Navbar */}
-      <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800">
+      <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800 shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16 gap-3">
-            {/* Logo & App Name */}
+          <div className="flex items-center justify-between h-16 gap-4">
+            
+            {/* Logo */}
             <Link
               href={user && (isAdmin || isWarehouse) ? "/" : "/price-lookup"}
               className="flex items-center gap-2.5 shrink-0"
             >
-              <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold">
+              <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold shadow-md shadow-indigo-600/20">
                 <ShoppingBag className="w-5 h-5" />
               </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-base text-slate-100 tracking-tight">
-                    PGS <span className="text-indigo-400">IMS</span>
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold text-base text-slate-100 tracking-tight">
+                  PGS <span className="text-indigo-400">IMS</span>
+                </span>
+                {user && (
+                  <span className="px-2 py-0.5 text-[10px] font-bold bg-slate-800 text-indigo-400 border border-slate-700/80 rounded-md uppercase">
+                    {user.role}
                   </span>
-                  {user && (
-                    <span className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-800 text-indigo-400 border border-slate-700 rounded-sm uppercase">
-                      {user.role}
-                    </span>
-                  )}
-                </div>
-                <p className="hidden sm:block text-[10px] text-slate-400 font-medium">
-                  Inventory & POS Core
-                </p>
+                )}
               </div>
             </Link>
 
-            {/* Desktop Navigation Links */}
-            <nav className="hidden lg:flex items-center gap-1.5">
-              {user && (isAdmin || isWarehouse) && (
-                <Link
-                  href="/"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    pathname === "/"
-                      ? "bg-slate-800 text-indigo-400 border border-slate-700"
-                      : "text-slate-300 hover:bg-slate-800"
-                  }`}
-                >
-                  <Package className="w-3.5 h-3.5" />
-                  <span>Products</span>
-                </Link>
-              )}
+            {/* Clean Dropdown Navigation Bar */}
+            {user && (
+              <nav className="hidden lg:flex items-center gap-2">
 
-              {user && (
-                <Link
-                  href="/price-lookup"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    pathname === "/price-lookup"
-                      ? "bg-slate-800 text-indigo-400 border border-slate-700"
-                      : "text-slate-300 hover:bg-slate-800"
-                  }`}
-                >
-                  <Tag className="w-3.5 h-3.5" />
-                  <span>Price Lookup</span>
-                </Link>
-              )}
+                {/* Dashboard Direct Link */}
+                {(isAdmin || isWarehouse) && (
+                  <Link
+                    href="/"
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      pathname === "/"
+                        ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/30"
+                        : "text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+                    }`}
+                  >
+                    <LayoutDashboard className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Dashboard</span>
+                  </Link>
+                )}
 
-              {user && (isAdmin || isWarehouse || isAccountant) && (
-                <Link
-                  href="/suppliers"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    pathname.startsWith("/suppliers")
-                      ? "bg-slate-800 text-indigo-400 border border-slate-700"
-                      : "text-slate-300 hover:bg-slate-800"
-                  }`}
+                {/* Sales Dropdown */}
+                <div
+                  className="relative group"
+                  onMouseEnter={() => setActiveDropdown("sales")}
+                  onMouseLeave={() => setActiveDropdown(null)}
                 >
-                  <Truck className="w-3.5 h-3.5" />
-                  <span>Suppliers</span>
-                </Link>
-              )}
+                  <button
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      isSalesActive
+                        ? "bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 font-bold"
+                        : "text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+                    }`}
+                  >
+                    <ShoppingCart className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Sales</span>
+                    <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform" />
+                  </button>
 
-              {user && (isAdmin || isWarehouse || isAccountant) && (
-                <Link
-                  href="/purchase-invoices"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    pathname.startsWith("/purchase-invoices")
-                      ? "bg-slate-800 text-indigo-400 border border-slate-700"
-                      : "text-slate-300 hover:bg-slate-800"
-                  }`}
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>Purchases</span>
-                </Link>
-              )}
+                  <div className="absolute top-full left-0 hidden group-hover:block w-52 pt-1 z-50">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 space-y-0.5 backdrop-blur-md">
+                      <Link
+                        href="/sales?mode=POS"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-emerald-400 font-bold transition"
+                      >
+                        <ShoppingCart className="w-4 h-4 text-emerald-400" />
+                        <span>New POS Terminal</span>
+                      </Link>
 
-              {user && (isAdmin || isAccountant) && (
-                <Link
-                  href="/approvals"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    pathname.startsWith("/approvals")
-                      ? "bg-slate-800 text-indigo-400 border border-slate-700"
-                      : "text-slate-300 hover:bg-slate-800"
-                  }`}
-                >
-                  <CheckSquare className="w-3.5 h-3.5" />
-                  <span>Approvals</span>
-                </Link>
-              )}
+                      {(isAdmin || isWarehouse) && (
+                        <Link
+                          href="/sales?mode=QUEUE"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-amber-400 transition"
+                        >
+                          <Clock className="w-4 h-4 text-amber-400" />
+                          <span>Warehouse Queue</span>
+                        </Link>
+                      )}
 
-              {user && (
-                <Link
-                  href="/inventory"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    pathname.startsWith("/inventory")
-                      ? "bg-slate-800 text-indigo-400 border border-slate-700"
-                      : "text-slate-300 hover:bg-slate-800"
-                  }`}
-                >
-                  <Layers className="w-3.5 h-3.5" />
-                  <span>Inventory</span>
-                </Link>
-              )}
+                      <Link
+                        href="/sales?mode=ADVANCE"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-purple-400 transition"
+                      >
+                        <Calendar className="w-4 h-4 text-purple-400" />
+                        <span>Advance Bookings</span>
+                      </Link>
 
-              {user && (
-                <Link
-                  href="/transfers"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    pathname.startsWith("/transfers")
-                      ? "bg-slate-800 text-indigo-400 border border-slate-700"
-                      : "text-slate-300 hover:bg-slate-800"
-                  }`}
+                      <Link
+                        href="/sales?mode=RETURNS"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-blue-400 transition"
+                      >
+                        <ArrowRightLeft className="w-4 h-4 text-blue-400" />
+                        <span>Returns & Swaps</span>
+                      </Link>
+
+                      <Link
+                        href="/sales?mode=TRADEIN"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-emerald-400 transition"
+                      >
+                        <Handshake className="w-4 h-4 text-emerald-400" />
+                        <span>Direct Trade-In</span>
+                      </Link>
+
+                      <Link
+                        href="/sales?mode=ONLINE"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-cyan-400 transition"
+                      >
+                        <Globe className="w-4 h-4 text-cyan-400" />
+                        <span>Online Orders</span>
+                      </Link>
+
+                      <Link
+                        href="/customers"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-indigo-400 transition"
+                      >
+                        <Users className="w-4 h-4 text-indigo-400" />
+                        <span>Customers & Ledger</span>
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Inventory Dropdown */}
+                <div
+                  className="relative group"
+                  onMouseEnter={() => setActiveDropdown("inventory")}
+                  onMouseLeave={() => setActiveDropdown(null)}
                 >
-                  <Truck className="w-3.5 h-3.5" />
-                  <span>Transfers</span>
-                </Link>
-              )}
-            </nav>
+                  <button
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      isInventoryActive && pathname !== "/"
+                        ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/30"
+                        : "text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Inventory</span>
+                    <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform" />
+                  </button>
+
+                  <div className="absolute top-full left-0 hidden group-hover:block w-48 pt-1 z-50">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 space-y-0.5 backdrop-blur-md">
+                      <Link
+                        href="/inventory"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-indigo-400 transition"
+                      >
+                        <Layers className="w-4 h-4 text-indigo-400" />
+                        <span>Stock Inventory</span>
+                      </Link>
+
+                      <Link
+                        href="/transfers"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-indigo-400 transition"
+                      >
+                        <Truck className="w-4 h-4 text-indigo-400" />
+                        <span>Stock Transfers</span>
+                      </Link>
+
+                      <Link
+                        href="/price-lookup"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-indigo-400 transition"
+                      >
+                        <Tag className="w-4 h-4 text-indigo-400" />
+                        <span>Price Lookup</span>
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Purchases Dropdown */}
+                {(isAdmin || isWarehouse || isAccountant) && (
+                  <div
+                    className="relative group"
+                    onMouseEnter={() => setActiveDropdown("purchases")}
+                    onMouseLeave={() => setActiveDropdown(null)}
+                  >
+                    <button
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                        isPurchasesActive
+                          ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/30"
+                          : "text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+                      }`}
+                    >
+                      <FileText className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Purchases</span>
+                      <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform" />
+                    </button>
+
+                    <div className="absolute top-full left-0 hidden group-hover:block w-48 pt-1 z-50">
+                      <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 space-y-0.5 backdrop-blur-md">
+                        <Link
+                          href="/purchase-invoices"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-indigo-400 transition"
+                        >
+                          <FileText className="w-4 h-4 text-indigo-400" />
+                          <span>Purchase Invoices</span>
+                        </Link>
+
+                        <Link
+                          href="/suppliers"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-indigo-400 transition"
+                        >
+                          <Truck className="w-4 h-4 text-indigo-400" />
+                          <span>Suppliers</span>
+                        </Link>
+
+                        {(isAdmin || isAccountant) && (
+                          <Link
+                            href="/approvals"
+                            className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-indigo-400 transition"
+                          >
+                            <CheckSquare className="w-4 h-4 text-indigo-400" />
+                            <span>Approvals</span>
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Reports Dropdown */}
+                {(isAdmin || isWarehouse || isAccountant) && (
+                  <div
+                    className="relative group"
+                    onMouseEnter={() => setActiveDropdown("reports")}
+                    onMouseLeave={() => setActiveDropdown(null)}
+                  >
+                    <button
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                        isReportsActive
+                          ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/30"
+                          : "text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+                      }`}
+                    >
+                      <BarChart3 className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Reports</span>
+                      <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform" />
+                    </button>
+
+                    <div className="absolute top-full left-0 hidden group-hover:block w-52 pt-1 z-50">
+                      <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 space-y-0.5 backdrop-blur-md">
+                        <Link
+                          href="/reports/daily-closing"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-emerald-400 transition"
+                        >
+                          <FileText className="w-4 h-4 text-emerald-400" />
+                          <span>Daily Closing Report</span>
+                        </Link>
+
+                        <Link
+                          href="/cash-sessions"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-indigo-400 transition"
+                        >
+                          <Wallet className="w-4 h-4 text-indigo-400" />
+                          <span>Cash Register Shift</span>
+                        </Link>
+
+                        <Link
+                          href="/reports/stock-out"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-amber-400 transition"
+                        >
+                          <BarChart3 className="w-4 h-4 text-amber-400" />
+                          <span>Stock-Out Report</span>
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </nav>
+            )}
 
             {/* User Info & Actions */}
             <div className="flex items-center gap-2 shrink-0">
               {user ? (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
                   <div className="hidden lg:block text-right">
                     <p className="text-xs font-bold text-slate-200">{user.username}</p>
                     <p className="text-[10px] text-indigo-400 font-semibold uppercase">{user.role}</p>
@@ -237,7 +411,6 @@ export const Navbar: React.FC<NavbarProps> = () => {
                   </Link>
                 )
               )}
-
             </div>
           </div>
         </div>
@@ -246,27 +419,27 @@ export const Navbar: React.FC<NavbarProps> = () => {
       {/* Mobile & Tablet Bottom Navigation Bar */}
       {user && (
         <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900 border-t border-slate-800 flex justify-around items-center h-14 px-1 shadow-lg">
-          {isAdmin || isWarehouse ? (
-            <Link
-              href="/"
-              className={`flex flex-col items-center justify-center w-full h-full text-[10px] font-semibold transition-colors ${
-                pathname === "/" ? "text-indigo-400" : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              <Package className="w-4 h-4 mb-0.5" />
-              <span>Products</span>
-            </Link>
-          ) : null}
-
           <Link
-            href="/price-lookup"
-            className={`flex flex-col items-center justify-center w-full h-full text-[10px] font-semibold transition-colors ${
-              pathname === "/price-lookup" ? "text-indigo-400" : "text-slate-400 hover:text-slate-200"
+            href="/pos"
+            className={`flex flex-col items-center justify-center w-full h-full text-[10px] font-bold transition-colors ${
+              pathname === "/pos" ? "text-emerald-400" : "text-emerald-500/80 hover:text-emerald-300"
             }`}
           >
-            <Tag className="w-4 h-4 mb-0.5" />
-            <span>Lookup</span>
+            <ShoppingCart className="w-4 h-4 mb-0.5" />
+            <span>POS</span>
           </Link>
+
+          {(isAdmin || isWarehouse) && (
+            <Link
+              href="/warehouse-queue"
+              className={`flex flex-col items-center justify-center w-full h-full text-[10px] font-semibold transition-colors ${
+                pathname === "/warehouse-queue" ? "text-amber-400" : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <Clock className="w-4 h-4 mb-0.5" />
+              <span>Queue</span>
+            </Link>
+          )}
 
           <Link
             href="/inventory"
@@ -290,13 +463,13 @@ export const Navbar: React.FC<NavbarProps> = () => {
 
           {(isAdmin || isWarehouse || isAccountant) && (
             <Link
-              href="/purchase-invoices"
+              href="/reports/daily-closing"
               className={`flex flex-col items-center justify-center w-full h-full text-[10px] font-semibold transition-colors ${
-                pathname.startsWith("/purchase-invoices") ? "text-indigo-400" : "text-slate-400 hover:text-slate-200"
+                pathname.startsWith("/reports/daily-closing") ? "text-emerald-400" : "text-slate-400 hover:text-slate-200"
               }`}
             >
               <FileText className="w-4 h-4 mb-0.5" />
-              <span>Purchases</span>
+              <span>Closing</span>
             </Link>
           )}
         </nav>

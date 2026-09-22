@@ -207,9 +207,13 @@ export default function StockOutReportPage() {
                       <td className="py-3 px-4">
                         <span
                           className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
-                            it.type === "Transfer Return"
+                            it.type === "Customer Sale"
+                              ? "bg-emerald-950 text-emerald-300 border-emerald-800"
+                              : it.type === "Transfer Return"
                               ? "bg-amber-950 text-amber-300 border-amber-800"
-                              : "bg-purple-950 text-purple-300 border-purple-800"
+                              : it.type === "Damage / Loss"
+                              ? "bg-red-950 text-red-300 border-red-800"
+                              : "bg-indigo-950 text-indigo-300 border-indigo-800"
                           }`}
                         >
                           {it.type}

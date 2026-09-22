@@ -77,6 +77,10 @@ export default function ProductListPage() {
   // Filters & Search
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [minPriceInput, setMinPriceInput] = useState("");
+  const [maxPriceInput, setMaxPriceInput] = useState("");
+  const [debouncedMinPrice, setDebouncedMinPrice] = useState("");
+  const [debouncedMaxPrice, setDebouncedMaxPrice] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [selectedGroup, setSelectedGroup] = useState("");
   const [selectedCondition, setSelectedCondition] = useState("");
@@ -113,6 +117,8 @@ export default function ProductListPage() {
     setCurrentPage(1);
   }, [
     debouncedSearch,
+    debouncedMinPrice,
+    debouncedMaxPrice,
     selectedCategory,
     selectedGroup,
     selectedCondition,
@@ -142,13 +148,15 @@ export default function ProductListPage() {
     checkAuth();
   }, [router]);
 
-  // Requirement 7: Debounce search input (300ms)
+  // Debounce search & price inputs (300ms)
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedSearch(searchInput);
+      setDebouncedMinPrice(minPriceInput);
+      setDebouncedMaxPrice(maxPriceInput);
     }, 300);
     return () => clearTimeout(handler);
-  }, [searchInput]);
+  }, [searchInput, minPriceInput, maxPriceInput]);
 
   // Fetch Metadata (Categories, Groups)
   useEffect(() => {
@@ -189,6 +197,8 @@ export default function ProductListPage() {
     try {
       const params = new URLSearchParams();
       if (debouncedSearch) params.append("search", debouncedSearch);
+      if (debouncedMinPrice) params.append("minPrice", debouncedMinPrice);
+      if (debouncedMaxPrice) params.append("maxPrice", debouncedMaxPrice);
       if (selectedCategory) params.append("category", selectedCategory);
       if (selectedGroup) params.append("productGroup", selectedGroup);
       if (selectedCondition) params.append("condition", selectedCondition);
@@ -226,6 +236,8 @@ export default function ProductListPage() {
     }
   }, [
     debouncedSearch,
+    debouncedMinPrice,
+    debouncedMaxPrice,
     selectedCategory,
     selectedGroup,
     selectedCondition,
@@ -366,6 +378,9 @@ export default function ProductListPage() {
         </div>
       </div>
 
+      {/* Live Warehouse Billing Queue Widget */}
+      <DashboardQueueWidget />
+
       {/* Search & Filter Bar */}
       <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-4">
         {/* Prominent Search Input with Camera Scanner Button */}
@@ -402,7 +417,7 @@ export default function ProductListPage() {
         </div>
 
         {/* Filter Dropdowns & Sorting */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {/* Category Filter */}
           <div>
             <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
@@ -471,6 +486,34 @@ export default function ProductListPage() {
               <option value="active">Active Only</option>
               <option value="inactive">Inactive Only</option>
             </select>
+          </div>
+
+          {/* Min Price Filter */}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+              Min Price (Rs)
+            </label>
+            <input
+              type="number"
+              value={minPriceInput}
+              onChange={(e) => setMinPriceInput(e.target.value)}
+              placeholder="e.g. 5000"
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs focus:outline-none focus:border-indigo-500 placeholder-slate-600"
+            />
+          </div>
+
+          {/* Max Price Filter */}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+              Max Price (Rs)
+            </label>
+            <input
+              type="number"
+              value={maxPriceInput}
+              onChange={(e) => setMaxPriceInput(e.target.value)}
+              placeholder="e.g. 15000"
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs focus:outline-none focus:border-indigo-500 placeholder-slate-600"
+            />
           </div>
         </div>
 
@@ -896,3 +939,89 @@ export default function ProductListPage() {
     </div>
   );
 }
+
+function DashboardQueueWidget() {
+  const [queueSales, setQueueSales] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchQueue = async () => {
+    try {
+      const res = await fetch("/api/sales/queue");
+      const data = await res.json();
+      if (data.success) {
+        setQueueSales(data.data || []);
+      }
+    } catch {
+      // Silent poll error
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchQueue();
+    const interval = setInterval(fetchQueue, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (queueSales.length === 0) return null;
+
+  return (
+    <div className="bg-amber-950/30 border border-amber-500/30 rounded-2xl p-4 space-y-3 shadow-xl">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+          <h3 className="text-xs font-bold text-amber-300 uppercase tracking-wider">
+            Live Warehouse Billing Queue ({queueSales.length} Pending Salesman Checkouts)
+          </h3>
+        </div>
+        <Link
+          href="/warehouse-queue"
+          className="text-xs font-bold text-amber-400 hover:text-amber-200 transition flex items-center gap-1"
+        >
+          <span>Go to Warehouse Queue ➔</span>
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {queueSales.slice(0, 3).map((sale) => {
+          const ageMins = Math.floor((Date.now() - new Date(sale.createdAt).getTime()) / 60000);
+          return (
+            <div
+              key={sale._id}
+              className="bg-slate-900 border border-slate-800 p-3 rounded-xl flex flex-col justify-between space-y-2 text-xs"
+            >
+              <div className="flex justify-between items-center font-mono">
+                <span className="font-bold text-indigo-400">{sale.saleNumber}</span>
+                <span className="text-[10px] text-amber-400 font-sans font-bold bg-amber-500/10 px-2 py-0.5 rounded">
+                  {ageMins <= 0 ? "Just now" : `${ageMins}m waiting`}
+                </span>
+              </div>
+
+              <div className="space-y-0.5 text-[11px] text-slate-300">
+                <div>Salesman: <b>{sale.salesman?.name || "Direct Counter"}</b></div>
+                <div className="text-slate-400">Customer: {sale.customer?.name || "Walk-in"}</div>
+                <div className="text-slate-500 font-mono">
+                  Location: {sale.location?.name} • {sale.items?.reduce((s: number, i: any) => s + i.quantity, 0)} items
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center pt-1 border-t border-slate-800">
+                <span className="font-mono font-bold text-emerald-400">
+                  Rs. {sale.totalAmount?.toLocaleString()}
+                </span>
+                <Link
+                  href="/warehouse-queue"
+                  className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded-lg transition"
+                >
+                  Process & Bill
+                </Link>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+

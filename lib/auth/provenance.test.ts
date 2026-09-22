@@ -71,6 +71,6 @@ describe("Supplier Provenance Tracking Schema Relations", () => {
 
     const error = invoice.validateSync();
     expect(error).toBeUndefined();
-    expect(invoice.supplier.toString()).toBe(supplierId.toString());
+    expect(invoice.supplier?.toString()).toBe(supplierId.toString());
   });
 });

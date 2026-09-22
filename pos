@@ -1,0 +1,160 @@
+# PGS-IMS — Comprehensive Real-World POS, Returns, Exchange, Customer Purchase & Daily Reporting Architecture Plan (Updated with User Directives)
+
+## Architectural Alignment & User Meeting Decisions
+
+Following user review and meeting decisions, the system design is updated as follows:
+
+1. **Trade-In Module Replaced with Daily Customer Purchase**:
+   - The standalone `TradeIn` module/schema as a separate entity is **removed/integrated**.
+   - Customer buybacks / item acquisitions are handled directly as **Daily Customer Purchases** (Stock Intake via the Purchase Receiving/Invoice workflow).
+   - This keeps the system clean and unifies all stock intakes into standard inventory purchases.
+2. **Condition-Based Return Valuation (Manual Override)**:
+   - When a returned item condition differs from original sale (e.g., sold as `NEW`, returned as `USED` or `DEFECTIVE`), the refund value is **NOT** automatically the original sell price.
+   - Staff (Warehouse / Accountant / Admin) manually inputs the accepted return valuation for the incoming condition.
+3. **Direct Counter Sale Attribution**:
+   - Sales without a linked salesman are attributed to the **current logged-in user account** (Cashier / Counter Staff).
+4. **Unified Returns & Exchange Workspace**:
+   - Single page workspace (`/sales/returns`) focusing on:
+     - `[ Return ]` (Against original PGS sale invoice with condition-based valuation override)
+     - `[ Exchange / Swap ]` (Against original PGS sale invoice: multiple IN items vs multiple OUT replacement items)
+   - Customer buybacks (Pure IN) redirect to / use the **Daily Customer Purchase** intake form.
+5. **Store Credit Removal**: Store credit is completely eliminated across all models, engines, APIs, and UI dropdowns.
+6. **Moving Average Costing Engine**: Moving average cost applies to **both serialized and non-serialized items** per costing pool (`Product + Location + Condition`).
+7. **15 Daily Report Stat Cards**: 15 metric cards on `/reports/daily-closing` with zero double-counting of physical cash drawer entries.
+
+---
+
+## User Approved & Meeting Verified Checklist
+
+- ✅ **Sales Attribution**: Salesman for reporting only (no commission logic). Direct counter sales attributed to current logged-in user.
+- ✅ **Returns**: Always against original invoice (invoice remains unedited, separate return record created).
+- ✅ **Condition Valuation**: Return refund value for altered item condition (NEW → USED) manually set by staff.
+- ✅ **Exchange**: Multiple old items IN + multiple new items OUT supported. Positive difference = Customer Pays; Negative difference = Shop Pays; Zero difference = No Settlement.
+- ✅ **Trade-In / Buyback**: Standalone Trade-In module removed. Customer buyback treated as **Daily Customer Purchase** (Inventory Purchase Intake).
+- ✅ **Costing**: Moving Average Cost per pool (`Product + Location + Condition`) for serialized & non-serialized stock. Quick-add unknown products with `Name + Cost + Category`.
+- ✅ **Customer Khata**: Primary lookup by phone number; customer ID backend key; multi-invoice payment allocation supported.
+- ✅ **Payment / Refund**: Allowed methods (Cash, Card, Bank, Online). Store Credit removed everywhere. Physical cash drawer tracks cash only.
+- ✅ **Daily Report**: 15 required stat cards.
+- ✅ **Data Safety & Integrity**: Cancellation triggers atomic rollback. Completed records never hard-deleted (audit reversal entries used).
+
+---
+
+## Proposed Changes
+
+---
+
+### Core Models & Database Schemas
+
+#### [MODIFY] [Customer.ts](file:///d:/PGS-IMS-main/models/Customer.ts)
+- Remove `storeCredit` field.
+- Index `phone` uniquely for active non-deleted customers.
+
+#### [MODIFY] [CustomerLedger.ts](file:///d:/PGS-IMS-main/models/CustomerLedger.ts)
+- Remove `STORE_CREDIT_ISSUED` and `STORE_CREDIT_REDEEMED` types.
+- Maintain ledger types: `INVOICE`, `PAYMENT`, `RETURN_CREDIT`, `ADVANCE_DEPOSIT`, `DEBT_ADJUSTMENT`.
+
+#### [MODIFY] [Payment.ts](file:///d:/PGS-IMS-main/models/Payment.ts)
+- Remove `STORE_CREDIT` from `PaymentMethod` enum.
+- Add multi-invoice payment allocation support (`allocations: Array<{ invoice: ObjectId; amount: number }>`).
+
+#### [MODIFY] [Inventory.ts](file:///d:/PGS-IMS-main/models/Inventory.ts)
+- Add `averageCost: number` and `totalCostValue: number` to support moving average costing per pool (`Product + Location + Condition`).
+
+#### [DELETE / INTEGRATE] [TradeIn.ts](file:///d:/PGS-IMS-main/models/TradeIn.ts)
+- Remove standalone `TradeIn` model.
+- Customer buybacks / acquisitions are recorded via `PurchaseInvoice` / `PurchaseReceiving` with `supplierType: "CUSTOMER"` or direct customer stock intake.
+
+---
+
+### Business Logic Engines
+
+#### [NEW] [averageCostEngine.ts](file:///d:/PGS-IMS-main/lib/averageCostEngine.ts)
+- Centralized moving average cost calculation:
+  `newAvgCost = (existingQty * existingAvg + intakeQty * intakeUnitCost) / (existingQty + intakeQty)`
+- Replaces FIFO layer logic.
+
+#### [MODIFY] [customerLedgerEngine.ts](file:///d:/PGS-IMS-main/lib/customerLedgerEngine.ts)
+- Remove store credit handling.
+- Support multi-invoice allocation entries in customer ledger.
+
+#### [MODIFY] [salesEngine.ts](file:///d:/PGS-IMS-main/lib/salesEngine.ts)
+- Update sale creation to attribute direct counter sales to current logged-in user if salesman not provided.
+- Sale completion uses pool `averageCost` for COGS calculation.
+
+---
+
+### API Endpoints
+
+#### [MODIFY] [returns route.ts](file:///d:/PGS-IMS-main/app/api/sales/returns/route.ts)
+- Backend handler for `RETURN` and `EXCHANGE` against historical invoices.
+- Supports manual return value override per item if condition is degraded (NEW → USED/DEFECTIVE).
+- Enforces multi-item processing (`returnedItems[]`, `replacementItems[]`).
+- Calculates net difference:
+  - `difference > 0`: Customer Pays (Cash, Card, Bank, Online, Split)
+  - `difference < 0`: Shop Pays / Refund (Cash, Card, Bank, Online, Split)
+  - `difference === 0`: No Settlement
+- Executed within MongoDB transaction session with idempotency locking.
+
+#### [NEW] [customer-purchases route.ts](file:///d:/PGS-IMS-main/app/api/purchases/customer-buyback/route.ts)
+- Replaces direct trade-in endpoint.
+- Records customer inventory acquisition as a Daily Customer Purchase (stock intake into inventory + ledger/cash payment record).
+
+#### [NEW] [quick-create route.ts](file:///d:/PGS-IMS-main/app/api/products/quick-create/route.ts)
+- Inline product creation for unknown items with minimal fields (`Name`, `Cost`, `Category = Game`).
+
+#### [MODIFY] [daily closing route.ts](file:///d:/PGS-IMS-main/app/api/reports/daily-closing/route.ts)
+- Computes aggregations for all 15 required stat cards.
+
+---
+
+### User Interface & Workspaces
+
+#### [MODIFY] [Returns & Exchange Workspace](file:///d:/PGS-IMS-main/app/sales/returns/page.tsx)
+- Streamlined interface featuring:
+  - `[ Return ]` Mode: Search past invoice, select items, set condition & override accepted return valuation if needed.
+  - `[ Exchange / Swap ]` Mode: Search past invoice, select returned items + replacement items, automatically calculate settlement difference.
+  - Direct link/modal for `[ Customer Purchase / Buyback ]` powered by the Customer Purchase API.
+
+#### [MODIFY] [Customer Khata Page](file:///d:/PGS-IMS-main/app/customers/page.tsx)
+- Search by phone/customerId.
+- Displays customer outstanding, advances, invoice history, and multi-invoice allocation drawer.
+
+#### [MODIFY] [Daily Closing Report Page](file:///d:/PGS-IMS-main/app/reports/daily-closing/page.tsx)
+- 15 stat cards:
+  1. Total Sales
+  2. Cash Received
+  3. Card
+  4. Bank / Online
+  5. Customer Settlement Received
+  6. Stock-In Acquisition Value
+  7. Stock-Out Value
+  8. COGS
+  9. Cash Refunds
+  10. Customer Settlement Paid
+  11. Gross Profit
+  12. Expenses
+  13. Net Profit
+  14. Outstanding
+  15. Customer Advances
+
+---
+
+## Verification Plan
+
+### Automated Test Suite (`lib/finalImplementationRules.test.ts`)
+Run `npx vitest run lib/finalImplementationRules.test.ts` to verify:
+1. Direct counter sale attributed to current user.
+2. Normal return with manual condition valuation override (NEW → USED).
+3. Exchange with positive/negative/zero settlement calculation.
+4. Daily customer purchase (buyback) stock intake into inventory.
+5. Average cost calculation for serialized and non-serialized products.
+6. Multi-invoice payment allocation.
+7. Split payments & cash drawer accuracy.
+8. Complete removal of Store Credit.
+9. Atomic rollback on cancellation & audit integrity on completed records.
+10. All 15 Daily Closing report stat card calculations.
+
+### Manual UI Verification
+- Verify Returns & Exchange workflow.
+- Verify Customer Buyback intake via Daily Customer Purchase.
+- Verify Customer Khata page and Daily Closing report metrics.

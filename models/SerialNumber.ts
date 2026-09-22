@@ -1,6 +1,14 @@
 import mongoose, { Schema, Document, Model, Types } from "mongoose";
 
-export type SerialStatus = "Available" | "Sold" | "Returned" | "Damaged" | "Claim" | "Transferred";
+export type SerialStatus =
+  | "Available"
+  | "Reserved"
+  | "Sold"
+  | "Returned"
+  | "In_Trade_In"
+  | "Damaged"
+  | "Claim"
+  | "Transferred";
 
 export interface ISerialNumber {
   _id?: Types.ObjectId;
@@ -35,7 +43,7 @@ const SerialNumberSchema: Schema = new Schema(
     },
     status: {
       type: String,
-      enum: ["Available", "Sold", "Returned", "Damaged", "Claim", "Transferred"],
+      enum: ["Available", "Reserved", "Sold", "Returned", "In_Trade_In", "Damaged", "Claim", "Transferred"],
       default: "Available",
       index: true,
     },

@@ -48,6 +48,8 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
 
+    const minPrice = searchParams.get("minPrice");
+    const maxPrice = searchParams.get("maxPrice");
     const search = searchParams.get("search") || "";
     const category = searchParams.get("category") || "";
     const productGroup = searchParams.get("productGroup") || "";
@@ -60,7 +62,7 @@ export async function GET(req: NextRequest) {
 
     const query: any = { isDeleted: false };
 
-    // Search filter (Name, SKU, Barcode, Model, ModelNumber, Brand, Color)
+    // Streamlined Search filter (Name, SKU, Barcode - High Performance Indexed)
     if (search.trim()) {
       const escapeRegex = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const trimmedSearch = search.trim();
@@ -68,16 +70,23 @@ export async function GET(req: NextRequest) {
       query.$or = [
         { name: searchRegex },
         { sku: searchRegex },
-        { barcode: trimmedSearch }, // Exact match for barcode
+        { barcode: trimmedSearch },
         { barcode: searchRegex },
-        { model: searchRegex },
-        { modelNumber: searchRegex },
-        { brand: searchRegex },
-        { color: searchRegex },
       ];
     }
 
-    // Filters
+    // Price Range Filter
+    if (minPrice || maxPrice) {
+      query.sellingPrice = {};
+      if (minPrice && !isNaN(Number(minPrice))) {
+        query.sellingPrice.$gte = Number(minPrice);
+      }
+      if (maxPrice && !isNaN(Number(maxPrice))) {
+        query.sellingPrice.$lte = Number(maxPrice);
+      }
+    }
+
+    // Category / Group / Condition / Status Filters
     if (category) query.category = category;
     if (productGroup) query.productGroup = productGroup;
     if (condition) {

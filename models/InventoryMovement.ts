@@ -1,17 +1,34 @@
 import mongoose, { Schema, Document, Model, Types } from "mongoose";
 
-export type MovementType = "PURCHASE_RECEIVING" | "OPENING_STOCK" | "TRANSFER" | "RETURN" | "DAMAGE" | "CLAIM" | "ADJUSTMENT";
+export type MovementType =
+  | "PURCHASE_RECEIVING"
+  | "OPENING_STOCK"
+  | "TRANSFER"
+  | "RETURN"
+  | "DAMAGE"
+  | "CLAIM"
+  | "ADJUSTMENT"
+  | "STOCK_IN"
+  | "SALE_OUT"
+  | "RETURN_IN";
 
 export interface IInventoryMovement {
   product: Types.ObjectId;
+  productName?: string;
+  sku?: string;
   quantity: number;
+  unitCost?: number;
+  totalCost?: number;
   serialNumbers?: string[];
   sourceLocation?: Types.ObjectId; // Location ID
   sourceName: string; // e.g. "Supplier" or Location Name
   destinationLocation?: Types.ObjectId; // Location ID
   destinationName: string; // e.g. Location Name
   type: MovementType;
+  referenceType?: string;
   referenceTransaction?: string; // e.g. invoiceNumber or receivingNumber
+  referenceId?: string;
+  reason?: string;
   beforeQuantity: number;
   afterQuantity: number;
   performedBy: string; // username of operator
@@ -20,7 +37,7 @@ export interface IInventoryMovement {
   carrierName?: string;
   carrierUsername?: string;
   dispatchedBy?: string;
-  condition?: string; // "New" | "Used"
+  condition?: string; // "New" | "Used" | "Refurbished" | "Defective"
   linkedTransferNumber?: string;
   date: Date;
   notes?: string;
@@ -38,11 +55,15 @@ const InventoryMovementSchema: Schema = new Schema(
       required: [true, "Product reference is required"],
       index: true,
     },
+    productName: { type: String },
+    sku: { type: String },
     quantity: {
       type: Number,
       required: [true, "Quantity is required"],
       min: [0, "Quantity cannot be negative"],
     },
+    unitCost: { type: Number, min: 0 },
+    totalCost: { type: Number, min: 0 },
     serialNumbers: {
       type: [String],
       default: [],
@@ -65,15 +86,29 @@ const InventoryMovementSchema: Schema = new Schema(
     },
     type: {
       type: String,
-      enum: ["PURCHASE_RECEIVING", "OPENING_STOCK", "TRANSFER", "RETURN", "DAMAGE", "CLAIM", "ADJUSTMENT"],
+      enum: [
+        "PURCHASE_RECEIVING",
+        "OPENING_STOCK",
+        "TRANSFER",
+        "RETURN",
+        "DAMAGE",
+        "CLAIM",
+        "ADJUSTMENT",
+        "STOCK_IN",
+        "SALE_OUT",
+        "RETURN_IN",
+      ],
       required: [true, "Movement Type is required"],
       index: true,
     },
+    referenceType: { type: String },
     referenceTransaction: {
       type: String,
       trim: true,
       index: true,
     },
+    referenceId: { type: String },
+    reason: { type: String },
     beforeQuantity: {
       type: Number,
       required: [true, "Before quantity audit info is required"],

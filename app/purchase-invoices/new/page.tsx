@@ -58,8 +58,11 @@ export default function NewPurchaseInvoicePage() {
   const router = useRouter();
 
   // Header Details
+  const [receivingType, setReceivingType] = useState<"SUPPLIER_PURCHASE" | "CUSTOMER_BUYBACK" | "CUSTOMER_RETURN">("SUPPLIER_PURCHASE");
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState("");
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(
     new Date().toISOString().substring(0, 10)
@@ -86,6 +89,82 @@ export default function NewPurchaseInvoicePage() {
 
   const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const generateRefNumber = (type: "SUPPLIER_PURCHASE" | "CUSTOMER_BUYBACK" | "CUSTOMER_RETURN") => {
+    const dateStr = new Date().toISOString().substring(0, 10).replace(/-/g, "");
+    const randomSuffix = Math.floor(100 + Math.random() * 900);
+    if (type === "CUSTOMER_BUYBACK") {
+      return `BB-${dateStr}-${randomSuffix}`;
+    } else if (type === "CUSTOMER_RETURN") {
+      return `RET-${dateStr}-${randomSuffix}`;
+    } else {
+      return `PINV-${dateStr}-${randomSuffix}`;
+    }
+  };
+
+  // Original Sale Search State (for CUSTOMER_RETURN)
+  const [saleSearchQuery, setSaleSearchQuery] = useState("");
+  const [searchingSale, setSearchingSale] = useState(false);
+
+  const handleSearchSaleInvoice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!saleSearchQuery.trim()) return;
+
+    setSearchingSale(true);
+    setError("");
+
+    try {
+      const res = await fetch(`/api/sales?search=${encodeURIComponent(saleSearchQuery.trim())}&limit=200`);
+      const data = await res.json();
+      if (data.success) {
+        const term = saleSearchQuery.trim().toLowerCase();
+        const cleanHex = term.replace(/^inv-/, "").trim();
+        const found = data.data.find(
+          (s: any) =>
+            (s.invoiceNumber && s.invoiceNumber.toLowerCase() === term) ||
+            (s.saleNumber && s.saleNumber.toLowerCase() === term) ||
+            (s._id && s._id.toString().toLowerCase().endsWith(cleanHex)) ||
+            s.items.some((i: any) =>
+              i.serialNumbers?.some((sn: string) => sn.toLowerCase() === term)
+            )
+        );
+
+        if (!found) {
+          setError(`Past Invoice or Serial '${saleSearchQuery}' not found.`);
+        } else if (found.status !== "COMPLETED") {
+          setError(`Sale #${found.saleNumber} is not COMPLETED.`);
+        } else {
+          setNotes(`Return against Original Sale #${found.saleNumber}`);
+          if (found.customerName) setCustomerName(found.customerName);
+          if (found.customerPhone) setCustomerPhone(found.customerPhone);
+
+          // Populate line items from found sale
+          const importedLines: InvoiceLine[] = found.items.map((item: any) => ({
+            product: item.product._id || item.product,
+            name: item.productName || item.name || "Returned Item",
+            brand: item.brand || "",
+            modelNumber: item.modelNumber || item.model || "",
+            color: item.color || "Unspecified",
+            sku: item.sku || "N/A",
+            barcode: item.barcode || "N/A",
+            condition: item.condition || "Used",
+            quantity: 1, // Default 1 for partial return selection
+            unitCost: item.unitPrice || 0, // Agreed return valuation defaults to original sale price
+            sellingPrice: item.unitPrice || 0,
+            minSellingPrice: item.unitPrice || 0,
+            amount: item.unitPrice || 0,
+          }));
+
+          setLines(importedLines);
+          addToast("success", `Loaded ${importedLines.length} items from Invoice #${found.saleNumber}`);
+        }
+      }
+    } catch {
+      setError("Failed to search past sale invoice.");
+    } finally {
+      setSearchingSale(false);
+    }
   };
 
   // Fetch Suppliers and set default values
@@ -230,12 +309,12 @@ export default function NewPurchaseInvoicePage() {
   };
 
   const handleSave = async (submitForApproval = false) => {
-    if (!selectedSupplier) {
-      setError("Please select a Supplier.");
+    if (receivingType === "SUPPLIER_PURCHASE" && !selectedSupplier) {
+      setError("Please select a Supplier for Supplier Purchase.");
       return;
     }
     if (!invoiceNumber.trim()) {
-      setError("Please enter an Invoice Number.");
+      setError("Please enter an Invoice / Reference Number.");
       return;
     }
     if (lines.length === 0) {
@@ -264,7 +343,10 @@ export default function NewPurchaseInvoicePage() {
 
     const payload = {
       invoiceNumber: invoiceNumber.trim(),
-      supplier: selectedSupplier,
+      receivingType,
+      supplier: selectedSupplier || undefined,
+      customerName: customerName.trim() || undefined,
+      customerPhone: customerPhone.trim() || undefined,
       invoiceDate: new Date(invoiceDate).toISOString(),
       notes: notes.trim() || undefined,
       items: lines.map((l) => ({
@@ -360,16 +442,65 @@ export default function NewPurchaseInvoicePage() {
           <div className="lg:col-span-2 space-y-6">
             {/* Header Details */}
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-              <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider border-b border-slate-800 pb-2.5">
-                Invoice Header
+              <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider border-b border-slate-800 pb-2.5 flex items-center justify-between">
+                <span>Invoice Header & Receiving Type</span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                  {receivingType.replace("_", " ")}
+                </span>
               </h2>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Receiving Type Select */}
+                <div className="sm:col-span-2">
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                    <FileText className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Inward Receiving Type *</span>
+                  </label>
+                  <select
+                    value={receivingType}
+                    onChange={(e) => setReceivingType(e.target.value as any)}
+                    className="w-full px-3 py-2.5 bg-slate-950 border border-indigo-500/30 rounded-lg text-xs font-bold text-indigo-300 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                  >
+                    <option value="SUPPLIER_PURCHASE">SUPPLIER_PURCHASE → Business Purchase from Vendor</option>
+                    <option value="CUSTOMER_BUYBACK">CUSTOMER_BUYBACK → Customer Business Acquisition / Buyback</option>
+                    <option value="CUSTOMER_RETURN">CUSTOMER_RETURN → Customer Sale Reversal Intake</option>
+                  </select>
+                </div>
+
+                {/* Original Sale Invoice Lookup Bar (Option B for CUSTOMER_RETURN) */}
+                {receivingType === "CUSTOMER_RETURN" && (
+                  <div className="sm:col-span-2 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-xl space-y-2">
+                    <label className="block text-[10px] font-bold text-indigo-300 uppercase tracking-wider">
+                      Search Original Sale Invoice / Serial # (Auto-Load Line Items)
+                    </label>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-500" />
+                        <input
+                          type="text"
+                          placeholder="Enter Bill # (e.g. INV-20260920-045) or Serial #..."
+                          value={saleSearchQuery}
+                          onChange={(e) => setSaleSearchQuery(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleSearchSaleInvoice}
+                        disabled={searchingSale}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-lg transition shrink-0"
+                      >
+                        {searchingSale ? "Searching..." : "Search & Load"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Supplier select */}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
                     <Truck className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Supplier *</span>
+                    <span>Supplier {receivingType === "SUPPLIER_PURCHASE" ? "*" : "(Optional)"}</span>
                   </label>
                   <select
                     value={selectedSupplier}
@@ -388,22 +519,53 @@ export default function NewPurchaseInvoicePage() {
                 {/* Invoice Number */}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Invoice Number *
+                    Invoice / Ref Number *
                   </label>
                   <input
                     type="text"
                     value={invoiceNumber}
                     onChange={(e) => setInvoiceNumber(e.target.value)}
-                    placeholder="e.g. INV-00125"
+                    placeholder={receivingType === "SUPPLIER_PURCHASE" ? "e.g. INV-00125" : "e.g. BB-20260922-01"}
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
+
+                {/* Conditional Customer Fields for Buyback / Return */}
+                {receivingType !== "SUPPLIER_PURCHASE" && (
+                  <>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        Customer Name
+                      </label>
+                      <input
+                        type="text"
+                        value={customerName}
+                        onChange={(e) => setCustomerName(e.target.value)}
+                        placeholder="e.g. Ali Ahmed"
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        Customer Phone
+                      </label>
+                      <input
+                        type="text"
+                        value={customerPhone}
+                        onChange={(e) => setCustomerPhone(e.target.value)}
+                        placeholder="e.g. 0300-1234567"
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </>
+                )}
 
                 {/* Invoice Date */}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
                     <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Invoice Date *</span>
+                    <span>Receiving Date *</span>
                   </label>
                   <input
                     type="date"
@@ -422,7 +584,7 @@ export default function NewPurchaseInvoicePage() {
                     type="text"
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Provide additional details regarding supplier batch or shipment..."
+                    placeholder="Provide additional details regarding intake, batch, or customer..."
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
