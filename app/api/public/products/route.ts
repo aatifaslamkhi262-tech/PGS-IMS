@@ -26,8 +26,8 @@ export async function GET(req: NextRequest) {
 
     // 2. Build Query
     const query: any = {
-      active: true,
       isDeleted: { $ne: true },
+      active: { $ne: false },
     };
 
     if (search.trim()) {
