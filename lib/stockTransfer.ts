@@ -672,106 +672,115 @@ export async function executeCancelTransfer({
   return transfer;
 }
 
+let isSyncRunning = false;
+
 /**
  * Automatically sync and restore any unrestored dispatched stock for cancelled or rejected transfers.
  */
 export async function syncUnrestoredCancelledTransfers() {
-  const candidateTransfers = await StockTransfer.find({
-    $or: [
-      { status: { $in: ["Cancelled", "Rejected"] } },
-      { dispatchedAt: { $ne: null } },
-    ],
-  });
+  if (isSyncRunning) return 0;
+  isSyncRunning = true;
 
-  let restoredCount = 0;
-
-  for (const transfer of candidateTransfers) {
-    if (transfer.status === "Received") continue;
-
-    const dispatchMovements = await InventoryMovement.find({
-      referenceTransaction: transfer.transferNumber,
-      type: "TRANSFER",
-      notes: { $not: new RegExp("Transfer Cancelled", "i") },
+  try {
+    const candidateTransfers = await StockTransfer.find({
+      $or: [
+        { status: { $in: ["Cancelled", "Rejected"] } },
+        { dispatchedAt: { $ne: null } },
+      ],
     });
 
-    if (dispatchMovements.length === 0 && !transfer.dispatchedAt && transfer.status !== "Dispatched") {
-      continue;
-    }
+    let restoredCount = 0;
 
-    const existingCancelMovement = await InventoryMovement.findOne({
-      referenceTransaction: transfer.transferNumber,
-      notes: new RegExp("Transfer Cancelled", "i"),
-    });
+    for (const transfer of candidateTransfers) {
+      if (transfer.status === "Received") continue;
 
-    if ((transfer.status === "Cancelled" || transfer.status === "Rejected") && !existingCancelMovement) {
-      const sourceLoc = await Location.findById(transfer.sourceLocation);
-      if (!sourceLoc) continue;
+      const dispatchMovements = await InventoryMovement.find({
+        referenceTransaction: transfer.transferNumber,
+        type: "TRANSFER",
+        notes: { $not: new RegExp("Transfer Cancelled", "i") },
+      });
 
-      for (const item of transfer.items) {
-        const product = await Product.findById(item.product);
+      if (dispatchMovements.length === 0 && !transfer.dispatchedAt && transfer.status !== "Dispatched") {
+        continue;
+      }
 
-        let inv = await Inventory.findOne({
-          product: item.product,
-          location: sourceLoc._id,
-          condition: item.condition,
-        });
+      const existingCancelMovement = await InventoryMovement.findOne({
+        referenceTransaction: transfer.transferNumber,
+        notes: new RegExp("Transfer Cancelled", "i"),
+      });
 
-        const beforeQty = inv ? inv.quantity : 0;
-        if (!inv) {
-          inv = new Inventory({
+      if ((transfer.status === "Cancelled" || transfer.status === "Rejected") && !existingCancelMovement) {
+        const sourceLoc = await Location.findById(transfer.sourceLocation);
+        if (!sourceLoc) continue;
+
+        for (const item of transfer.items) {
+          const product = await Product.findById(item.product);
+
+          let inv = await Inventory.findOne({
             product: item.product,
             location: sourceLoc._id,
             condition: item.condition,
-            quantity: item.quantity,
-            serialTracking: product?.serialTracking || false,
-            status: "In Stock",
           });
-        } else {
-          inv.quantity += item.quantity;
-          inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
-        }
-        await inv.save();
 
-        if (product?.serialTracking && item.serialNumbers && item.serialNumbers.length > 0) {
-          for (const sn of item.serialNumbers) {
-            const serialDoc = await SerialNumber.findOne({
+          const beforeQty = inv ? inv.quantity : 0;
+          if (!inv) {
+            inv = new Inventory({
               product: item.product,
-              serialNumber: sn,
+              location: sourceLoc._id,
+              condition: item.condition,
+              quantity: item.quantity,
+              serialTracking: product?.serialTracking || false,
+              status: "In Stock",
             });
+          } else {
+            inv.quantity += item.quantity;
+            inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
+          }
+          await inv.save();
 
-            if (serialDoc) {
-              serialDoc.status = "Available";
-              serialDoc.location = sourceLoc.name;
-              serialDoc.transactionReference = transfer.transferNumber;
-              await serialDoc.save();
+          if (product?.serialTracking && item.serialNumbers && item.serialNumbers.length > 0) {
+            for (const sn of item.serialNumbers) {
+              const serialDoc = await SerialNumber.findOne({
+                product: item.product,
+                serialNumber: sn,
+              });
+
+              if (serialDoc) {
+                serialDoc.status = "Available";
+                serialDoc.location = sourceLoc.name;
+                serialDoc.transactionReference = transfer.transferNumber;
+                await serialDoc.save();
+              }
             }
           }
+
+          const destLoc = transfer.destinationLocation ? await Location.findById(transfer.destinationLocation) : null;
+          await InventoryMovement.create({
+            product: item.product,
+            quantity: item.quantity,
+            serialNumbers: item.serialNumbers || [],
+            sourceLocation: destLoc?._id || sourceLoc._id,
+            sourceName: destLoc?.name || "Cancelled Transfer",
+            destinationLocation: sourceLoc._id,
+            destinationName: sourceLoc.name,
+            type: "TRANSFER",
+            referenceTransaction: transfer.transferNumber,
+            beforeQuantity: beforeQty,
+            afterQuantity: inv.quantity,
+            performedBy: transfer.rejectedBy || transfer.createdBy || "system_sync",
+            condition: item.condition,
+            date: new Date(),
+            notes: `Transfer Cancelled: Auto-restored stock to source location (${transfer.transferNumber})`,
+          });
+
+          restoredCount++;
         }
-
-        const destLoc = transfer.destinationLocation ? await Location.findById(transfer.destinationLocation) : null;
-        await InventoryMovement.create({
-          product: item.product,
-          quantity: item.quantity,
-          serialNumbers: item.serialNumbers || [],
-          sourceLocation: destLoc?._id || sourceLoc._id,
-          sourceName: destLoc?.name || "Cancelled Transfer",
-          destinationLocation: sourceLoc._id,
-          destinationName: sourceLoc.name,
-          type: "TRANSFER",
-          referenceTransaction: transfer.transferNumber,
-          beforeQuantity: beforeQty,
-          afterQuantity: inv.quantity,
-          performedBy: transfer.rejectedBy || transfer.createdBy || "system_sync",
-          condition: item.condition,
-          date: new Date(),
-          notes: `Transfer Cancelled: Auto-restored stock to source location (${transfer.transferNumber})`,
-        });
-
-        restoredCount++;
       }
     }
-  }
 
-  return restoredCount;
+    return restoredCount;
+  } finally {
+    isSyncRunning = false;
+  }
 }
 

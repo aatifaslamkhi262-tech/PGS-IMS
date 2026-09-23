@@ -174,11 +174,11 @@ export async function closeCashSession(input: CloseCashSessionInput) {
     }
   }
 
-  // Calculate digital payments (Card, Bank Transfer, Online) strictly for reporting
+  // Calculate digital payments (Card, Bank Transfer, Online) strictly for reporting within session window
   const digitalPayments = await Payment.find({
     location: session.location,
     receivedBy: session.cashier,
-    createdAt: { $gte: session.openedAt },
+    createdAt: { $gte: session.openedAt, $lte: new Date() },
     status: "PAID",
   });
 

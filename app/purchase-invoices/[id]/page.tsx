@@ -16,9 +16,11 @@ import {
   AlertCircle,
   Send,
   CornerDownLeft,
+  Printer,
 } from "lucide-react";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { ToastContainer, ToastMessage } from "@/components/Toast";
+import { PurchaseReceiptModal } from "@/components/PurchaseReceiptModal";
 
 interface InvoiceLineItem {
   product: { _id: string; name: string; sku: string; barcode: string };
@@ -81,6 +83,7 @@ export default function PurchaseInvoiceDetailPage() {
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
   const [rejectError, setRejectError] = useState("");
+  const [showPrintModal, setShowPrintModal] = useState(false);
 
   // Confirmations
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
@@ -372,6 +375,14 @@ export default function PurchaseInvoiceDetailPage() {
               <span>Receive Physical Stock</span>
             </Link>
           )}
+
+          <button
+            onClick={() => setShowPrintModal(true)}
+            className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 border border-slate-800 bg-slate-900 hover:bg-slate-850 text-emerald-400 hover:text-emerald-300 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            <span>Print Voucher</span>
+          </button>
 
           {canDelete && (
             <button
@@ -723,6 +734,33 @@ export default function PurchaseInvoiceDetailPage() {
       />
 
       <ToastContainer toasts={toasts} onClose={removeToast} />
+
+      {showPrintModal && invoice && (
+        <PurchaseReceiptModal
+          receiptData={{
+            invoiceNumber: invoice.invoiceNumber,
+            receivingType: (invoice as any).receivingType || "SUPPLIER_PURCHASE",
+            date: invoice.invoiceDate || invoice.createdAt,
+            status: invoice.status,
+            createdBy: invoice.createdBy,
+            supplier: invoice.supplier,
+            customerName: (invoice as any).customerName,
+            customerPhone: (invoice as any).customerPhone,
+            items: invoice.items.map((it) => ({
+              productName: it.name || (it.product as any)?.name || "Product",
+              condition: it.condition || "New",
+              quantity: it.quantity,
+              unitCost: it.unitCost,
+              amount: it.amount,
+              serialNumbers: (it as any).serialNumbers || [],
+            })),
+            subtotal: invoice.subtotal,
+            total: invoice.total,
+            notes: invoice.notes,
+          }}
+          onClose={() => setShowPrintModal(false)}
+        />
+      )}
     </div>
   );
 }

@@ -316,11 +316,15 @@ export async function completeSale(input: CompleteSaleInput) {
       throw new Error("Sale location not found.");
     }
 
-    // 3. Verify Payment Allocations
+    // 3. Verify Payment Allocations (including existing paid down-payments for advance bookings)
+    const existingPayments = await Payment.find({ sale: sale._id, status: "PAID" }).session(session);
+    const existingPaidTotal = existingPayments.reduce((sum, p) => sum + Number(p.amount), 0);
     const totalAllocated = input.paymentAllocations.reduce((sum, p) => sum + Number(p.amount), 0);
-    if (totalAllocated < sale.totalAmount - 0.5) {
+    const grandTotalPaid = totalAllocated + existingPaidTotal;
+
+    if (grandTotalPaid < sale.totalAmount - 0.5) {
       throw new Error(
-        `Payment total (Rs. ${totalAllocated.toLocaleString()}) is less than required total amount (Rs. ${sale.totalAmount.toLocaleString()}).`
+        `Payment total (Rs. ${grandTotalPaid.toLocaleString()}) is less than required total amount (Rs. ${sale.totalAmount.toLocaleString()}).`
       );
     }
 

@@ -149,21 +149,7 @@ export async function POST(req: NextRequest) {
       createdBy: auth.user.username,
     });
 
-    // Update baseline Product document prices whenever valid prices are provided on an invoice
-    for (const item of validatedItems) {
-      if (item.unitCost > 0 || item.sellingPrice > 0) {
-        await Product.updateOne(
-          { _id: item.product },
-          {
-            $set: {
-              ...(item.unitCost > 0 && { costPrice: item.unitCost }),
-              ...(item.sellingPrice > 0 && { sellingPrice: item.sellingPrice }),
-              ...(item.minSellingPrice > 0 && { minSellingPrice: item.minSellingPrice }),
-            },
-          }
-        );
-      }
-    }
+    // Note: Baseline Product document prices are updated upon physical receiving approval (PurchaseReceiving), keeping unapproved draft invoices isolated.
 
     return NextResponse.json({ success: true, data: invoice });
   } catch (error: any) {

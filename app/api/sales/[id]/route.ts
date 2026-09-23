@@ -6,6 +6,9 @@ import { Payment } from "@/models/Payment";
 import { SerialNumber } from "@/models/SerialNumber";
 import { Inventory } from "@/models/Inventory";
 import { InventoryMovement } from "@/models/InventoryMovement";
+import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
+import { recordCashMovement } from "@/lib/cashSessionEngine";
+import { CashSession } from "@/models/CashSession";
 import { verifyRole } from "@/lib/auth/rbac";
 
 export async function GET(
@@ -136,7 +139,42 @@ export async function DELETE(
         await invoice.save();
       }
 
+      const cashPayments = await Payment.find({ sale: sale._id, paymentMethod: "CASH", status: "PAID" });
+      const totalCashPaid = cashPayments.reduce((sum, p) => sum + p.amount, 0);
+
       await Payment.updateMany({ sale: sale._id }, { status: "REFUNDED" });
+
+      const activeCashSession = await CashSession.findOne({
+        location: sale.location,
+        cashier: auth.user.username,
+        status: "OPEN",
+      });
+
+      if (activeCashSession && totalCashPaid > 0) {
+        await recordCashMovement({
+          sessionId: activeCashSession._id.toString(),
+          locationId: sale.location.toString(),
+          cashier: auth.user.username,
+          type: "CASH_REFUND",
+          amount: totalCashPaid,
+          direction: "OUT",
+          referenceType: "Sale",
+          referenceId: refTx,
+          notes: `Cash refund for cancelled sale ${sale.saleNumber}`,
+        });
+      }
+
+      if (sale.customer) {
+        await recordCustomerLedgerEntry({
+          customerId: sale.customer.toString(),
+          type: "RETURN_CREDIT",
+          amount: sale.totalAmount,
+          referenceType: "Return",
+          referenceId: refTx,
+          notes: `Credit reversal for cancelled sale ${sale.saleNumber}`,
+          createdBy: auth.user.username,
+        });
+      }
     }
 
     sale.status = "CANCELLED";

@@ -20,8 +20,11 @@ export async function GET(req: NextRequest) {
     const locationId = searchParams.get("locationId") || "ALL";
     const staffId = searchParams.get("staffId") || "ALL";
 
-    const startDate = new Date(`${dateStr}T00:00:00.000Z`);
-    const endDate = new Date(`${dateStr}T23:59:59.999Z`);
+    const startDate = new Date(dateStr);
+    startDate.setHours(0, 0, 0, 0);
+
+    const endDate = new Date(dateStr);
+    endDate.setHours(23, 59, 59, 999);
 
     // 1. Sales Query Filter
     const saleQuery: any = {
@@ -83,7 +86,10 @@ export async function GET(req: NextRequest) {
       date: { $gte: startDate, $lte: endDate },
     };
     if (locationId !== "ALL") {
-      movementQuery.sourceLocation = locationId;
+      movementQuery.$or = [
+        { sourceLocation: locationId },
+        { destinationLocation: locationId },
+      ];
     }
 
     const movements = await InventoryMovement.find(movementQuery).lean();

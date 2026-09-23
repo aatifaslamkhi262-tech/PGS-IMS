@@ -78,6 +78,32 @@ export async function POST(request: Request) {
     const topUpCash = Number(additionalTopUpCash || 0);
     const netDepositCredit = Math.max(0, secDepositPaid - rentDeducted) + topUpCash;
 
+    // Over-Return Guard Check against Original Sale Invoice
+    if (originalSale && originalSale.items) {
+      for (const rItem of rawReturnedList) {
+        const origItem = originalSale.items.find(
+          (it: any) => it.product.toString() === rItem.productId.toString()
+        );
+        if (origItem) {
+          const returnQty = Math.max(1, Number(rItem.quantity || 1));
+          const alreadyReturned = Number(origItem.returnedQuantity || 0);
+          const remainingReturnable = origItem.quantity - alreadyReturned;
+
+          if (returnQty > remainingReturnable) {
+            if (isTxActive) await session.abortTransaction();
+            if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
+            return NextResponse.json(
+              {
+                success: false,
+                error: `Cannot return ${returnQty} units of '${origItem.productName}'. Remaining returnable limit on Invoice ${originalSale.saleNumber} is ${Math.max(0, remainingReturnable)} (Original Sold: ${origItem.quantity}, Already Returned: ${alreadyReturned}).`,
+              },
+              { status: 400 }
+            );
+          }
+        }
+      }
+    }
+
     // Process Returned Items with Condition-Based Valuation Override
     for (const rItem of rawReturnedList) {
       const product = await Product.findById(rItem.productId);
@@ -108,8 +134,9 @@ export async function POST(request: Request) {
         product: product._id,
         productName: product.name,
         sku: product.sku,
-        location: targetLocationId,
-        locationName: location.name,
+        destinationLocation: targetLocationId,
+        destinationName: location.name,
+        sourceName: "Customer",
         type: "RETURN_IN",
         quantity: returnQty,
         serialNumbers: rItem.serialNumbers || (rItem.serialNumber ? [rItem.serialNumber] : []),
@@ -127,6 +154,16 @@ export async function POST(request: Request) {
         await movement.save({ session });
       } else {
         await movement.save();
+      }
+
+      // Update returnedQuantity on Original Sale Item
+      if (originalSale && originalSale.items) {
+        const origItem = originalSale.items.find(
+          (it: any) => it.product.toString() === product._id.toString()
+        );
+        if (origItem) {
+          origItem.returnedQuantity = (origItem.returnedQuantity || 0) + returnQty;
+        }
       }
 
       const serials = rItem.serialNumbers || (rItem.serialNumber ? [rItem.serialNumber] : []);
@@ -151,6 +188,14 @@ export async function POST(request: Request) {
         unitPrice: returnValuation,
         lineTotal,
       });
+    }
+
+    if (originalSale) {
+      if (isTxActive) {
+        await originalSale.save({ session });
+      } else {
+        await originalSale.save();
+      }
     }
 
     if (action === "RENTAL_SWAP" && netDepositCredit > 0) {
@@ -185,8 +230,9 @@ export async function POST(request: Request) {
           product: product._id,
           productName: product.name,
           sku: product.sku,
-          location: targetLocationId,
-          locationName: location.name,
+          sourceLocation: targetLocationId,
+          sourceName: location.name,
+          destinationName: customerName || originalSale?.customerName || "Customer",
           type: "SALE_OUT",
           quantity: repQty,
           serialNumbers: repInput.serialNumbers || [],
@@ -289,7 +335,7 @@ export async function POST(request: Request) {
         await recordCashMovement(
           {
             sessionId: activeCashSession._id.toString(),
-            locationId: originalSale.location.toString(),
+            locationId: targetLocationId.toString(),
             cashier: processedBy || auth.user?.username || "system",
             type: "CASH_SALE",
             amount: actualCashPortion,
@@ -305,7 +351,7 @@ export async function POST(request: Request) {
         await recordCashMovement(
           {
             sessionId: activeCashSession._id.toString(),
-            locationId: originalSale.location.toString(),
+            locationId: targetLocationId.toString(),
             cashier: processedBy || auth.user?.username || "system",
             type: "CASH_REFUND",
             amount: actualCashPortion,

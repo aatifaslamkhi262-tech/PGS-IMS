@@ -17,8 +17,10 @@ import {
   CheckCircle2,
   RotateCcw,
   ShieldAlert,
+  Printer,
 } from "lucide-react";
 import { ToastContainer, ToastMessage } from "@/components/Toast";
+import { PurchaseReceiptModal } from "@/components/PurchaseReceiptModal";
 
 interface InvoiceItem {
   _id: string;
@@ -45,14 +47,34 @@ export default function PurchaseInvoicesPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
-  // Toasts
+  // Toasts & Print State
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [selectedPrintInvoice, setSelectedPrintInvoice] = useState<any>(null);
+  const [printingId, setPrintingId] = useState<string | null>(null);
+
   const addToast = (type: "success" | "error" | "info", text: string) => {
     const id = Date.now().toString();
     setToasts((prev) => [...prev, { id, type, text }]);
   };
   const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const handlePrintClick = async (invoiceId: string) => {
+    try {
+      setPrintingId(invoiceId);
+      const res = await fetch(`/api/purchase-invoices/${invoiceId}`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        setSelectedPrintInvoice(data.data);
+      } else {
+        addToast("error", data.error || "Failed to fetch purchase invoice for printing.");
+      }
+    } catch {
+      addToast("error", "Error fetching invoice details for printing.");
+    } finally {
+      setPrintingId(null);
+    }
   };
 
   const isAuthorizedRole =
@@ -397,7 +419,20 @@ export default function PurchaseInvoicesPage() {
                         {getStatusLabel(inv.status)}
                       </span>
                     </td>
-                    <td className="p-4 text-right">
+                    <td className="p-4 text-right flex items-center justify-end gap-1.5">
+                      <button
+                        onClick={() => handlePrintClick(inv._id)}
+                        disabled={printingId === inv._id}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 px-2 py-1 bg-slate-800/80 border border-slate-700/60 rounded cursor-pointer"
+                        title="Print Purchase Voucher"
+                      >
+                        {printingId === inv._id ? (
+                          <span className="w-3 h-3 border border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
+                        ) : (
+                          <Printer className="w-3 h-3" />
+                        )}
+                        <span>Print</span>
+                      </button>
                       <Link
                         href={`/purchase-invoices/${inv._id}`}
                         className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 px-2 py-1 bg-slate-800/80 border border-slate-700/60 rounded"
@@ -460,6 +495,33 @@ export default function PurchaseInvoicesPage() {
 
       {/* Toast Alert Elements */}
       <ToastContainer toasts={toasts} onClose={removeToast} />
+
+      {selectedPrintInvoice && (
+        <PurchaseReceiptModal
+          receiptData={{
+            invoiceNumber: selectedPrintInvoice.invoiceNumber,
+            receivingType: selectedPrintInvoice.receivingType || "SUPPLIER_PURCHASE",
+            date: selectedPrintInvoice.invoiceDate || selectedPrintInvoice.createdAt,
+            status: selectedPrintInvoice.status,
+            createdBy: selectedPrintInvoice.createdBy,
+            supplier: selectedPrintInvoice.supplier,
+            customerName: selectedPrintInvoice.customerName,
+            customerPhone: selectedPrintInvoice.customerPhone,
+            items: (selectedPrintInvoice.items || []).map((it: any) => ({
+              productName: it.name || it.product?.name || "Product",
+              condition: it.condition || "New",
+              quantity: it.quantity,
+              unitCost: it.unitCost,
+              amount: it.amount,
+              serialNumbers: it.serialNumbers || [],
+            })),
+            subtotal: selectedPrintInvoice.subtotal,
+            total: selectedPrintInvoice.total,
+            notes: selectedPrintInvoice.notes,
+          }}
+          onClose={() => setSelectedPrintInvoice(null)}
+        />
+      )}
     </div>
   );
 }

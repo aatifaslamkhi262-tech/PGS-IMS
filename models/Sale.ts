@@ -29,6 +29,7 @@ export interface ISaleItem {
   barcode: string;
   condition: string;
   quantity: number;
+  returnedQuantity?: number;
   serialNumbers?: string[];
   unitCost: number; // Exact COGS for item
   unitPrice: number; // Selling price per unit
@@ -89,6 +90,7 @@ const SaleItemSchema = new Schema(
     barcode: { type: String, required: true },
     condition: { type: String, required: true, default: "New" },
     quantity: { type: Number, required: true, min: 1 },
+    returnedQuantity: { type: Number, default: 0, min: 0 },
     serialNumbers: { type: [String], default: [] },
     unitCost: { type: Number, required: true, min: 0 },
     unitPrice: { type: Number, required: true, min: 0 },

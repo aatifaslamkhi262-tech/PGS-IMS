@@ -59,6 +59,7 @@ interface CartItem {
   minSellingPrice: number;
   discountAmount: number;
   serialNumbers: string[];
+  availableStock?: number;
 }
 
 export default function POSPage() {
@@ -178,25 +179,50 @@ export default function POSPage() {
         serialTracking: scanData.data.product.serialTracking,
       };
 
+      // Fetch Live Stock for selected location
+      let fetchedStock: number | undefined = undefined;
+      try {
+        const invRes = await fetch(`/api/inventory?location=${selectedLocation}&search=${encodeURIComponent(p.sku || p.barcode)}`);
+        const invData = await invRes.json();
+        if (invData.success && invData.data && invData.data.length > 0) {
+          const matchedProd = invData.data.find((d: any) => d.product._id === p._id);
+          if (matchedProd) {
+            const locStock = matchedProd.locations.find((l: any) => l.locationId === selectedLocation);
+            if (locStock) fetchedStock = locStock.quantity;
+          }
+        }
+      } catch {
+        // Fallback gracefully if inventory check fails
+      }
+
       // Check if item scanned was a specific Serial Number
-      const scannedSerial = scanData.data.serialDetails?.serialNumber;
+      const scannedSerial = scanData.data.serialDetails?.serialNumber || (scanData.data.type === "SERIAL" ? code : undefined);
 
       setCart((prev) => {
         const existingIdx = prev.findIndex((item) => item.product._id === p._id);
         if (existingIdx >= 0) {
           const updated = [...prev];
           const item = updated[existingIdx];
-          const newQty = item.quantity + 1;
+          
+          let newSerials = [...(item.serialNumbers || [])];
+          let newQty = item.quantity;
 
-          let newSerials = [...item.serialNumbers];
-          if (scannedSerial && !newSerials.includes(scannedSerial)) {
-            newSerials.push(scannedSerial);
+          if (scannedSerial) {
+            if (!newSerials.includes(scannedSerial)) {
+              newSerials.push(scannedSerial);
+              if (newSerials.length > item.quantity) {
+                newQty = newSerials.length;
+              }
+            }
+          } else {
+            newQty = item.quantity + 1;
           }
 
           updated[existingIdx] = {
             ...item,
             quantity: newQty,
             serialNumbers: newSerials,
+            availableStock: fetchedStock !== undefined ? fetchedStock : item.availableStock,
           };
           return updated;
         } else {
@@ -209,6 +235,7 @@ export default function POSPage() {
               minSellingPrice: p.minSellingPrice,
               discountAmount: 0,
               serialNumbers: scannedSerial ? [scannedSerial] : [],
+              availableStock: fetchedStock,
             },
           ];
         }
@@ -244,8 +271,15 @@ export default function POSPage() {
       return;
     }
 
-    // Minimum Selling Price Guard Check
+    // Minimum Selling Price & Available Stock Guard Checks
     for (const item of cart) {
+      if (item.availableStock !== undefined && item.quantity > item.availableStock) {
+        setError(
+          `Stock Violation: '${item.product.name}' (${item.product.condition}) has only ${item.availableStock} available in stock at selected location, but ${item.quantity} requested.`
+        );
+        return;
+      }
+
       const effectivePrice = item.unitPrice - item.discountAmount / item.quantity;
       if (effectivePrice < item.minSellingPrice - 1) {
         setError(
@@ -502,8 +536,13 @@ export default function POSPage() {
                   >
                     <div className="space-y-0.5 flex-1">
                       <div className="font-bold text-slate-200">{item.product.name}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">
-                        {item.product.condition} • Min: Rs. {item.minSellingPrice.toLocaleString()}
+                      <div className="text-[10px] text-slate-400 font-mono flex flex-wrap items-center gap-2">
+                        <span>{item.product.condition} • Min: Rs. {item.minSellingPrice.toLocaleString()}</span>
+                        {item.availableStock !== undefined && (
+                          <span className={`px-1.5 py-0.5 rounded font-bold ${item.quantity > item.availableStock ? "bg-rose-500/20 text-rose-400 border border-rose-500/30" : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"}`}>
+                            Stock: {item.availableStock}
+                          </span>
+                        )}
                       </div>
 
                       {/* Serials preview if serialized */}

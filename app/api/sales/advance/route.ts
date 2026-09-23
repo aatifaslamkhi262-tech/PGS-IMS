@@ -113,15 +113,7 @@ export async function PUT(request: Request) {
       );
     }
 
-    // Unreserve serial numbers before final SALE_OUT execution
-    for (const item of sale.items) {
-      if (item.serialNumbers && item.serialNumbers.length > 0) {
-        await SerialNumber.updateMany(
-          { serialNumber: { $in: item.serialNumbers } },
-          { $set: { status: "Available" } }
-        );
-      }
-    }
+    // Note: completeSale safely transitions linked serial numbers from Reserved -> Sold directly.
 
     // Execute final SALE_OUT, balance collection & final tax invoice generation
     const completedResult = await completeSale({

@@ -9,6 +9,7 @@ import { SerialNumber } from "@/models/SerialNumber";
 import { Inventory } from "@/models/Inventory";
 import { InventoryMovement } from "@/models/InventoryMovement";
 import { verifyRole } from "@/lib/auth/rbac";
+import { updateAverageCostOnIntake } from "@/lib/averageCostEngine";
 
 /**
  * Core receiving approval execution logic.
@@ -31,11 +32,13 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
     throw new Error(`Only Pending Approval receiving documents can be approved. Current status: ${receiving.status}`);
   }
 
-  // 2. Fetch destination location
+  // 2. Fetch destination location & parent invoice
   const locationObj = await Location.findById(receiving.location, null, sessionOptions);
   if (!locationObj || !locationObj.active) {
     throw new Error("Destination location is inactive or invalid.");
   }
+
+  const parentInvoice = await PurchaseInvoice.findById(receiving.purchaseInvoice, null, sessionOptions);
 
   // 3. Update Inventory, SerialNumbers, and InventoryMovement for each item idempotently
   for (const item of receiving.items) {
@@ -84,6 +87,39 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
       } else {
         inventory.quantity += item.quantityReceived;
         inventory.status = inventory.quantity > 0 ? "In Stock" : "Out of Stock";
+      }
+
+      const invLine = parentInvoice?.items.find(
+        (line: any) => line.product.toString() === item.product.toString() && line.condition === item.condition
+      );
+      const unitCost = invLine?.unitCost !== undefined && invLine.unitCost >= 0
+        ? invLine.unitCost
+        : (productObj.costPrice || 0);
+
+      await updateAverageCostOnIntake(
+        {
+          productId: item.product,
+          locationId: receiving.location,
+          condition: item.condition,
+          quantity: item.quantityReceived,
+          unitCost,
+        },
+        sessionOptions.session
+      );
+
+      // Update baseline Product master prices upon approved physical receiving
+      if (invLine) {
+        await Product.updateOne(
+          { _id: item.product },
+          {
+            $set: {
+              ...(invLine.unitCost > 0 && { costPrice: invLine.unitCost }),
+              ...(invLine.sellingPrice > 0 && { sellingPrice: invLine.sellingPrice }),
+              ...(invLine.minSellingPrice > 0 && { minSellingPrice: invLine.minSellingPrice }),
+            },
+          },
+          sessionOptions
+        );
       }
 
       await inventory.save(sessionOptions);

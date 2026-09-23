@@ -176,8 +176,11 @@ function SalesWorkspaceContent() {
       const scanData = await scanRes.json();
 
       let foundProduct: any = null;
+      let scannedSerial: string | undefined = undefined;
+
       if (scanRes.ok && scanData.success && scanData.data?.product) {
         foundProduct = scanData.data.product;
+        scannedSerial = scanData.data.serialDetails?.serialNumber || (scanData.data.type === "SERIAL" ? code : undefined);
       } else {
         foundProduct = products.find(
           (p) =>
@@ -224,7 +227,7 @@ function SalesWorkspaceContent() {
         setNewReplacementProdId(foundProduct._id);
         setNewReplacementPrice(foundProduct.sellingPrice || 0);
       } else if (target === "POS") {
-        addToCart(foundProduct);
+        addToCart(foundProduct, scannedSerial);
       }
     } catch (err) {
       console.error("Failed to resolve barcode", err);
@@ -282,12 +285,29 @@ function SalesWorkspaceContent() {
     }
   };
 
-  const addToCart = (product: any) => {
+  const addToCart = (product: any, scannedSerial?: string) => {
     const existing = cartItems.find((item) => item.product._id === product._id);
     if (existing) {
+      const existingSerials = existing.serialNumbers || [];
+      let newSerials = [...existingSerials];
+      let newQty = existing.quantity;
+
+      if (scannedSerial) {
+        if (!newSerials.includes(scannedSerial)) {
+          newSerials.push(scannedSerial);
+          if (newSerials.length > existing.quantity) {
+            newQty = newSerials.length;
+          }
+        }
+      } else {
+        newQty = existing.quantity + 1;
+      }
+
       setCartItems(
         cartItems.map((item) =>
-          item.product._id === product._id ? { ...item, quantity: item.quantity + 1 } : item
+          item.product._id === product._id
+            ? { ...item, quantity: newQty, serialNumbers: newSerials }
+            : item
         )
       );
     } else {
@@ -297,7 +317,7 @@ function SalesWorkspaceContent() {
           product,
           quantity: 1,
           unitPrice: product.sellingPrice,
-          serialNumbers: [],
+          serialNumbers: scannedSerial ? [scannedSerial] : [],
         },
       ]);
     }

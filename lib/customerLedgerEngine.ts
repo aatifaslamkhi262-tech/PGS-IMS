@@ -60,7 +60,13 @@ export async function recordCustomerLedgerEntry(
 
     case "PAYMENT":
       credit = amount;
-      newOutstanding = Math.max(0, newOutstanding - amount);
+      if (amount > newOutstanding) {
+        const excess = amount - newOutstanding;
+        newOutstanding = 0;
+        newAdvance += excess;
+      } else {
+        newOutstanding -= amount;
+      }
       break;
 
     case "RETURN_CREDIT":
