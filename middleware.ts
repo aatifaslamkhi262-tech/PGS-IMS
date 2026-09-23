@@ -5,10 +5,11 @@ import { verifyToken } from "@/lib/auth/session";
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // 1. Bypass public assets, login pages, and seeding scripts
+  // 1. Bypass public assets, login pages, seeding scripts, and public ecommerce API endpoints
   if (
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico" ||
+    pathname.startsWith("/api/public") ||
     pathname === "/api/seed" ||
     pathname === "/api/auth/login" ||
     pathname === "/login"
