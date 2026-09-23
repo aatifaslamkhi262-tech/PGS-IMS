@@ -5,6 +5,18 @@ import { verifyToken } from "@/lib/auth/session";
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // 0. Handle OPTIONS Preflight CORS Requests for /api/public
+  if (request.method === "OPTIONS" && pathname.startsWith("/api/public")) {
+    return new NextResponse(null, {
+      status: 200,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key",
+      },
+    });
+  }
+
   // 1. Bypass public assets, login pages, seeding scripts, and public ecommerce API endpoints
   if (
     pathname.startsWith("/_next") ||
