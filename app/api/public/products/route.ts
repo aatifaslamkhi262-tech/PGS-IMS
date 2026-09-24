@@ -69,14 +69,20 @@ export async function GET(req: NextRequest) {
     let inventoryMap: Record<string, number> = {};
 
     if (warehouseLocation && productIds.length > 0) {
-      const inventories = await Inventory.find({
+      const invQuery: any = {
         product: { $in: productIds },
         location: warehouseLocation._id,
-      }).lean();
+      };
+      if (condition) {
+        invQuery.condition = condition;
+      }
+
+      const inventories = await Inventory.find(invQuery).lean();
 
       inventoryMap = inventories.reduce((acc: Record<string, number>, inv: any) => {
         const availableQty = Math.max(0, (inv.quantity || 0) - (inv.reservedQuantity || 0));
-        acc[inv.product.toString()] = availableQty;
+        const key = inv.product.toString();
+        acc[key] = (acc[key] || 0) + availableQty;
         return acc;
       }, {});
     }
