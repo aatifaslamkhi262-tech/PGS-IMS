@@ -54,13 +54,15 @@ export async function GET(
     // 3. Load all locations to build a complete breakdown
     const allLocations = await Location.find({ active: true }).select("name code type").lean();
     const breakdown = allLocations.map((loc) => {
-      const line = inventoryLines.find((il) => il.location._id.toString() === loc._id.toString());
+      const locationQty = inventoryLines
+        .filter((il) => il.location && il.location._id.toString() === loc._id.toString())
+        .reduce((sum, il) => sum + (il.quantity || 0), 0);
       return {
         locationId: loc._id,
         locationName: loc.name,
         locationCode: loc.code,
         locationType: loc.type,
-        quantity: line ? line.quantity : 0,
+        quantity: locationQty,
       };
     });
 

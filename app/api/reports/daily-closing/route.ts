@@ -1,3 +1,5 @@
+
+
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { Sale } from "@/models/Sale";
@@ -20,11 +22,12 @@ export async function GET(req: NextRequest) {
     const locationId = searchParams.get("locationId") || "ALL";
     const staffId = searchParams.get("staffId") || "ALL";
 
-    const startDate = new Date(dateStr);
-    startDate.setHours(0, 0, 0, 0);
-
-    const endDate = new Date(dateStr);
-    endDate.setHours(23, 59, 59, 999);
+    // 1. Build Pakistan Standard Time (PKT - Asia/Karachi, UTC+5) Date Window
+    const [year, month, day] = dateStr.split("-").map(Number);
+    // PKT 00:00:00 = UTC Previous Day 19:00:00
+    const startDate = new Date(Date.UTC(year, month - 1, day - 1, 19, 0, 0, 0));
+    // PKT 23:59:59.999 = UTC Same Day 18:59:59.999
+    const endDate = new Date(Date.UTC(year, month - 1, day, 18, 59, 59, 999));
 
     // 1. Sales Query Filter
     const saleQuery: any = {
@@ -52,7 +55,8 @@ export async function GET(req: NextRequest) {
       cogs += s.totalCost || 0;
 
       for (const item of s.items || []) {
-        stockOutValue += (item.unitPrice || 0) * (item.quantity || 1);
+        const itemCost = item.unitCost !== undefined && item.unitCost >= 0 ? item.unitCost : 0;
+        stockOutValue += itemCost * (item.quantity || 1);
       }
     }
 

@@ -285,6 +285,26 @@ function SalesWorkspaceContent() {
     }
   };
 
+  const handleCancelQueueSale = async (saleId: string, saleNumber: string) => {
+    if (!confirm(`Are you sure you want to cancel and remove order ${saleNumber} from the queue?`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/sales/${saleId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`Order ${saleNumber} cancelled and removed from queue.`);
+        fetchQueue();
+      } else {
+        alert(data.error || "Failed to cancel sale.");
+      }
+    } catch (err: any) {
+      alert("Error cancelling sale.");
+    }
+  };
+
   const addToCart = (product: any, scannedSerial?: string) => {
     const existing = cartItems.find((item) => item.product._id === product._id);
     if (existing) {
@@ -1380,6 +1400,12 @@ function SalesWorkspaceContent() {
                           Verify & Complete
                         </button>
                       )}
+                      <button
+                        onClick={() => handleCancelQueueSale(sale._id, sale.saleNumber)}
+                        className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
+                      >
+                        🗑️ Cancel / Remove
+                      </button>
                     </div>
                   </div>
                 ))}

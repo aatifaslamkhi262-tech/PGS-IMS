@@ -142,7 +142,25 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptProps> = ({ receiptData
             </div>
             <div className="flex justify-between">
               <span className="font-bold">Date:</span>
-              <span className="font-semibold">{new Date(receiptData.date).toLocaleString("en-PK")}</span>
+              <span className="font-semibold">
+                {(() => {
+                  try {
+                    const d = new Date(receiptData.date);
+                    if (isNaN(d.getTime())) return String(receiptData.date || "");
+                    return d.toLocaleString("en-PK", {
+                      timeZone: "Asia/Karachi",
+                      year: "numeric",
+                      month: "2-digit",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: true,
+                    });
+                  } catch {
+                    return String(receiptData.date || "");
+                  }
+                })()}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="font-bold">Billed By:</span>

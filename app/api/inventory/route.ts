@@ -150,22 +150,23 @@ export async function GET(req: NextRequest) {
       // Calculate total quantity
       const totalQty = stockLines.reduce((sum, line) => sum + line.quantity, 0);
 
-      // Build location breakdown using O(1) Map lookup
-      const stockByLocationMap = new Map<string, any>();
+      // Build location breakdown using O(1) Map lookup (accumulating quantity per location across conditions)
+      const stockByLocationMap = new Map<string, number>();
       for (const line of stockLines) {
         if (line.location && line.location._id) {
-          stockByLocationMap.set(line.location._id.toString(), line);
+          const locId = line.location._id.toString();
+          stockByLocationMap.set(locId, (stockByLocationMap.get(locId) || 0) + (line.quantity || 0));
         }
       }
 
       const breakdown = allLocations.map((loc) => {
-        const line = stockByLocationMap.get(loc._id.toString());
+        const qty = stockByLocationMap.get(loc._id.toString()) || 0;
         return {
           locationId: loc._id,
           locationName: loc.name,
           locationCode: loc.code,
           locationType: loc.type,
-          quantity: line ? line.quantity : 0,
+          quantity: qty,
         };
       });
 
