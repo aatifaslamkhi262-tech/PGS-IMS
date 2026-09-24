@@ -62,8 +62,8 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
     let afterQuantity = 0;
 
     if (!existingMovement) {
-      // a. Check/Update Inventory
-      let inventory = await Inventory.findOne(
+      // a. Check current inventory quantity before intake
+      const currentInv = await Inventory.findOne(
         {
           product: item.product,
           location: receiving.location,
@@ -73,21 +73,7 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
         sessionOptions
       );
 
-      beforeQuantity = inventory ? inventory.quantity : 0;
-
-      if (!inventory) {
-        inventory = new Inventory({
-          product: item.product,
-          location: receiving.location,
-          condition: item.condition,
-          quantity: item.quantityReceived,
-          serialTracking: productObj.serialTracking,
-          status: "In Stock",
-        });
-      } else {
-        inventory.quantity += item.quantityReceived;
-        inventory.status = inventory.quantity > 0 ? "In Stock" : "Out of Stock";
-      }
+      beforeQuantity = currentInv ? currentInv.quantity : 0;
 
       const invLine = parentInvoice?.items.find(
         (line: any) => line.product.toString() === item.product.toString() && line.condition === item.condition
@@ -96,7 +82,8 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
         ? invLine.unitCost
         : (productObj.costPrice || 0);
 
-      await updateAverageCostOnIntake(
+      // Update Inventory quantity, moving average cost, and status via averageCostEngine (handles save internally)
+      const intakeRes = await updateAverageCostOnIntake(
         {
           productId: item.product,
           locationId: receiving.location,
@@ -106,6 +93,8 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
         },
         sessionOptions.session
       );
+
+      afterQuantity = intakeRes.newQuantity;
 
       // Update baseline Product master prices upon approved physical receiving
       if (invLine) {
@@ -121,9 +110,6 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
           sessionOptions
         );
       }
-
-      await inventory.save(sessionOptions);
-      afterQuantity = inventory.quantity;
     } else {
       // Stock was already applied in a previous/partial attempt - fetch current inventory
       const currentInv = await Inventory.findOne(
