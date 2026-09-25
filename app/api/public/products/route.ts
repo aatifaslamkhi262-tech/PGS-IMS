@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { Product } from "@/models/Product";
 import { Location } from "@/models/Location";
-import { Inventory } from "@/models/Inventory";
 import "@/models/Category"; // Ensure Category model is registered for populate
+import mongoose from "mongoose";
 
 export async function GET(req: NextRequest) {
   try {
@@ -24,15 +24,15 @@ export async function GET(req: NextRequest) {
       warehouseLocation = await Location.findOne({ active: true }).lean();
     }
 
-    // 2. Build Query
-    const query: any = {
+    // 2. Build Base Match Query
+    const matchQuery: any = {
       isDeleted: { $ne: true },
       active: { $ne: false },
     };
 
     if (search.trim()) {
       const searchRegex = new RegExp(search.trim(), "i");
-      query.$or = [
+      matchQuery.$or = [
         { name: searchRegex },
         { sku: searchRegex },
         { barcode: searchRegex },
@@ -42,60 +42,127 @@ export async function GET(req: NextRequest) {
     }
 
     if (category) {
-      query.category = category;
+      matchQuery.category = mongoose.Types.ObjectId.isValid(category)
+        ? new mongoose.Types.ObjectId(category)
+        : category;
     }
 
     if (brand) {
-      query.brand = new RegExp(brand.trim(), "i");
+      matchQuery.brand = new RegExp(brand.trim(), "i");
     }
 
     if (condition) {
-      query.condition = condition;
+      matchQuery.condition = condition;
     }
 
-    // 3. Count Total Matching Products for Pagination
-    const total = await Product.countDocuments(query);
+    // 3. Build Aggregation Pipeline
+    const warehouseLocationId = warehouseLocation ? warehouseLocation._id : null;
 
-    // 4. Fetch Paginated Products
-    const products = await Product.find(query)
-      .populate("category", "name slug")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    const pipeline: any[] = [{ $match: matchQuery }];
 
-    // 5. Fetch Inventory Stocks for these products at Central Warehouse
-    const productIds = products.map((p) => p._id);
-    let inventoryMap: Record<string, number> = {};
-
-    if (warehouseLocation && productIds.length > 0) {
-      const invQuery: any = {
-        product: { $in: productIds },
-        location: warehouseLocation._id,
-      };
+    if (warehouseLocationId) {
+      const invMatch: any[] = [
+        { $eq: ["$product", "$$productId"] },
+        { $eq: ["$location", warehouseLocationId] },
+      ];
       if (condition) {
-        invQuery.condition = condition;
+        invMatch.push({ $eq: ["$condition", condition] });
       }
 
-      const inventories = await Inventory.find(invQuery).lean();
+      pipeline.push({
+        $lookup: {
+          from: "inventories",
+          let: { productId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $and: invMatch },
+              },
+            },
+            {
+              $project: {
+                availableQty: {
+                  $max: [
+                    0,
+                    {
+                      $subtract: [
+                        { $ifNull: ["$quantity", 0] },
+                        { $ifNull: ["$reservedQuantity", 0] },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalStock: { $sum: "$availableQty" },
+              },
+            },
+          ],
+          as: "invData",
+        },
+      });
 
-      inventoryMap = inventories.reduce((acc: Record<string, number>, inv: any) => {
-        const availableQty = Math.max(0, (inv.quantity || 0) - (inv.reservedQuantity || 0));
-        const key = inv.product.toString();
-        acc[key] = (acc[key] || 0) + availableQty;
-        return acc;
-      }, {});
+      pipeline.push({
+        $addFields: {
+          warehouseStock: {
+            $ifNull: [{ $arrayElemAt: ["$invData.totalStock", 0] }, 0],
+          },
+          inStock: {
+            $gt: [{ $ifNull: [{ $arrayElemAt: ["$invData.totalStock", 0] }, 0] }, 0],
+          },
+        },
+      });
+    } else {
+      pipeline.push({
+        $addFields: {
+          warehouseStock: 0,
+          inStock: false,
+        },
+      });
     }
 
-    // 6. Map Output with Warehouse Stock Status
+    // 4. Facet Stage: Primary sort by stock status (inStock: true first), then latest created date BEFORE pagination
+    pipeline.push({
+      $facet: {
+        metadata: [{ $count: "total" }],
+        data: [
+          { $sort: { inStock: -1, createdAt: -1 } },
+          { $skip: skip },
+          { $limit: limit },
+          {
+            $lookup: {
+              from: "categories",
+              localField: "category",
+              foreignField: "_id",
+              as: "categoryDoc",
+            },
+          },
+          {
+            $unwind: { path: "$categoryDoc", preserveNullAndEmptyArrays: true },
+          },
+        ],
+      },
+    });
+
+    const aggregateResult = await Product.aggregate(pipeline);
+    const resultFacet = aggregateResult[0] || { metadata: [], data: [] };
+    const total = resultFacet.metadata[0] ? resultFacet.metadata[0].total : 0;
+    const products = resultFacet.data || [];
+
     const formattedProducts = products.map((p: any) => {
-      const warehouseStock = inventoryMap[p._id.toString()] || 0;
+      const categoryObj = p.categoryDoc
+        ? { _id: p.categoryDoc._id, name: p.categoryDoc.name, slug: p.categoryDoc.slug }
+        : p.category;
+
       return {
         _id: p._id,
         name: p.name,
         sku: p.sku,
         barcode: p.barcode,
-        category: p.category,
+        category: categoryObj,
         brand: p.brand || "",
         model: p.model || "",
         color: p.color || "Unspecified",
@@ -105,8 +172,8 @@ export async function GET(req: NextRequest) {
         images: p.images || [],
         description: p.description || "",
         serialTracking: Boolean(p.serialTracking),
-        warehouseStock,
-        inStock: warehouseStock > 0,
+        warehouseStock: p.warehouseStock || 0,
+        inStock: Boolean(p.inStock),
       };
     });
 
