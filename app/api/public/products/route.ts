@@ -152,10 +152,29 @@ export async function GET(req: NextRequest) {
     const total = resultFacet.metadata[0] ? resultFacet.metadata[0].total : 0;
     const products = resultFacet.data || [];
 
+    // 5. Calculate Effective Dynamic Prices via Central Pricing Engine
+    const { batchCalculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
+    const productIds = products.map((p: any) => p._id.toString());
+    const batchPricing = await batchCalculateProductWeightedPricing(productIds);
+
     const formattedProducts = products.map((p: any) => {
+      const pStr = p._id.toString();
+      const pricing = batchPricing[pStr] || {
+        priceConfigured: false,
+        avgCostPrice: null,
+        avgSellingPrice: null,
+        avgMinSellingPrice: null,
+        lastInvoiceDate: null,
+      };
+      const effective = resolveProductEffectivePricing(p as any, pricing);
+
       const categoryObj = p.categoryDoc
         ? { _id: p.categoryDoc._id, name: p.categoryDoc.name, slug: p.categoryDoc.slug }
         : p.category;
+
+      // Filter out dummy placeholder prices (e.g., sellingPrice <= 100) to safety-guard against Rs 1 placeholders
+      const finalSellingPrice = effective.sellingPrice > 100 ? effective.sellingPrice : 0;
+      const finalMinSellingPrice = effective.minSellingPrice > 100 ? effective.minSellingPrice : 0;
 
       return {
         _id: p._id,
@@ -167,8 +186,9 @@ export async function GET(req: NextRequest) {
         model: p.model || "",
         color: p.color || "Unspecified",
         condition: p.condition || "New",
-        sellingPrice: p.sellingPrice || 0,
-        minSellingPrice: p.minSellingPrice || 0,
+        sellingPrice: finalSellingPrice,
+        minSellingPrice: finalMinSellingPrice,
+        priceConfigured: Boolean(pricing.priceConfigured && finalSellingPrice > 0),
         images: p.images || [],
         description: p.description || "",
         serialTracking: Boolean(p.serialTracking),
