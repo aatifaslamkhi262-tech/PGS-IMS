@@ -87,6 +87,12 @@ function SalesWorkspaceContent() {
   const [reassignSale, setReassignSale] = useState<any | null>(null);
   const [targetSalesmanId, setTargetSalesmanId] = useState("");
 
+  // Queue Verification & Receipt States
+  const [selectedQueueSale, setSelectedQueueSale] = useState<any | null>(null);
+  const [showVerifyModal, setShowVerifyModal] = useState(false);
+  const [queuePaymentMethod, setQueuePaymentMethod] = useState<"CASH" | "CARD" | "BANK_TRANSFER">("CASH");
+  const [completingQueueSale, setCompletingQueueSale] = useState(false);
+
   const handleReassignSalesman = async () => {
     if (!reassignSale) return;
     try {
@@ -107,6 +113,64 @@ function SalesWorkspaceContent() {
       alert(err.message || "Network error.");
     }
   };
+
+  const handleCompleteQueueCheckout = async () => {
+    if (!selectedQueueSale) return;
+    try {
+      setCompletingQueueSale(true);
+      const res = await fetch(`/api/sales/${selectedQueueSale._id}/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paymentAllocations: [{ method: queuePaymentMethod, amount: selectedQueueSale.totalAmount }],
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const locObj = locations.find(
+          (l) => l._id === (selectedQueueSale.location?._id || selectedQueueSale.location)
+        );
+        const locName = locObj ? locObj.name : "Warehouse";
+
+        setCompletedReceiptData({
+          invoiceNumber: data.invoice?.invoiceNumber || selectedQueueSale.saleNumber,
+          date: new Date().toLocaleString(),
+          locationName: locName,
+          cashierName: currentUser?.username || "Warehouse Cashier",
+          salesmanName: selectedQueueSale.salesmanName || "Direct Counter",
+          customerName: selectedQueueSale.customerName || "Walk-in Customer",
+          customerPhone: selectedQueueSale.customerPhone || "N/A",
+          items: (selectedQueueSale.items || []).map((it: any) => ({
+            productName: it.productName || "Product Item",
+            condition: it.condition || "New",
+            quantity: it.quantity || 1,
+            unitPrice: it.unitPrice || 0,
+            lineTotal: it.lineTotal || (it.quantity * (it.unitPrice || 0)),
+            serialNumbers: it.serialNumbers || [],
+          })),
+          subtotal: selectedQueueSale.subtotal || selectedQueueSale.totalAmount,
+          discountAmount: selectedQueueSale.discountAmount || 0,
+          deliveryCharges: selectedQueueSale.deliveryCharges || 0,
+          totalAmount: selectedQueueSale.totalAmount,
+          paidAmount: selectedQueueSale.totalAmount,
+          changeDue: 0,
+          payments: [{ method: queuePaymentMethod, amount: selectedQueueSale.totalAmount }],
+        });
+
+        setShowReceiptModal(true);
+        setShowVerifyModal(false);
+        setSelectedQueueSale(null);
+        fetchQueue();
+      } else {
+        alert(data.error || "Failed to complete queue sale.");
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to complete queue checkout.");
+    } finally {
+      setCompletingQueueSale(false);
+    }
+  };
+
 
   // Mode: Online State
   const [shippingAddress, setShippingAddress] = useState("");
@@ -1344,68 +1408,159 @@ function SalesWorkspaceContent() {
         {/* Mode: QUEUE */}
         {mode === "QUEUE" && (
           <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-4">
-            <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-              <Clock className="w-4 h-4 text-amber-400" />
-              Warehouse Pending Billing Queue
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-amber-400" />
+                Warehouse Pending Billing Queue
+              </h3>
+              <button
+                onClick={fetchQueue}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded-lg font-semibold transition"
+              >
+                Refresh Queue 🔄
+              </button>
+            </div>
 
             {loadingQueue ? (
-              <div className="text-xs text-slate-400">Loading pending sales...</div>
+              <div className="text-xs text-slate-400 py-6 text-center">Loading pending sales...</div>
             ) : pendingSales.length === 0 ? (
               <div className="text-xs text-slate-500 py-6 text-center">
                 No pending billing sales in queue.
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {pendingSales.map((sale) => (
                   <div
                     key={sale._id}
-                    className="bg-slate-950 border border-slate-800 p-3 rounded-xl flex items-center justify-between text-xs"
+                    className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3 text-xs"
                   >
-                    <div>
+                    <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-amber-400">{sale.saleNumber}</span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                          sale.status === "COMPLETED"
-                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                            : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                        }`}>
+                        <span className="font-mono font-bold text-amber-400 text-sm">{sale.saleNumber}</span>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                            sale.status === "COMPLETED"
+                              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                              : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                          }`}
+                        >
                           {sale.status}
                         </span>
+                        {sale.saleSource && (
+                          <span className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 text-[10px] font-bold px-2 py-0.5 rounded">
+                            Source: {sale.saleSource}
+                          </span>
+                        )}
                       </div>
-                      <div className="text-slate-300 font-semibold mt-0.5">
-                        Customer: {sale.customerName || "Walk-in"} • Salesman:{" "}
-                        <span className="text-indigo-400 font-bold">{sale.salesmanName || "Direct Counter"}</span>
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        {sale.items?.length} line item(s) • Total: Rs. {sale.totalAmount?.toLocaleString()}
+
+                      <div className="text-[11px] text-slate-400">
+                        Date: {new Date(sale.createdAt).toLocaleString()}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          setReassignSale(sale);
-                          setTargetSalesmanId(sale.salesman?._id || sale.salesman || "");
-                          setShowReassignModal(true);
-                        }}
-                        className="bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
-                      >
-                        ✏️ Edit Salesman
-                      </button>
-                      {sale.status !== "COMPLETED" && (
+
+                    {/* Customer & Salesman Header */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 bg-slate-900/60 p-2.5 rounded-lg border border-slate-800/50">
+                      <div>
+                        <span className="text-slate-500 font-medium">Customer: </span>
+                        <span className="text-slate-200 font-bold">{sale.customerName || "Walk-in Customer"}</span>
+                        {sale.customerPhone && (
+                          <span className="text-slate-400 font-mono ml-2">({sale.customerPhone})</span>
+                        )}
+                      </div>
+                      <div>
+                        <span className="text-slate-500 font-medium">Salesman: </span>
+                        <span className="text-indigo-400 font-bold">{sale.salesmanName || "Direct Counter"}</span>
+                      </div>
+                    </div>
+
+                    {/* Items List Table */}
+                    <div className="overflow-x-auto border border-slate-800/80 rounded-lg">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-900 text-slate-400 text-[11px] font-semibold border-b border-slate-800">
+                            <th className="p-2">Product Name</th>
+                            <th className="p-2 text-center">Condition</th>
+                            <th className="p-2 text-center">Qty</th>
+                            <th className="p-2 text-right">Unit Price</th>
+                            <th className="p-2 text-right">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60">
+                          {(sale.items || []).map((item: any, idx: number) => (
+                            <tr key={idx} className="hover:bg-slate-900/30">
+                              <td className="p-2 font-medium text-slate-200">
+                                <div>{item.productName || item.title || "Product"}</div>
+                                {item.sku && <div className="text-[10px] text-slate-500 font-mono">SKU: {item.sku}</div>}
+                                {item.serialNumbers && item.serialNumbers.length > 0 && (
+                                  <div className="text-[10px] text-emerald-400 font-mono">
+                                    S/N: {item.serialNumbers.join(", ")}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="p-2 text-center text-slate-400">{item.condition || "New"}</td>
+                              <td className="p-2 text-center font-bold text-slate-200">{item.quantity}</td>
+                              <td className="p-2 text-right font-mono text-slate-300">
+                                Rs. {(item.unitPrice || 0).toLocaleString()}
+                              </td>
+                              <td className="p-2 text-right font-mono font-bold text-indigo-400">
+                                Rs. {(item.lineTotal || (item.unitPrice * item.quantity)).toLocaleString()}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Shipping / Notes Info if available */}
+                    {sale.notes && (
+                      <div className="text-[11px] bg-slate-900/40 p-2 rounded border border-slate-800/40 text-slate-400 italic">
+                        📝 {sale.notes}
+                      </div>
+                    )}
+
+                    {/* Totals & Actions Footer */}
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-800">
+                      <div className="flex items-center gap-4 text-xs font-mono">
+                        {sale.deliveryCharges > 0 && (
+                          <span className="text-slate-400">
+                            Delivery: <strong className="text-slate-200">Rs. {sale.deliveryCharges.toLocaleString()}</strong>
+                          </span>
+                        )}
+                        <span className="text-slate-200 font-bold">
+                          Total Payable: <span className="text-emerald-400 font-extrabold text-sm">Rs. {sale.totalAmount?.toLocaleString()}</span>
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
                         <button
-                          onClick={() => alert(`Reviewing sale ${sale.saleNumber}`)}
-                          className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg font-bold"
+                          onClick={() => {
+                            setReassignSale(sale);
+                            setTargetSalesmanId(sale.salesman?._id || sale.salesman || "");
+                            setShowReassignModal(true);
+                          }}
+                          className="bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
                         >
-                          Verify & Complete
+                          ✏️ Edit Salesman
                         </button>
-                      )}
-                      <button
-                        onClick={() => handleCancelQueueSale(sale._id, sale.saleNumber)}
-                        className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
-                      >
-                        🗑️ Cancel / Remove
-                      </button>
+                        {sale.status !== "COMPLETED" && (
+                          <button
+                            onClick={() => {
+                              setSelectedQueueSale(sale);
+                              setQueuePaymentMethod((sale.paymentMethod as any) || "CASH");
+                              setShowVerifyModal(true);
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg font-bold shadow-lg shadow-emerald-600/20 transition flex items-center gap-1"
+                          >
+                            ✅ Verify & Complete
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleCancelQueueSale(sale._id, sale.saleNumber)}
+                          className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
+                        >
+                          🗑️ Cancel
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -2726,6 +2881,117 @@ function SalesWorkspaceContent() {
           </div>
         )}
 
+        {/* Queue Order Verification & Final Payment Modal */}
+        {showVerifyModal && selectedQueueSale && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-lg w-full space-y-5 shadow-2xl">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-emerald-400" />
+                  Verify & Complete Order #{selectedQueueSale.saleNumber}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowVerifyModal(false);
+                    setSelectedQueueSale(null);
+                  }}
+                  className="text-slate-400 hover:text-slate-200 text-sm font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-3 text-xs">
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                  <div className="flex justify-between text-slate-300">
+                    <span>Customer:</span>
+                    <span className="font-bold text-slate-100">{selectedQueueSale.customerName || "Walk-in Customer"}</span>
+                  </div>
+                  {selectedQueueSale.customerPhone && (
+                    <div className="flex justify-between text-slate-400">
+                      <span>Phone:</span>
+                      <span className="font-mono text-slate-300">{selectedQueueSale.customerPhone}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-slate-400">
+                    <span>Salesman:</span>
+                    <span className="text-indigo-400 font-semibold">{selectedQueueSale.salesmanName || "Direct Counter"}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-100 font-mono font-bold pt-2 border-t border-slate-800 text-sm">
+                    <span>Total Amount Payable:</span>
+                    <span className="text-emerald-400 text-base">Rs. {selectedQueueSale.totalAmount?.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-slate-300">
+                    Select Payment Collection Method:
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setQueuePaymentMethod("CASH")}
+                      className={`py-2 px-3 rounded-xl font-bold border text-xs text-center transition ${
+                        queuePaymentMethod === "CASH"
+                          ? "bg-emerald-600 text-white border-emerald-500 shadow-md shadow-emerald-600/20"
+                          : "bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-800"
+                      }`}
+                    >
+                      💵 Cash
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setQueuePaymentMethod("CARD")}
+                      className={`py-2 px-3 rounded-xl font-bold border text-xs text-center transition ${
+                        queuePaymentMethod === "CARD"
+                          ? "bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/20"
+                          : "bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-800"
+                      }`}
+                    >
+                      💳 Card
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setQueuePaymentMethod("BANK_TRANSFER")}
+                      className={`py-2 px-3 rounded-xl font-bold border text-xs text-center transition ${
+                        queuePaymentMethod === "BANK_TRANSFER"
+                          ? "bg-cyan-600 text-white border-cyan-500 shadow-md shadow-cyan-600/20"
+                          : "bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-800"
+                      }`}
+                    >
+                      🏦 Bank / Raast
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowVerifyModal(false);
+                    setSelectedQueueSale(null);
+                  }}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={completingQueueSale}
+                  onClick={handleCompleteQueueCheckout}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/20 transition flex items-center gap-2"
+                >
+                  {completingQueueSale ? (
+                    <span>Processing...</span>
+                  ) : (
+                    <span>Complete & Print Invoice 🖨️</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
