@@ -187,9 +187,70 @@ export default function AdvanceBookingPage() {
       setScannedProductInfo(null);
       setScannedSerialNumbers([]);
       setSelectedProduct("");
+
+      if (data.data.receiptData) {
+        setCompletedReceiptData(data.data.receiptData);
+      }
+
       fetchBookings();
     } catch (err: any) {
       setError(err.message || "Network error creating advance booking.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePrintSlip = (b: any) => {
+    const locObj = locations.find((l) => l._id === b.location);
+    const locName = locObj ? locObj.name : "Warehouse";
+    setCompletedReceiptData({
+      invoiceNumber: `ADV-${b.saleNumber}`,
+      saleNumber: b.saleNumber,
+      date: new Date(b.createdAt).toLocaleString(),
+      locationName: locName,
+      cashierName: b.createdBy || "system",
+      salesmanName: b.salesmanName || "Direct Counter",
+      customerName: b.customerName || "Walk-in Customer",
+      customerPhone: b.customerPhone || "N/A",
+      items: (b.items || []).map((it: any) => ({
+        productName: it.productName || "Product Item",
+        condition: it.condition || "New",
+        quantity: it.quantity || 1,
+        unitPrice: it.unitPrice || 0,
+        lineTotal: it.lineTotal || (it.quantity * (it.unitPrice || 0)),
+        serialNumbers: it.serialNumbers || [],
+      })),
+      subtotal: b.subtotal,
+      discountAmount: b.discountAmount || 0,
+      deliveryCharges: b.deliveryCharges || 0,
+      totalAmount: b.totalAmount,
+      paidAmount: b.totalPaid || 0,
+      changeDue: 0,
+      balanceDue: b.totalAmount - (b.totalPaid || 0),
+      status: b.status === "COMPLETED" ? "COMPLETED" : "ADVANCE_BOOKED",
+      payments: [{ method: "CASH", amount: b.totalPaid || 0 }],
+    });
+  };
+
+  const handleCancelAdvanceBooking = async (saleId: string) => {
+    if (!confirm("Are you sure you want to CANCEL this Advance Booking? This will un-reserve serial numbers, refund advance payment, and revert stock.")) return;
+    setLoading(true);
+    setError("");
+
+    try {
+      const res = await fetch(`/api/sales/advance?saleId=${saleId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setError(data.error || "Failed to cancel advance booking.");
+        return;
+      }
+
+      setSuccessMsg(data.message || "Advance booking cancelled successfully.");
+      fetchBookings();
+    } catch (err: any) {
+      setError(err.message || "Network error cancelling advance booking.");
     } finally {
       setLoading(false);
     }
@@ -483,19 +544,41 @@ export default function AdvanceBookingPage() {
                         </span>
                       </td>
                       <td className="p-3 text-center font-sans">
-                        {b.status !== "COMPLETED" ? (
+                        <div className="flex items-center justify-center gap-1.5 flex-wrap">
                           <button
-                            onClick={() => {
-                              setSelectedBooking(b);
-                              setShowClearanceModal(true);
-                            }}
-                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold text-[10px] shadow"
+                            onClick={() => handlePrintSlip(b)}
+                            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 rounded-lg text-[10px] font-bold transition flex items-center gap-1"
+                            title="Print Advance Slip"
                           >
-                            Collect Pickup Balance
+                            Slip
                           </button>
-                        ) : (
-                          <span className="text-slate-500 text-[10px]">Delivered</span>
-                        )}
+                          {b.status !== "COMPLETED" && b.status !== "CANCELLED" && (
+                            <>
+                              <button
+                                onClick={() => {
+                                  setSelectedBooking(b);
+                                  setShowClearanceModal(true);
+                                }}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold text-[10px] shadow transition"
+                              >
+                                Collect Pickup Balance
+                              </button>
+                              <button
+                                onClick={() => handleCancelAdvanceBooking(b._id)}
+                                className="px-2 py-1 bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30 rounded-lg text-[10px] font-bold transition"
+                                title="Cancel Booking & Refund"
+                              >
+                                Cancel & Refund
+                              </button>
+                            </>
+                          )}
+                          {b.status === "COMPLETED" && (
+                            <span className="text-slate-500 text-[10px]">Delivered</span>
+                          )}
+                          {b.status === "CANCELLED" && (
+                            <span className="text-rose-400 text-[10px] font-bold">Cancelled</span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

@@ -83,6 +83,7 @@ function SalesWorkspaceContent() {
   // Mode: Queue / Recent Sales State & Reassign Modal
   const [pendingSales, setPendingSales] = useState<any[]>([]);
   const [loadingQueue, setLoadingQueue] = useState(false);
+  const [queueStatusFilter, setQueueStatusFilter] = useState<string>("PENDING");
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [reassignSale, setReassignSale] = useState<any | null>(null);
   const [targetSalesmanId, setTargetSalesmanId] = useState("");
@@ -332,12 +333,12 @@ function SalesWorkspaceContent() {
     if (mode === "QUEUE") {
       fetchQueue();
     }
-  }, [mode, selectedLocation]);
+  }, [mode, selectedLocation, queueStatusFilter]);
 
   const fetchQueue = async () => {
     try {
       setLoadingQueue(true);
-      const res = await fetch(`/api/sales/queue?locationId=${selectedLocation}`);
+      const res = await fetch(`/api/sales/queue?locationId=${selectedLocation}&status=${queueStatusFilter}`);
       const data = await res.json();
       if (data.success) {
         setPendingSales(data.data);
@@ -1219,23 +1220,74 @@ function SalesWorkspaceContent() {
                   {cartItems.map((item, idx) => (
                     <div
                       key={idx}
-                      className="bg-slate-950 border border-slate-800 p-2.5 rounded-xl flex items-center justify-between text-xs"
+                      className="bg-slate-950 border border-slate-800 p-2.5 rounded-xl flex items-center justify-between text-xs gap-2"
                     >
-                      <div className="flex-1">
-                        <div className="font-semibold text-slate-200">{item.product.name}</div>
-                        <div className="text-[11px] text-slate-400">
-                          Rs. {item.unitPrice?.toLocaleString()} x {item.quantity}
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-slate-200 truncate">{item.product.name}</div>
+                        <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5 mt-1">
+                          <span className="text-[10px] text-slate-500 uppercase font-bold">Price:</span>
+                          <input
+                            type="number"
+                            value={item.unitPrice}
+                            onChange={(e) => {
+                              const newPrice = Number(e.target.value);
+                              setCartItems(
+                                cartItems.map((it, i) =>
+                                  i === idx ? { ...it, unitPrice: Math.max(0, newPrice) } : it
+                                )
+                              );
+                            }}
+                            className="w-20 bg-slate-900 border border-slate-700 text-emerald-400 font-bold font-mono rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-emerald-500"
+                            title="Editable Unit Price"
+                          />
                         </div>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <span className="font-bold text-slate-100">
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (item.quantity > 1) {
+                              setCartItems(
+                                cartItems.map((it, i) =>
+                                  i === idx ? { ...it, quantity: it.quantity - 1 } : it
+                                )
+                              );
+                            } else {
+                              removeFromCart(idx);
+                            }
+                          }}
+                          className="w-5 h-5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold flex items-center justify-center border border-slate-750 text-xs"
+                        >
+                          -
+                        </button>
+                        <span className="font-bold text-slate-200 w-4 text-center font-mono">{item.quantity}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCartItems(
+                              cartItems.map((it, i) =>
+                                i === idx ? { ...it, quantity: it.quantity + 1 } : it
+                              )
+                            );
+                          }}
+                          className="w-5 h-5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold flex items-center justify-center border border-slate-750 text-xs"
+                        >
+                          +
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        <span className="font-bold text-indigo-400 font-mono text-xs">
                           Rs. {(item.unitPrice * item.quantity).toLocaleString()}
                         </span>
                         <button
+                          type="button"
                           onClick={() => removeFromCart(idx)}
-                          className="text-rose-400 hover:text-rose-300"
+                          className="text-rose-400 hover:text-rose-300 p-1"
+                          title="Remove item"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
@@ -1408,17 +1460,34 @@ function SalesWorkspaceContent() {
         {/* Mode: QUEUE */}
         {mode === "QUEUE" && (
           <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
               <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
                 <Clock className="w-4 h-4 text-amber-400" />
                 Warehouse Pending Billing Queue
               </h3>
-              <button
-                onClick={fetchQueue}
-                className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded-lg font-semibold transition"
-              >
-                Refresh Queue 🔄
-              </button>
+
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs">
+                  <span className="text-slate-500 font-bold uppercase text-[10px]">Filter Status:</span>
+                  <select
+                    value={queueStatusFilter}
+                    onChange={(e) => setQueueStatusFilter(e.target.value)}
+                    className="bg-transparent text-slate-200 font-bold focus:outline-none cursor-pointer"
+                  >
+                    <option value="PENDING" className="bg-slate-900 text-amber-400">⏳ Pending Queue</option>
+                    <option value="COMPLETED" className="bg-slate-900 text-emerald-400">✅ Completed Deals</option>
+                    <option value="CANCELLED" className="bg-slate-900 text-rose-400">❌ Cancelled Deals</option>
+                    <option value="ALL" className="bg-slate-900 text-indigo-400">🌐 All Orders</option>
+                  </select>
+                </div>
+
+                <button
+                  onClick={fetchQueue}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded-lg font-semibold transition"
+                >
+                  Refresh Queue 🔄
+                </button>
+              </div>
             </div>
 
             {loadingQueue ? (

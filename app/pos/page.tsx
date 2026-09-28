@@ -569,23 +569,43 @@ export default function POSPage() {
                       </button>
                     </div>
 
-                    <div className="flex flex-col items-end gap-1 shrink-0">
-                      <div className="flex items-center gap-1">
-                        <span className="text-[10px] text-slate-400">Disc:</span>
-                        <input
-                          type="number"
-                          placeholder="0"
-                          value={item.discountAmount || ""}
-                          onChange={(e) => {
-                            const val = Number(e.target.value);
-                            setCart((prev) => {
-                              const updated = [...prev];
-                              updated[idx] = { ...updated[idx], discountAmount: Math.max(0, val) };
-                              return updated;
-                            });
-                          }}
-                          className="w-16 bg-slate-900 border border-slate-700 text-slate-100 font-mono rounded px-1.5 py-0.5 text-[10px] text-right focus:outline-none focus:border-indigo-500"
-                        />
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-slate-400 font-medium">Price:</span>
+                          <input
+                            type="number"
+                            value={item.unitPrice}
+                            onChange={(e) => {
+                              const val = Number(e.target.value);
+                              setCart((prev) => {
+                                const updated = [...prev];
+                                updated[idx] = { ...updated[idx], unitPrice: Math.max(0, val) };
+                                return updated;
+                              });
+                            }}
+                            className="w-20 bg-slate-900 border border-slate-700 text-emerald-400 font-mono font-bold rounded px-1.5 py-0.5 text-[10px] text-right focus:outline-none focus:border-emerald-500"
+                            title="Editable Unit Selling Price"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-slate-400 font-medium">Disc:</span>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={item.discountAmount || ""}
+                            onChange={(e) => {
+                              const val = Number(e.target.value);
+                              setCart((prev) => {
+                                const updated = [...prev];
+                                updated[idx] = { ...updated[idx], discountAmount: Math.max(0, val) };
+                                return updated;
+                              });
+                            }}
+                            className="w-16 bg-slate-900 border border-slate-700 text-rose-300 font-mono rounded px-1.5 py-0.5 text-[10px] text-right focus:outline-none focus:border-rose-500"
+                            title="Line Item Discount"
+                          />
+                        </div>
                       </div>
                       <div className="font-bold text-indigo-400 font-mono text-xs">
                         Rs. {(item.unitPrice * item.quantity - item.discountAmount).toLocaleString()}
