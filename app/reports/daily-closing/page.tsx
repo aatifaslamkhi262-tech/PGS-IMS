@@ -25,6 +25,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { ThermalReceiptModal } from "@/components/ThermalReceipt";
+import { ThermalStaffHandoverModal, StaffHandoverData } from "@/components/ThermalStaffHandoverModal";
 
 export default function DailyClosingReportPage() {
   const [locations, setLocations] = useState<any[]>([]);
@@ -52,6 +53,10 @@ export default function DailyClosingReportPage() {
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [printReceiptData, setPrintReceiptData] = useState<any | null>(null);
   const [currentUser, setCurrentUser] = useState<any | null>(null);
+
+  // Thermal Staff Handover Modal
+  const [showHandoverModal, setShowHandoverModal] = useState(false);
+  const [handoverData, setHandoverData] = useState<StaffHandoverData | null>(null);
 
   useEffect(() => {
     fetchLocations();
@@ -226,6 +231,44 @@ export default function DailyClosingReportPage() {
 
     setPrintReceiptData(prepared);
     setShowReceiptModal(true);
+  };
+
+  const handlePrintStaffHandover = (sm: any) => {
+    const locObj = locations.find((l) => l._id === selectedLocation);
+    const locName = locObj ? locObj.name : "All Locations";
+
+    const attributedInvoices = rawSales
+      .filter((s: any) => {
+        if (sm.name === "Direct Counter") {
+          return !s.salesman;
+        }
+        return (
+          s.salesmanName === sm.name ||
+          (s.salesman && s.salesman.toString() === sm.id?.toString())
+        );
+      })
+      .map((s: any) => ({
+        invoiceNumber: s.saleNumber || `INV-${s._id.slice(-6).toUpperCase()}`,
+        totalAmount: s.totalAmount || 0,
+        isAccrued: Boolean(s.isAccrued),
+        customerName: s.customerName || "Walk-in",
+      }));
+
+    const handoverObj: StaffHandoverData = {
+      salesmanName: sm.name,
+      dateStr: selectedDate,
+      locationName: locName,
+      ordersClosed: sm.salesCount || 0,
+      realizedSales: sm.revenue || 0,
+      cogs: sm.cogs || 0,
+      realizedProfit: sm.profit || 0,
+      accruedSales: sm.accruedSales || 0,
+      accruedProfit: sm.accruedProfit || 0,
+      attributedInvoices,
+    };
+
+    setHandoverData(handoverObj);
+    setShowHandoverModal(true);
   };
 
   return (
@@ -512,6 +555,7 @@ export default function DailyClosingReportPage() {
                     <th className="p-3 text-right">Realized Profit</th>
                     <th className="p-3 text-right text-amber-400">Accrued Sales</th>
                     <th className="p-3 text-right text-amber-300">Accrued Profit</th>
+                    <th className="p-3 text-center">Handover Slip</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 font-mono">
@@ -531,6 +575,16 @@ export default function DailyClosingReportPage() {
                       </td>
                       <td className="p-3 text-right text-amber-300 font-bold">
                         Rs. {(sm.accruedProfit || 0).toLocaleString()}
+                      </td>
+                      <td className="p-3 text-center">
+                        <button
+                          onClick={() => handlePrintStaffHandover(sm)}
+                          title={`Print Handover Slip for ${sm.name}`}
+                          className="px-2.5 py-1 text-[11px] font-sans font-semibold rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 hover:bg-indigo-500/20 transition-all flex items-center gap-1.5 mx-auto shadow-sm"
+                        >
+                          <Printer className="w-3.5 h-3.5" />
+                          <span>Print Slip</span>
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -663,6 +717,17 @@ export default function DailyClosingReportPage() {
           onClose={() => {
             setShowReceiptModal(false);
             setPrintReceiptData(null);
+          }}
+        />
+      )}
+
+      {/* Thermal Staff Handover Modal */}
+      {showHandoverModal && handoverData && (
+        <ThermalStaffHandoverModal
+          handoverData={handoverData}
+          onClose={() => {
+            setShowHandoverModal(false);
+            setHandoverData(null);
           }}
         />
       )}

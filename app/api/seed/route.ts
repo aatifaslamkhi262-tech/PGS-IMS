@@ -10,8 +10,7 @@ import { hashPassword } from "@/lib/auth/password";
 export async function POST(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const allowSeed =
-      process.env.NODE_ENV === "development" || searchParams.get("dev") === "true";
+    const allowSeed = process.env.NODE_ENV === "development";
 
     if (!allowSeed) {
       return NextResponse.json(

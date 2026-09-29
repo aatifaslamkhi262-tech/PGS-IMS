@@ -201,5 +201,7 @@ const SaleSchema: Schema = new Schema(
   }
 );
 
+SaleSchema.index({ createdAt: -1, status: 1, location: 1 });
+
 export const Sale: Model<ISale> =
   mongoose.models.Sale || mongoose.model<ISale>("Sale", SaleSchema);

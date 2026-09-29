@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
     // PKT 23:59:59.999 = UTC Same Day 18:59:59.999
     const endDate = new Date(Date.UTC(year, month - 1, day, 18, 59, 59, 999));
 
-    // 1. Sales Query Filter
+    // 1. Build Query Filters for Independent Data Sources
     const saleQuery: any = {
       createdAt: { $gte: startDate, $lte: endDate },
       status: "COMPLETED",
@@ -38,8 +38,51 @@ export async function GET(req: NextRequest) {
       saleQuery.location = locationId;
     }
 
-    const sales = await Sale.find(saleQuery).lean();
+    const paymentQuery: any = {
+      createdAt: { $gte: startDate, $lte: endDate },
+      status: "PAID",
+    };
+    if (locationId !== "ALL") {
+      paymentQuery.location = locationId;
+    }
 
+    const movementQuery: any = {
+      date: { $gte: startDate, $lte: endDate },
+    };
+    if (locationId !== "ALL") {
+      movementQuery.$or = [
+        { sourceLocation: locationId },
+        { destinationLocation: locationId },
+      ];
+    }
+
+    const expenseQuery: any = {
+      date: { $gte: startDate, $lte: endDate },
+      status: "Approved",
+    };
+    if (locationId !== "ALL") {
+      expenseQuery.location = locationId;
+    }
+
+    // 2. Parallel Database Execution for All 5 Independent Queries
+    const [sales, payments, movements, expensesDocs, customerAgg] = await Promise.all([
+      Sale.find(saleQuery).lean(),
+      Payment.find(paymentQuery).lean(),
+      InventoryMovement.find(movementQuery).lean(),
+      Expense.find(expenseQuery).lean(),
+      Customer.aggregate([
+        { $match: { active: true } },
+        {
+          $group: {
+            _id: null,
+            outstanding: { $sum: "$outstandingBalance" },
+            customerAdvances: { $sum: "$advanceBalance" },
+          },
+        },
+      ]),
+    ]);
+
+    // 3. Process Sales & Profit Metrics
     let totalSales = 0;
     let accruedSales = 0;
     let accruedProfit = 0;
@@ -69,17 +112,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 2. Payments & Channels Query
-    const paymentQuery: any = {
-      createdAt: { $gte: startDate, $lte: endDate },
-      status: "PAID",
-    };
-    if (locationId !== "ALL") {
-      paymentQuery.location = locationId;
-    }
-
-    const payments = await Payment.find(paymentQuery).lean();
-
+    // 4. Process Payments & Payment Channels
     let cashReceived = 0;
     let card = 0;
     let bankOnline = 0;
@@ -94,19 +127,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 3. Inventory Movements (Stock-In Acquisition, Returns, Exchanges, Customer Buybacks)
-    const movementQuery: any = {
-      date: { $gte: startDate, $lte: endDate },
-    };
-    if (locationId !== "ALL") {
-      movementQuery.$or = [
-        { sourceLocation: locationId },
-        { destinationLocation: locationId },
-      ];
-    }
-
-    const movements = await InventoryMovement.find(movementQuery).lean();
-
+    // 5. Process Inventory Movements
     let stockInAcquisitionValue = 0;
     let customerSettlementReceived = 0;
     let cashRefunds = 0;
@@ -126,26 +147,17 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 4. Expenses
-    const expenseQuery: any = {
-      date: { $gte: startDate, $lte: endDate },
-      status: "Approved",
-    };
-    if (locationId !== "ALL") {
-      expenseQuery.location = locationId;
-    }
-
-    const expensesDocs = await Expense.find(expenseQuery).lean();
+    // 6. Process Expenses
     const expenses = expensesDocs.reduce((sum, e) => sum + Number(e.amount || 0), 0);
 
-    // 5. Profit Metrics
+    // 7. Profit Metrics
     const grossProfit = totalSales - cogs;
     const netProfit = grossProfit - expenses;
 
-    // 6. Outstanding & Customer Advances
-    const customers = await Customer.find({ active: true }).select("outstandingBalance advanceBalance").lean();
-    const outstanding = customers.reduce((sum, c) => sum + Number(c.outstandingBalance || 0), 0);
-    const customerAdvances = customers.reduce((sum, c) => sum + Number(c.advanceBalance || 0), 0);
+    // 8. Outstanding & Customer Advances via MongoDB Aggregate Result
+    const customerTotals = customerAgg[0] || { outstanding: 0, customerAdvances: 0 };
+    const outstanding = Number(customerTotals.outstanding || 0);
+    const customerAdvances = Number(customerTotals.customerAdvances || 0);
 
     return NextResponse.json({
       success: true,
