@@ -55,7 +55,17 @@ export async function recordCustomerLedgerEntry(
   switch (input.type) {
     case "INVOICE":
       debit = amount;
-      newOutstanding += amount;
+      if (newAdvance > 0) {
+        if (newAdvance >= amount) {
+          newAdvance -= amount;
+        } else {
+          const remaining = amount - newAdvance;
+          newAdvance = 0;
+          newOutstanding += remaining;
+        }
+      } else {
+        newOutstanding += amount;
+      }
       break;
 
     case "PAYMENT":

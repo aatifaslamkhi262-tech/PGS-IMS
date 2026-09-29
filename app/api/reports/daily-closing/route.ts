@@ -41,6 +41,8 @@ export async function GET(req: NextRequest) {
     const sales = await Sale.find(saleQuery).lean();
 
     let totalSales = 0;
+    let accruedSales = 0;
+    let accruedProfit = 0;
     let cogs = 0;
     let stockOutValue = 0;
 
@@ -51,8 +53,15 @@ export async function GET(req: NextRequest) {
         if (staffId !== "DIRECT" && s.salesman?.toString() !== staffId) continue;
       }
 
-      totalSales += s.totalAmount || 0;
-      cogs += s.totalCost || 0;
+      const saleProfit = (s.totalAmount || 0) - (s.totalCost || 0);
+
+      if (s.isAccrued) {
+        accruedSales += s.totalAmount || 0;
+        accruedProfit += saleProfit;
+      } else {
+        totalSales += s.totalAmount || 0;
+        cogs += s.totalCost || 0;
+      }
 
       for (const item of s.items || []) {
         const itemCost = item.unitCost !== undefined && item.unitCost >= 0 ? item.unitCost : 0;
@@ -104,8 +113,6 @@ export async function GET(req: NextRequest) {
     let customerSettlementPaid = 0;
 
     for (const m of (movements as any[])) {
-      // Stock-In Acquisition Value represents business inventory acquisitions (Supplier Purchases & Customer Buybacks ONLY).
-      // Customer Returns are reversals of previous sales and do NOT count as new acquisition value.
       if (m.type === "SUPPLIER_PURCHASE" || m.type === "CUSTOMER_BUYBACK" || m.type === "PURCHASE_RECEIVING" || (m.type === "STOCK_IN" && m.referenceType !== "RETURN_EXCHANGE")) {
         stockInAcquisitionValue += m.totalCost || 0;
       }
@@ -145,9 +152,10 @@ export async function GET(req: NextRequest) {
       data: {
         date: dateStr,
         locationId,
-        // 15 Required Stat Cards
         cards: {
           totalSales,
+          accruedSales,
+          accruedProfit,
           cashReceived,
           card,
           bankOnline,

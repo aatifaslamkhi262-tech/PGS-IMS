@@ -12,6 +12,7 @@ import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 import { recordCashMovement } from "@/lib/cashSessionEngine";
 import { CashSession } from "@/models/CashSession";
 import { lockIdempotencyKey, completeIdempotencyKey, failIdempotencyKey } from "@/lib/idempotencyEngine";
+import { resolveOrCreateCustomer } from "@/lib/customerResolver";
 import { verifyRole } from "@/lib/auth/rbac";
 
 export async function POST(req: NextRequest) {
@@ -57,20 +58,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "At least one buyback item is required." }, { status: 400 });
     }
 
-    // Lookup or create customer by phone if phone provided
-    let customerObj: any = null;
-    if (customerId) {
-      customerObj = await Customer.findById(customerId);
-    } else if (customerPhone && customerPhone.trim()) {
-      customerObj = await Customer.findOne({ phone: customerPhone.trim() });
-      if (!customerObj && customerName && customerName.trim()) {
-        customerObj = new Customer({
-          name: customerName.trim(),
-          phone: customerPhone.trim(),
-        });
-        await customerObj.save();
-      }
-    }
+    // Lookup or auto-create customer via central resolver
+    const targetCustId = await resolveOrCreateCustomer({
+      customerId,
+      customerName,
+      customerPhone,
+    });
+    const customerObj = targetCustId ? await Customer.findById(targetCustId) : null;
 
     const session = await mongoose.startSession();
     try {

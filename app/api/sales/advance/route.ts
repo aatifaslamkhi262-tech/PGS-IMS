@@ -9,6 +9,8 @@ import { SerialNumber } from "@/models/SerialNumber";
 import { CashSession } from "@/models/CashSession";
 import { recordCashMovement } from "@/lib/cashSessionEngine";
 
+import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
+
 export async function POST(request: Request) {
   try {
     await dbConnect();
@@ -60,16 +62,30 @@ export async function POST(request: Request) {
       }
     }
 
+    const targetCustId = sale.customer ? sale.customer.toString() : customerId;
+
     // 3. Record Advance Payment
     const payment = await recordPayment({
       saleId: sale._id.toString(),
       locationId,
-      customerId,
+      customerId: targetCustId,
       paymentMethod: paymentMethod || "CASH",
       amount: advanceAmount,
       receivedBy: createdBy || "system",
       notes: `Advance Down-Payment for Booking #${sale.saleNumber}`,
     });
+
+    if (targetCustId) {
+      await recordCustomerLedgerEntry({
+        customerId: targetCustId,
+        type: "ADVANCE_DEPOSIT",
+        amount: advanceAmount,
+        referenceType: "Payment",
+        referenceId: payment.paymentNumber,
+        notes: `Advance Down-Payment for Booking #${sale.saleNumber}`,
+        createdBy: createdBy || "system",
+      });
+    }
 
     const locationDoc = await Location.findById(locationId);
 

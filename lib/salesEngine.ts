@@ -14,6 +14,7 @@ import { getPoolAverageCost, deductInventoryWithAverageCost } from "@/lib/averag
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 import { recordCashMovement } from "@/lib/cashSessionEngine";
 import { CashSession } from "@/models/CashSession";
+import { resolveOrCreateCustomer } from "@/lib/customerResolver";
 
 export async function generateSaleNumber(): Promise<string> {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
@@ -182,10 +183,11 @@ export async function createSaleInput(input: CreateSaleInput) {
     salesmanObjId = new Types.ObjectId(input.salesmanId);
   }
 
-  let customerObjId: Types.ObjectId | undefined;
-  if (input.customerId && Types.ObjectId.isValid(input.customerId)) {
-    customerObjId = new Types.ObjectId(input.customerId);
-  }
+  let customerObjId = await resolveOrCreateCustomer({
+    customerId: input.customerId,
+    customerName: input.customerName,
+    customerPhone: input.customerPhone,
+  });
 
   const initialStatus =
     input.creationMode === "SALESMAN_CHECKOUT"

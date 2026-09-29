@@ -109,16 +109,26 @@ export default function DailyClosingReportPage() {
         setRawSales(data.data.rawSales || []);
 
         // Group salesman attribution for table
-        const smMap: Record<string, { name: string; salesCount: number; revenue: number; cogs: number; profit: number }> = {};
+        const smMap: Record<
+          string,
+          { name: string; salesCount: number; revenue: number; cogs: number; profit: number; accruedSales: number; accruedProfit: number }
+        > = {};
         for (const s of data.data.rawSales || []) {
           const smName = s.salesmanName || "Direct Counter";
           if (!smMap[smName]) {
-            smMap[smName] = { name: smName, salesCount: 0, revenue: 0, cogs: 0, profit: 0 };
+            smMap[smName] = { name: smName, salesCount: 0, revenue: 0, cogs: 0, profit: 0, accruedSales: 0, accruedProfit: 0 };
           }
           smMap[smName].salesCount += 1;
-          smMap[smName].revenue += s.totalAmount || 0;
-          smMap[smName].cogs += s.totalCost || 0;
-          smMap[smName].profit += (s.totalAmount || 0) - (s.totalCost || 0);
+          const saleProfit = (s.totalAmount || 0) - (s.totalCost || 0);
+
+          if (s.isAccrued) {
+            smMap[smName].accruedSales += s.totalAmount || 0;
+            smMap[smName].accruedProfit += saleProfit;
+          } else {
+            smMap[smName].revenue += s.totalAmount || 0;
+            smMap[smName].cogs += s.totalCost || 0;
+            smMap[smName].profit += saleProfit;
+          }
         }
         setSalesmanBreakdown(Object.values(smMap));
       } else {
@@ -128,6 +138,27 @@ export default function DailyClosingReportPage() {
       setError("Failed to generate report.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleAccrued = async (sale: any, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const res = await fetch(`/api/sales/${sale._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "TOGGLE_ACCRUED" }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSuccessMsg(data.message);
+        await fetchReport();
+        setTimeout(() => setSuccessMsg(""), 3500);
+      } else {
+        setError(data.error || "Failed to update accrued status.");
+      }
+    } catch {
+      setError("Failed to update accrued status.");
     }
   };
 
@@ -398,13 +429,13 @@ export default function DailyClosingReportPage() {
             </div>
           </div>
 
-          {/* SECTION 4: PROFIT & KHATA BALANCES (Cards 11 to 15) */}
+          {/* SECTION 4: PROFIT & KHATA BALANCES (Cards 11 to 17) */}
           <div className="space-y-2">
             <h2 className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-2">
               <TrendingUp className="w-4 h-4" />
               4. Profitability & Ledger Balances
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
               <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-1">
                 <span className="text-[10px] font-bold text-emerald-400 uppercase">11. Gross Profit</span>
                 <p className="text-xl font-mono font-bold text-emerald-400">
@@ -420,9 +451,23 @@ export default function DailyClosingReportPage() {
               </div>
 
               <div className="bg-slate-900 border border-emerald-500/30 p-4 rounded-2xl space-y-1 bg-emerald-500/5">
-                <span className="text-[10px] font-bold text-emerald-300 uppercase">13. Net Profit</span>
+                <span className="text-[10px] font-bold text-emerald-300 uppercase">13. Realized Net Profit</span>
                 <p className="text-xl font-mono font-bold text-emerald-300">
                   Rs. {cards.netProfit.toLocaleString()}
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-amber-500/30 p-4 rounded-2xl space-y-1 bg-amber-500/5">
+                <span className="text-[10px] font-bold text-amber-400 uppercase">16. Accrued Sales</span>
+                <p className="text-xl font-mono font-bold text-amber-400">
+                  Rs. {(cards.accruedSales || 0).toLocaleString()}
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-amber-500/30 p-4 rounded-2xl space-y-1 bg-amber-500/5">
+                <span className="text-[10px] font-bold text-amber-300 uppercase">17. Accrued Profit</span>
+                <p className="text-xl font-mono font-bold text-amber-300">
+                  Rs. {(cards.accruedProfit || 0).toLocaleString()}
                 </p>
               </div>
 
@@ -462,9 +507,11 @@ export default function DailyClosingReportPage() {
                   <tr>
                     <th className="p-3">Salesman / Attribution</th>
                     <th className="p-3 text-center">Orders Closed</th>
-                    <th className="p-3 text-right">Total Sales</th>
+                    <th className="p-3 text-right">Realized Sales</th>
                     <th className="p-3 text-right">COGS</th>
-                    <th className="p-3 text-right">Net Profit Generated</th>
+                    <th className="p-3 text-right">Realized Profit</th>
+                    <th className="p-3 text-right text-amber-400">Accrued Sales</th>
+                    <th className="p-3 text-right text-amber-300">Accrued Profit</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 font-mono">
@@ -478,6 +525,12 @@ export default function DailyClosingReportPage() {
                       <td className="p-3 text-right text-slate-400">Rs. {sm.cogs.toLocaleString()}</td>
                       <td className="p-3 text-right text-emerald-400 font-bold">
                         Rs. {sm.profit.toLocaleString()}
+                      </td>
+                      <td className="p-3 text-right text-amber-400 font-bold">
+                        Rs. {(sm.accruedSales || 0).toLocaleString()}
+                      </td>
+                      <td className="p-3 text-right text-amber-300 font-bold">
+                        Rs. {(sm.accruedProfit || 0).toLocaleString()}
                       </td>
                     </tr>
                   ))}
@@ -533,6 +586,11 @@ export default function DailyClosingReportPage() {
                               <span className="font-mono font-bold text-slate-100 text-xs">
                                 {sale.invoiceNumber || `INV-${sale._id.slice(-6).toUpperCase()}`}
                               </span>
+                              {sale.isAccrued && (
+                                <span className="bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-bold px-2 py-0.5 rounded">
+                                  🟧 Accrued Sale
+                                </span>
+                              )}
                               <span className="text-[10px] font-semibold text-slate-500">
                                 {new Date(sale.createdAt).toLocaleTimeString([], {
                                   hour: "2-digit",
@@ -557,8 +615,8 @@ export default function DailyClosingReportPage() {
 
                           <div className="text-left md:text-right">
                             <span className="text-[10px] text-slate-400 block font-sans">Profit</span>
-                            <span className="font-mono font-bold text-emerald-400 text-xs">
-                              Rs. {profit.toLocaleString()}
+                            <span className={`font-mono font-bold text-xs ${sale.isAccrued ? "text-amber-400" : "text-emerald-400"}`}>
+                              Rs. {profit.toLocaleString()} {sale.isAccrued ? "(Accrued)" : ""}
                             </span>
                           </div>
 
@@ -568,6 +626,17 @@ export default function DailyClosingReportPage() {
                           </div>
 
                           <div className="flex items-center gap-2">
+                            <button
+                              onClick={(e) => handleToggleAccrued(sale, e)}
+                              className={`px-2.5 py-1.5 text-[11px] font-bold rounded-lg transition border flex items-center gap-1 ${
+                                sale.isAccrued
+                                  ? "bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30"
+                                  : "bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white"
+                              }`}
+                              title={sale.isAccrued ? "Unmark Accrued (Mark as Realized)" : "Mark as Accrued Sale"}
+                            >
+                              {sale.isAccrued ? "🟧 Accrued (Unmark)" : "Mark Accrued"}
+                            </button>
                             <button
                               onClick={(e) => handlePrintSlip(sale, e)}
                               className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"

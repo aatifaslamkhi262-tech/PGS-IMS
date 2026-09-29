@@ -208,11 +208,27 @@ export async function PATCH(
 
     const { id } = await params;
     const body = await req.json();
-    const { salesmanId } = body;
+    const { salesmanId, action, isAccrued } = body;
 
     const sale = await Sale.findById(id);
     if (!sale) {
       return NextResponse.json({ success: false, error: "Sale not found." }, { status: 404 });
+    }
+
+    if (action === "TOGGLE_ACCRUED" || isAccrued !== undefined) {
+      const newAccruedState = isAccrued !== undefined ? Boolean(isAccrued) : !sale.isAccrued;
+      sale.isAccrued = newAccruedState;
+      sale.accruedMarkedBy = auth.user.username;
+      sale.accruedMarkedAt = new Date();
+      await sale.save();
+
+      return NextResponse.json({
+        success: true,
+        message: newAccruedState
+          ? `Sale ${sale.saleNumber} marked as Accrued Sale.`
+          : `Sale ${sale.saleNumber} unmarked from Accrued Sale (Realized).`,
+        data: sale,
+      });
     }
 
     if (salesmanId) {

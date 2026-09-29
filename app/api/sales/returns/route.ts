@@ -11,6 +11,7 @@ import { updateAverageCostOnIntake, deductInventoryWithAverageCost } from "@/lib
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 import { recordCashMovement } from "@/lib/cashSessionEngine";
 import { CashSession } from "@/models/CashSession";
+import { resolveOrCreateCustomer } from "@/lib/customerResolver";
 import { lockIdempotencyKey, completeIdempotencyKey, failIdempotencyKey } from "@/lib/idempotencyEngine";
 import { verifyRole } from "@/lib/auth/rbac";
 
@@ -284,7 +285,11 @@ export async function POST(request: Request) {
     }
 
     // Customer Ledger Records
-    const targetCustId = originalSale?.customer || body.customerId;
+    const targetCustId = originalSale?.customer || await resolveOrCreateCustomer({
+      customerId: body.customerId,
+      customerName: customerName || body.customerName,
+      customerPhone: customerPhone || body.customerPhone,
+    }, isTxActive ? session : undefined);
     if (targetCustId) {
       await recordCustomerLedgerEntry(
         {
@@ -314,6 +319,24 @@ export async function POST(request: Request) {
           },
           isTxActive ? session : undefined
         );
+      }
+
+      if (netDifference > 0) {
+        const topUpPaid = netDifference;
+        if (topUpPaid > 0) {
+          await recordCustomerLedgerEntry(
+            {
+              customerId: targetCustId.toString(),
+              type: "PAYMENT",
+              amount: topUpPaid,
+              referenceType: "Exchange",
+              referenceId: returnTxNumber,
+              notes: `Exchange net top-up payment for ${returnTxNumber}`,
+              createdBy: processedBy || auth.user?.username || "system",
+            },
+            isTxActive ? session : undefined
+          );
+        }
       }
     }
 

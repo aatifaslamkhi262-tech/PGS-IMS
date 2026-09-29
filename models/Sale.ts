@@ -62,6 +62,9 @@ export interface ISale {
   totalCost: number; // Total COGS
   netProfit: number; // Total Profit (Total - COGS - Direct Expenses)
   status: SaleStatus;
+  isAccrued?: boolean;
+  accruedMarkedBy?: string;
+  accruedMarkedAt?: Date;
   processingStartedAt?: Date;
   processingAttemptId?: string;
   notes?: string;
@@ -179,6 +182,9 @@ const SaleSchema: Schema = new Schema(
       default: "CHECKOUT",
       index: true,
     },
+    isAccrued: { type: Boolean, default: false, index: true },
+    accruedMarkedBy: { type: String },
+    accruedMarkedAt: { type: Date },
     processingStartedAt: { type: Date },
     processingAttemptId: { type: String },
     notes: { type: String, trim: true },
