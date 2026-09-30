@@ -4,8 +4,11 @@ import { verifyApiKey } from "@/lib/auth/apiKey";
 import { Product } from "@/models/Product";
 import { Location } from "@/models/Location";
 import { Sale } from "@/models/Sale";
+import { lockIdempotencyKey, completeIdempotencyKey, failIdempotencyKey } from "@/lib/idempotencyEngine";
+import { resolveOrCreateCustomer } from "@/lib/customerResolver";
 
 export async function POST(req: NextRequest) {
+  let idempotencyKeyHeader = "";
   try {
     await dbConnect();
 
@@ -16,6 +19,19 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json().catch(() => ({}));
+    idempotencyKeyHeader = req.headers.get("x-idempotency-key") || body.idempotencyKey || "";
+
+    // 2. Lock Idempotency Key to prevent duplicate web checkout orders
+    if (idempotencyKeyHeader) {
+      const lockRes = await lockIdempotencyKey(idempotencyKeyHeader, body, "/api/public/checkout");
+      if (lockRes.isDuplicate) {
+        return NextResponse.json(
+          lockRes.responseBody || { success: false, error: lockRes.error },
+          { status: lockRes.statusCode || 409 }
+        );
+      }
+    }
+
     const {
       customerName,
       customerPhone,
@@ -26,36 +42,48 @@ export async function POST(req: NextRequest) {
       items,
     } = body;
 
-    // 2. Validate Payload
+    // 3. Validate Payload
     if (!customerName || !customerName.trim()) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
       return NextResponse.json({ success: false, error: "Customer Name is required." }, { status: 400 });
     }
     if (!customerPhone || !customerPhone.trim()) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
       return NextResponse.json({ success: false, error: "Customer Phone is required." }, { status: 400 });
     }
     if (!shippingAddress || !shippingAddress.trim()) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
       return NextResponse.json({ success: false, error: "Shipping Address is required." }, { status: 400 });
     }
     if (!items || !Array.isArray(items) || items.length === 0) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
       return NextResponse.json({ success: false, error: "At least one order item is required." }, { status: 400 });
     }
 
-    // 3. Find Central Warehouse Location
+    // 4. Find Central Warehouse Location
     let warehouseLocation = await Location.findOne({ type: "Warehouse", active: true }).lean();
     if (!warehouseLocation) {
       warehouseLocation = await Location.findOne({ active: true }).lean();
     }
     if (!warehouseLocation) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
       return NextResponse.json({ success: false, error: "Central Warehouse location not configured." }, { status: 500 });
     }
 
-    // 4. Validate and Process Order Line Items
+    // 5. Auto-Resolve / Create Customer in CRM Database
+    const customerObjId = await resolveOrCreateCustomer({
+      customerName: customerName.trim(),
+      customerPhone: customerPhone.trim(),
+    });
+
+    // 6. Validate and Process Order Line Items
     const validatedItems = [];
     let subtotal = 0;
     let totalCost = 0;
 
     for (const item of items) {
       if (!item.productId) {
+        if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
         return NextResponse.json({ success: false, error: "Product ID is required for all line items." }, { status: 400 });
       }
 
@@ -63,6 +91,7 @@ export async function POST(req: NextRequest) {
       const product = await Product.findById(item.productId);
 
       if (!product || !product.active || product.isDeleted) {
+        if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
         return NextResponse.json(
           { success: false, error: `Product '${item.productId}' is not available.` },
           { status: 400 }
@@ -99,19 +128,20 @@ export async function POST(req: NextRequest) {
     const totalAmount = subtotal + delFee;
     const netProfit = totalAmount - totalCost;
 
-    // 5. Generate Sale Number
+    // 7. Generate Unique Web Sale Number
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     const saleNumber = `WEB-${dateStr}-${Math.floor(1000 + Math.random() * 9000)}`;
 
     const fullNotes = `Shipping Address: ${shippingAddress.trim()}${notes ? ` | Notes: ${notes.trim()}` : ""}`;
 
-    // 6. Create Sale Invoice Document in MongoDB
+    // 8. Create Sale Invoice Document in MongoDB
     const sale = new Sale({
       saleNumber,
       creationMode: "WAREHOUSE_QUICK_SALE",
       saleSource: "WEBSITE",
       location: warehouseLocation._id,
       locationName: warehouseLocation.name,
+      customer: customerObjId,
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),
       items: validatedItems,
@@ -132,7 +162,7 @@ export async function POST(req: NextRequest) {
 
     await sale.save();
 
-    return NextResponse.json({
+    const responseData = {
       success: true,
       data: {
         saleId: sale._id,
@@ -141,8 +171,15 @@ export async function POST(req: NextRequest) {
         totalAmount: sale.totalAmount,
         createdAt: sale.createdAt,
       },
-    });
+    };
+
+    if (idempotencyKeyHeader) {
+      await completeIdempotencyKey(idempotencyKeyHeader, 200, responseData);
+    }
+
+    return NextResponse.json(responseData);
   } catch (error: any) {
+    if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
     return NextResponse.json(
       { success: false, error: error.message || "Failed to process web order checkout." },
       { status: 500 }

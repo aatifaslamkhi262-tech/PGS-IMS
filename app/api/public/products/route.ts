@@ -188,6 +188,7 @@ export async function GET(req: NextRequest) {
         condition: p.condition || "New",
         sellingPrice: finalSellingPrice,
         minSellingPrice: finalMinSellingPrice,
+        originalPrice: p.sellingPrice && p.sellingPrice > finalSellingPrice ? p.sellingPrice : finalSellingPrice,
         priceConfigured: Boolean(pricing.priceConfigured && finalSellingPrice > 0),
         images: p.images || [],
         description: p.description || "",
@@ -197,16 +198,23 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return NextResponse.json({
-      success: true,
-      data: formattedProducts,
-      pagination: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+    return NextResponse.json(
+      {
+        success: true,
+        data: formattedProducts,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
       },
-    });
+      {
+        headers: {
+          "Cache-Control": "public, s-maxage=120, stale-while-revalidate=300",
+        },
+      }
+    );
   } catch (error: any) {
     return NextResponse.json(
       { success: false, error: error.message || "Failed to fetch public products." },

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { PurchaseInvoice } from "@/models/PurchaseInvoice";
+import { SerialNumber } from "@/models/SerialNumber";
 import "@/models/Supplier"; // Ensure Supplier model is registered
 import { verifyRole } from "@/lib/auth/rbac";
 
@@ -25,7 +26,35 @@ export async function GET(
       return NextResponse.json({ success: false, error: "Purchase Invoice not found." }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, data: invoice });
+    // Fetch real active serial numbers from SerialNumber collection for these products
+    const productIds = (invoice.items || []).map(
+      (it: any) => (it.product?._id || it.product)
+    ).filter(Boolean);
+
+    const activeSerialDocs = await SerialNumber.find({
+      product: { $in: productIds },
+      status: { $in: ["Available", "Reserved"] },
+    }).lean();
+
+    const itemsWithRealSerials = (invoice.items || []).map((it: any) => {
+      const pId = (it.product?._id || it.product)?.toString();
+      const matchedSerials = activeSerialDocs
+        .filter((s: any) => s.product?.toString() === pId)
+        .map((s: any) => s.serialNumber);
+
+      return {
+        ...it,
+        serialNumbers: matchedSerials.length > 0 ? matchedSerials : (it.serialNumbers || []),
+      };
+    });
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        ...invoice,
+        items: itemsWithRealSerials,
+      },
+    });
   } catch (error: any) {
     return NextResponse.json(
       { success: false, error: error.message || "Failed to fetch purchase invoice." },

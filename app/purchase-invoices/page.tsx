@@ -18,9 +18,13 @@ import {
   RotateCcw,
   ShieldAlert,
   Printer,
+  MoreVertical,
+  Eye,
 } from "lucide-react";
 import { ToastContainer, ToastMessage } from "@/components/Toast";
 import { PurchaseReceiptModal } from "@/components/PurchaseReceiptModal";
+import { PurchaseReturnModal } from "@/components/PurchaseReturnModal";
+import { PurchaseReturnReceiptModal } from "@/components/PurchaseReturnReceiptModal";
 
 interface InvoiceItem {
   _id: string;
@@ -47,10 +51,15 @@ export default function PurchaseInvoicesPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
-  // Toasts & Print State
+  // Toasts, Print & Return State
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [selectedPrintInvoice, setSelectedPrintInvoice] = useState<any>(null);
   const [printingId, setPrintingId] = useState<string | null>(null);
+
+  // 3-Dot Action Menu & Return Modals
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [returnInvoiceId, setReturnInvoiceId] = useState<string | null>(null);
+  const [selectedReturnReceipt, setSelectedReturnReceipt] = useState<any>(null);
 
   const addToast = (type: "success" | "error" | "info", text: string) => {
     const id = Date.now().toString();
@@ -419,27 +428,66 @@ export default function PurchaseInvoicesPage() {
                         {getStatusLabel(inv.status)}
                       </span>
                     </td>
-                    <td className="p-4 text-right flex items-center justify-end gap-1.5">
-                      <button
-                        onClick={() => handlePrintClick(inv._id)}
-                        disabled={printingId === inv._id}
-                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 px-2 py-1 bg-slate-800/80 border border-slate-700/60 rounded cursor-pointer"
-                        title="Print Purchase Voucher"
-                      >
-                        {printingId === inv._id ? (
-                          <span className="w-3 h-3 border border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
-                        ) : (
-                          <Printer className="w-3 h-3" />
+                    <td className="p-4 text-right relative">
+                      <div className="relative inline-block text-left">
+                        <button
+                          type="button"
+                          onClick={() => setOpenMenuId(openMenuId === inv._id ? null : inv._id)}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition cursor-pointer"
+                          title="Actions Menu"
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+
+                        {/* 3-Dot Action Dropdown Menu */}
+                        {openMenuId === inv._id && (
+                          <div className="absolute right-0 mt-1 w-44 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-40 overflow-hidden py-1 text-xs divide-y divide-slate-800/80">
+                            <div className="py-0.5">
+                              <Link
+                                href={`/purchase-invoices/${inv._id}`}
+                                onClick={() => setOpenMenuId(null)}
+                                className="w-full text-left px-3 py-2 flex items-center gap-2 font-semibold text-indigo-400 hover:bg-slate-800 transition"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>1. View Details</span>
+                              </Link>
+                            </div>
+
+                            <div className="py-0.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenMenuId(null);
+                                  handlePrintClick(inv._id);
+                                }}
+                                disabled={printingId === inv._id}
+                                className="w-full text-left px-3 py-2 flex items-center gap-2 font-semibold text-emerald-400 hover:bg-slate-800 transition cursor-pointer"
+                              >
+                                {printingId === inv._id ? (
+                                  <span className="w-3.5 h-3.5 border border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
+                                ) : (
+                                  <Printer className="w-3.5 h-3.5" />
+                                )}
+                                <span>2. Print Voucher</span>
+                              </button>
+                            </div>
+
+                            <div className="py-0.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenMenuId(null);
+                                  setReturnInvoiceId(inv._id);
+                                }}
+                                className="w-full text-left px-3 py-2 flex items-center gap-2 font-semibold text-amber-400 hover:bg-slate-800 transition cursor-pointer"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>3. Return to Supplier</span>
+                              </button>
+                            </div>
+                          </div>
                         )}
-                        <span>Print</span>
-                      </button>
-                      <Link
-                        href={`/purchase-invoices/${inv._id}`}
-                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 px-2 py-1 bg-slate-800/80 border border-slate-700/60 rounded"
-                      >
-                        <span>View Details</span>
-                        <ChevronRight className="w-3 h-3" />
-                      </Link>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -479,13 +527,22 @@ export default function PurchaseInvoicesPage() {
                   <div className="text-xs font-bold text-slate-100">
                     Rs. {inv.total.toLocaleString("en-PK")}
                   </div>
-                  <Link
-                    href={`/purchase-invoices/${inv._id}`}
-                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300"
-                  >
-                    <span>View Details</span>
-                    <ChevronRight className="w-3 h-3" />
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setReturnInvoiceId(inv._id)}
+                      className="px-2 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold rounded"
+                    >
+                      ↩ Return
+                    </button>
+                    <Link
+                      href={`/purchase-invoices/${inv._id}`}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300"
+                    >
+                      <span>View</span>
+                      <ChevronRight className="w-3 h-3" />
+                    </Link>
+                  </div>
                 </div>
               </div>
             ))}
@@ -520,6 +577,28 @@ export default function PurchaseInvoicesPage() {
             notes: selectedPrintInvoice.notes,
           }}
           onClose={() => setSelectedPrintInvoice(null)}
+        />
+      )}
+
+      {/* Purchase Return Modal */}
+      {returnInvoiceId && (
+        <PurchaseReturnModal
+          invoiceId={returnInvoiceId}
+          onClose={() => setReturnInvoiceId(null)}
+          onSuccess={(receiptData) => {
+            setReturnInvoiceId(null);
+            setSelectedReturnReceipt(receiptData);
+            addToast("success", `Purchase Return ${receiptData.returnTxNumber} completed!`);
+            fetchInvoices();
+          }}
+        />
+      )}
+
+      {/* 80mm Thermal Receipt Slip Modal for Purchase Return */}
+      {selectedReturnReceipt && (
+        <PurchaseReturnReceiptModal
+          receiptData={selectedReturnReceipt}
+          onClose={() => setSelectedReturnReceipt(null)}
         />
       )}
     </div>
