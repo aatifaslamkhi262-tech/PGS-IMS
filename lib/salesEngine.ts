@@ -1,4 +1,4 @@
-import mongoose, { Types } from "mongoose";
+import mongoose, { Types, ClientSession } from "mongoose";
 import { dbConnect } from "@/lib/db";
 import { Sale, ISale, ISaleItem, CreationMode, SaleSource } from "@/models/Sale";
 import { Invoice } from "@/models/Invoice";
