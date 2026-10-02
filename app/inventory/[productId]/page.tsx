@@ -52,6 +52,8 @@ interface DetailsState {
     sourceName: string;
     destinationName: string;
     type: string;
+    referenceType?: string;
+    referenceId?: string;
     referenceTransaction?: string;
     beforeQuantity: number;
     afterQuantity: number;
@@ -372,8 +374,20 @@ export default function ProductInventoryDetailsPage() {
                       {new Date(move.date).toLocaleString()}
                     </td>
                     <td className="p-3">
-                      <span className={`px-2 py-0.5 text-[9px] font-bold rounded uppercase ${getMovementTypeBadge(move.type)}`}>
-                        {move.type.replace("_", " ")}
+                      <span className={`px-2 py-0.5 text-[9px] font-bold rounded uppercase ${
+                        move.referenceType === "RENTAL_BOOKING" || move.referenceType === "RENTAL_SWAP"
+                          ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                          : move.referenceType === "RENTAL_RETURN"
+                          ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                          : getMovementTypeBadge(move.type)
+                      }`}>
+                        {move.referenceType === "RENTAL_BOOKING"
+                          ? "RENTAL ISSUE"
+                          : move.referenceType === "RENTAL_RETURN"
+                          ? "RENTAL RETURN"
+                          : move.referenceType === "RENTAL_SWAP"
+                          ? "RENTAL SWAP"
+                          : move.type.replace("_", " ")}
                       </span>
                     </td>
                     <td className="p-3 font-semibold text-slate-300">
@@ -392,7 +406,7 @@ export default function ProductInventoryDetailsPage() {
                       {move.beforeQuantity} &rarr; {move.afterQuantity}
                     </td>
                     <td className="p-3 font-bold text-slate-200 font-mono">
-                      {move.referenceTransaction || "N/A"}
+                      {move.referenceTransaction || move.referenceId || "N/A"}
                     </td>
                     <td className="p-3 text-center text-slate-450 font-medium">
                       <div className="flex flex-col text-[10px] items-center">

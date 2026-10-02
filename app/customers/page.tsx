@@ -27,6 +27,7 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
   const [customerSales, setCustomerSales] = useState<any[]>([]);
+  const [customerRentals, setCustomerRentals] = useState<any[]>([]);
   const [salesmen, setSalesmen] = useState<any[]>([]);
   const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -112,10 +113,17 @@ export default function CustomersPage() {
   const fetchCustomerHistory = async (cust: any) => {
     try {
       const queryParam = cust.phone ? `search=${encodeURIComponent(cust.phone)}` : `customerId=${cust._id}`;
-      const res = await fetch(`/api/sales?${queryParam}&limit=100`);
-      const data = await res.json();
-      if (data.success) {
-        setCustomerSales(data.data);
+      const [salesRes, rentalRes] = await Promise.all([
+        fetch(`/api/sales?${queryParam}&limit=100`),
+        fetch(`/api/sales/rentals?query=${encodeURIComponent(cust.phone || cust.name)}`),
+      ]);
+      const salesData = await salesRes.json();
+      const rentalData = await rentalRes.json();
+      if (salesData.success) {
+        setCustomerSales(salesData.data);
+      }
+      if (rentalData.success && Array.isArray(rentalData.data)) {
+        setCustomerRentals(rentalData.data);
       }
     } catch {
       // Silent error for history
@@ -220,9 +228,13 @@ export default function CustomersPage() {
     }
   };
 
-  // Compute total customer purchases & paid
-  const totalPurchases = customerSales.reduce((sum, s) => sum + s.totalAmount, 0);
-  const totalPaid = customerSales.reduce((sum, s) => sum + s.totalPaid, 0);
+  // Compute total active customer purchases, paid & active rental deposits
+  const activeSales = customerSales.filter((s) => s.status !== "CANCELLED");
+  const totalPurchases = activeSales.reduce((sum, s) => sum + s.totalAmount, 0);
+  const totalPaid = activeSales.reduce((sum, s) => sum + (s.totalPaid || s.totalAmount), 0);
+  const activeRentalDepositTotal = customerRentals
+    .filter((r) => r.status !== "COMPLETED")
+    .reduce((sum, r) => sum + (r.totalDepositHeld || 0), 0);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 lg:p-6 space-y-6">
@@ -383,9 +395,9 @@ export default function CustomersPage() {
                 </div>
 
                 <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
-                  <span className="text-[10px] font-bold text-purple-400 uppercase">Advance Deposit Balance</span>
+                  <span className="text-[10px] font-bold text-purple-400 uppercase">Advance & Rental Deposits</span>
                   <p className="font-mono font-bold text-purple-400 text-sm">
-                    Rs. {selectedCustomer.advanceBalance.toLocaleString()}
+                    Rs. {(selectedCustomer.advanceBalance + activeRentalDepositTotal).toLocaleString()}
                   </p>
                 </div>
               </div>
@@ -432,13 +444,17 @@ export default function CustomersPage() {
                                 Rs. {s.totalAmount?.toLocaleString()}
                               </td>
                               <td className="p-3 text-right text-emerald-400">
-                                Rs. {(s.totalPaid || s.totalAmount)?.toLocaleString()}
+                                {s.status === "CANCELLED" ? "Rs. 0" : `Rs. ${(s.totalPaid || s.totalAmount)?.toLocaleString()}`}
                               </td>
                               <td className="p-3 text-right font-bold text-rose-400">
-                                Rs. {(s.balanceDue || 0).toLocaleString()}
+                                {s.status === "CANCELLED" ? "Rs. 0" : `Rs. ${(s.balanceDue || 0).toLocaleString()}`}
                               </td>
                               <td className="p-3 text-center font-sans">
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  s.status === "CANCELLED"
+                                    ? "bg-rose-950/80 text-rose-400 border border-rose-800/60"
+                                    : "bg-slate-800 text-slate-300 border border-slate-700"
+                                }`}>
                                   {s.status}
                                 </span>
                               </td>

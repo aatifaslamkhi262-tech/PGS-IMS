@@ -16,28 +16,124 @@ import { recordCashMovement } from "@/lib/cashSessionEngine";
 import { CashSession } from "@/models/CashSession";
 import { resolveOrCreateCustomer } from "@/lib/customerResolver";
 
-export async function generateSaleNumber(): Promise<string> {
+export async function generateSaleNumber(session?: ClientSession): Promise<string> {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const count = await Sale.countDocuments({
-    saleNumber: new RegExp(`^SALE-${dateStr}`),
+  const prefix = `SALE-${dateStr}-`;
+
+  const countQuery: any = Sale.countDocuments({
+    saleNumber: new RegExp(`^${prefix}`),
   });
-  return `SALE-${dateStr}-${String(count + 1).padStart(3, "0")}`;
+  if (session && countQuery && typeof countQuery.session === "function") {
+    countQuery.session(session);
+  }
+  const count = typeof countQuery?.exec === "function" ? await countQuery.exec() : await countQuery;
+  let nextSeq = (count || 0) + 1;
+
+  if (count > 0) {
+    let lastDoc: any = null;
+    const rawQuery: any = Sale.findOne({
+      saleNumber: new RegExp(`^${prefix}`),
+    });
+    if (rawQuery && typeof rawQuery.sort === "function") {
+      const sortedQuery = rawQuery.sort({ saleNumber: -1 });
+      if (session && typeof sortedQuery.session === "function") {
+        sortedQuery.session(session);
+      }
+      lastDoc = typeof sortedQuery.exec === "function" ? await sortedQuery.exec() : await sortedQuery;
+    } else if (rawQuery) {
+      lastDoc = await rawQuery;
+    }
+
+    if (lastDoc && lastDoc.saleNumber) {
+      const parts = lastDoc.saleNumber.split("-");
+      const lastSeq = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(lastSeq) && lastSeq >= nextSeq) {
+        nextSeq = lastSeq + 1;
+      }
+    }
+  }
+
+  return `${prefix}${String(nextSeq).padStart(3, "0")}`;
 }
 
-export async function generateInvoiceNumber(): Promise<string> {
+export async function generateInvoiceNumber(session?: ClientSession): Promise<string> {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const count = await Invoice.countDocuments({
-    invoiceNumber: new RegExp(`^INV-${dateStr}`),
+  const prefix = `INV-${dateStr}-`;
+
+  const countQuery: any = Invoice.countDocuments({
+    invoiceNumber: new RegExp(`^${prefix}`),
   });
-  return `INV-${dateStr}-${String(count + 1).padStart(3, "0")}`;
+  if (session && countQuery && typeof countQuery.session === "function") {
+    countQuery.session(session);
+  }
+  const count = typeof countQuery?.exec === "function" ? await countQuery.exec() : await countQuery;
+  let nextSeq = (count || 0) + 1;
+
+  if (count > 0) {
+    let lastDoc: any = null;
+    const rawQuery: any = Invoice.findOne({
+      invoiceNumber: new RegExp(`^${prefix}`),
+    });
+    if (rawQuery && typeof rawQuery.sort === "function") {
+      const sortedQuery = rawQuery.sort({ invoiceNumber: -1 });
+      if (session && typeof sortedQuery.session === "function") {
+        sortedQuery.session(session);
+      }
+      lastDoc = typeof sortedQuery.exec === "function" ? await sortedQuery.exec() : await sortedQuery;
+    } else if (rawQuery) {
+      lastDoc = await rawQuery;
+    }
+
+    if (lastDoc && lastDoc.invoiceNumber) {
+      const parts = lastDoc.invoiceNumber.split("-");
+      const lastSeq = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(lastSeq) && lastSeq >= nextSeq) {
+        nextSeq = lastSeq + 1;
+      }
+    }
+  }
+
+  return `${prefix}${String(nextSeq).padStart(3, "0")}`;
 }
 
-export async function generatePaymentNumber(): Promise<string> {
+export async function generatePaymentNumber(session?: ClientSession): Promise<string> {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const count = await Payment.countDocuments({
-    paymentNumber: new RegExp(`^PAY-${dateStr}`),
+  const prefix = `PAY-${dateStr}-`;
+
+  const countQuery: any = Payment.countDocuments({
+    paymentNumber: new RegExp(`^${prefix}`),
   });
-  return `PAY-${dateStr}-${String(count + 1).padStart(3, "0")}`;
+  if (session && countQuery && typeof countQuery.session === "function") {
+    countQuery.session(session);
+  }
+  const count = typeof countQuery?.exec === "function" ? await countQuery.exec() : await countQuery;
+  let nextSeq = (count || 0) + 1;
+
+  if (count > 0) {
+    let lastDoc: any = null;
+    const rawQuery: any = Payment.findOne({
+      paymentNumber: new RegExp(`^${prefix}`),
+    });
+    if (rawQuery && typeof rawQuery.sort === "function") {
+      const sortedQuery = rawQuery.sort({ paymentNumber: -1 });
+      if (session && typeof sortedQuery.session === "function") {
+        sortedQuery.session(session);
+      }
+      lastDoc = typeof sortedQuery.exec === "function" ? await sortedQuery.exec() : await sortedQuery;
+    } else if (rawQuery) {
+      lastDoc = await rawQuery;
+    }
+
+    if (lastDoc && lastDoc.paymentNumber) {
+      const parts = lastDoc.paymentNumber.split("-");
+      const lastSeq = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(lastSeq) && lastSeq >= nextSeq) {
+        nextSeq = lastSeq + 1;
+      }
+    }
+  }
+
+  return `${prefix}${String(nextSeq).padStart(3, "0")}`;
 }
 
 export interface CreateSaleInput {
@@ -366,7 +462,7 @@ export async function completeSale(input: CompleteSaleInput) {
 
     // 5. Moving Average Cost Calculation & Inventory Deduction (Serialized + Non-Serialized)
     let recalculatedTotalCost = 0;
-    const invoiceNumber = await generateInvoiceNumber();
+    const invoiceNumber = await generateInvoiceNumber(session);
 
     for (const item of sale.items) {
       const invBefore = await Inventory.findOne({

@@ -7,6 +7,7 @@ import { Payment } from "@/models/Payment";
 import { InventoryMovement } from "@/models/InventoryMovement";
 import { Expense } from "@/models/Expense";
 import { Customer } from "@/models/Customer";
+import { RentalBooking } from "@/models/RentalBooking";
 import { verifyRole } from "@/lib/auth/rbac";
 
 export async function GET(req: NextRequest) {
@@ -24,10 +25,9 @@ export async function GET(req: NextRequest) {
 
     // 1. Build Pakistan Standard Time (PKT - Asia/Karachi, UTC+5) Date Window
     const [year, month, day] = dateStr.split("-").map(Number);
-    // PKT 00:00:00 = UTC Previous Day 19:00:00
+    // PKT 00:00:00 = UTC Previous Day 19:00:00 to end of day
     const startDate = new Date(Date.UTC(year, month - 1, day - 1, 19, 0, 0, 0));
-    // PKT 23:59:59.999 = UTC Same Day 18:59:59.999
-    const endDate = new Date(Date.UTC(year, month - 1, day, 18, 59, 59, 999));
+    const endDate = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
 
     // 1. Build Query Filters for Independent Data Sources
     const saleQuery: any = {
@@ -47,12 +47,19 @@ export async function GET(req: NextRequest) {
     }
 
     const movementQuery: any = {
-      date: { $gte: startDate, $lte: endDate },
+      $or: [
+        { date: { $gte: startDate, $lte: endDate } },
+        { createdAt: { $gte: startDate, $lte: endDate } },
+      ],
     };
     if (locationId !== "ALL") {
-      movementQuery.$or = [
-        { sourceLocation: locationId },
-        { destinationLocation: locationId },
+      movementQuery.$and = [
+        {
+          $or: [
+            { sourceLocation: locationId },
+            { destinationLocation: locationId },
+          ],
+        },
       ];
     }
 
@@ -64,8 +71,18 @@ export async function GET(req: NextRequest) {
       expenseQuery.location = locationId;
     }
 
-    // 2. Parallel Database Execution for All 5 Independent Queries
-    const [sales, payments, movements, expensesDocs, customerAgg] = await Promise.all([
+    const rentalBookingQuery: any = {
+      $or: [
+        { createdAt: { $gte: startDate, $lte: endDate } },
+        { "items.returnedAt": { $gte: startDate, $lte: endDate } },
+      ],
+    };
+    if (locationId !== "ALL") {
+      rentalBookingQuery.location = locationId;
+    }
+
+    // 2. Parallel Database Execution for All Independent Queries
+    const [sales, payments, movements, expensesDocs, customerAgg, rentalBookings] = await Promise.all([
       Sale.find(saleQuery).lean(),
       Payment.find(paymentQuery).lean(),
       InventoryMovement.find(movementQuery).lean(),
@@ -80,6 +97,7 @@ export async function GET(req: NextRequest) {
           },
         },
       ]),
+      RentalBooking.find(rentalBookingQuery).lean(),
     ]);
 
     // 3. Process Sales & Profit Metrics
@@ -127,15 +145,58 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Include cash from completed counter sales if separate payment collection records do not exist
+    if (payments.length === 0) {
+      for (const s of sales) {
+        if (!s.isAccrued && s.status === "COMPLETED") {
+          cashReceived += s.totalPaid || s.totalAmount || 0;
+        }
+      }
+    }
+
+    // Include Rental Booking Security Deposits in Cash Received & Track Rental Cash Refunds
+    let rentalDepositsToday = 0;
+    let rentalRefundsToday = 0;
+
+    for (const r of (rentalBookings as any[])) {
+      if (r.createdAt && new Date(r.createdAt) >= startDate && new Date(r.createdAt) <= endDate) {
+        if (r.status !== "COMPLETED") {
+          rentalDepositsToday += r.totalDepositHeld || 0;
+        }
+      }
+
+      for (const item of r.items || []) {
+        if (item.status === "RETURNED" && item.returnedAt) {
+          const retDate = new Date(item.returnedAt);
+          if (retDate >= startDate && retDate <= endDate) {
+            if (item.netRefundPaid && item.netRefundPaid > 0) {
+              rentalRefundsToday += item.netRefundPaid;
+            }
+          }
+        }
+      }
+    }
+    cashReceived += rentalDepositsToday;
+
     // 5. Process Inventory Movements
     let stockInAcquisitionValue = 0;
     let customerSettlementReceived = 0;
-    let cashRefunds = 0;
-    let customerSettlementPaid = 0;
+    let cashRefunds = rentalRefundsToday;
+    let customerSettlementPaid = rentalRefundsToday;
 
     for (const m of (movements as any[])) {
-      if (m.type === "SUPPLIER_PURCHASE" || m.type === "CUSTOMER_BUYBACK" || m.type === "PURCHASE_RECEIVING" || (m.type === "STOCK_IN" && m.referenceType !== "RETURN_EXCHANGE")) {
+      if (
+        m.type === "SUPPLIER_PURCHASE" ||
+        m.type === "CUSTOMER_BUYBACK" ||
+        m.type === "PURCHASE_RECEIVING" ||
+        m.type === "RETURN_IN" ||
+        (m.type === "STOCK_IN" && m.referenceType !== "RETURN_EXCHANGE")
+      ) {
         stockInAcquisitionValue += m.totalCost || 0;
+      }
+
+      if (m.type === "SALE_OUT" && (m.referenceType === "RENTAL_BOOKING" || m.referenceType === "RENTAL_SWAP")) {
+        stockOutValue += m.totalCost || 0;
       }
 
       if (m.referenceType === "RETURN_EXCHANGE") {
@@ -157,7 +218,7 @@ export async function GET(req: NextRequest) {
     // 8. Outstanding & Customer Advances via MongoDB Aggregate Result
     const customerTotals = customerAgg[0] || { outstanding: 0, customerAdvances: 0 };
     const outstanding = Number(customerTotals.outstanding || 0);
-    const customerAdvances = Number(customerTotals.customerAdvances || 0);
+    let customerAdvances = Number(customerTotals.customerAdvances || 0) + rentalDepositsToday;
 
     return NextResponse.json({
       success: true,

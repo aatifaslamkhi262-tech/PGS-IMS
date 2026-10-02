@@ -24,6 +24,8 @@ import {
   Barcode,
   QrCode,
   Scan,
+  ShoppingBag,
+  X,
 } from "lucide-react";
 import { CameraBarcodeScannerModal } from "@/components/CameraBarcodeScannerModal";
 import { ThermalReceiptModal } from "@/components/ThermalReceipt";
@@ -79,6 +81,17 @@ function SalesWorkspaceContent() {
   const [receiptData, setReceiptData] = useState<any | null>(null);
   const [completedReceiptData, setCompletedReceiptData] = useState<any | null>(null);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
+
+  // POS Transaction Mode Switcher
+  const [posType, setPosType] = useState<"STANDARD" | "RENTAL">("STANDARD");
+
+  // Rental Booking Search & Partial Return States
+  const [rentalSearchQuery, setRentalSearchQuery] = useState("");
+  const [selectedRentalBooking, setSelectedRentalBooking] = useState<any | null>(null);
+  const [selectedRentalReturnItems, setSelectedRentalReturnItems] = useState<string[]>([]);
+  const [searchingRental, setSearchingRental] = useState(false);
+  const [topUpModalOpen, setTopUpModalOpen] = useState(false);
+  const [topUpAmountInput, setTopUpAmountInput] = useState(0);
 
   // Mode: Queue / Recent Sales State & Reassign Modal
   const [pendingSales, setPendingSales] = useState<any[]>([]);
@@ -237,6 +250,58 @@ function SalesWorkspaceContent() {
     setScanBarcodeInput("");
 
     try {
+      // 1. If target is RENTAL_IN or code starts with RENT-, check for active RentalBooking first
+      if (target === "RENTAL_IN" || code.toUpperCase().startsWith("RENT-")) {
+        const rentRes = await fetch(`/api/sales/rentals?query=${encodeURIComponent(code)}`);
+        const rentData = await rentRes.json();
+        if (rentData.success && Array.isArray(rentData.data) && rentData.data.length > 0) {
+          const booking = rentData.data[0];
+          setSelectedRentalBooking(booking);
+
+          const activeItem = booking.items?.find((it: any) => it.status === "ON_RENT") || booking.items?.[0];
+          if (activeItem) {
+            const matchedProdId = (activeItem.product?._id || activeItem.product).toString();
+            setRentalReturnProdId(matchedProdId);
+
+            // Ensure scanned product exists in dropdown options
+            const prodObj = products.find((p) => p._id?.toString() === matchedProdId);
+            if (!prodObj && activeItem.productName) {
+              setProducts((prev) => [
+                {
+                  _id: matchedProdId,
+                  name: activeItem.productName,
+                  sku: activeItem.sku,
+                  sellingPrice: activeItem.depositPaid,
+                },
+                ...prev,
+              ]);
+            }
+
+            // Auto-fill Security Deposit Paid
+            setRentalSecurityDeposit(activeItem.depositPaid || booking.totalDepositHeld || 0);
+
+            // Auto-calculate Rent Cut based on days rented & perDayRate
+            const rentedDate = new Date(activeItem.rentedAt || booking.createdAt);
+            const now = new Date();
+            const diffDays = Math.max(1, Math.ceil((now.getTime() - rentedDate.getTime()) / (1000 * 3600 * 24)));
+            const calculatedRentCut = activeItem.perDayRate > 0 ? diffDays * activeItem.perDayRate : 0;
+            setRentalFeeDeducted(calculatedRentCut);
+
+            if (activeItem.serialNumber) {
+              setRentalReturnSerial(activeItem.serialNumber);
+            }
+            if (activeItem.condition) {
+              setRentalReturnCondition(activeItem.condition);
+            }
+
+            if (booking.customerName) setCustomerName(booking.customerName);
+            if (booking.customerPhone) setCustomerPhone(booking.customerPhone);
+
+            return;
+          }
+        }
+      }
+
       const scanRes = await fetch(`/api/barcodes/scan?barcode=${encodeURIComponent(code)}`);
       const scanData = await scanRes.json();
 
@@ -256,8 +321,13 @@ function SalesWorkspaceContent() {
       }
 
       if (!foundProduct) {
-        alert(`Barcode / Product '${code}' not found.`);
+        alert(`Barcode / Product / Rental Invoice '${code}' not found.`);
         return;
+      }
+
+      // Ensure scanned product exists in dropdown options
+      if (!products.some((p) => p._id?.toString() === foundProduct._id?.toString())) {
+        setProducts((prev) => [foundProduct, ...prev]);
       }
 
       if (target === "ONLINE") {
@@ -278,19 +348,22 @@ function SalesWorkspaceContent() {
               condition: foundProduct.condition || "New",
               quantity: 1,
               unitPrice: foundProduct.sellingPrice || 0,
-              serialNumber: "",
+              serialNumber: scannedSerial || "",
             },
           ]);
         }
       } else if (target === "TRADEIN_IN") {
         setTradeInProductId(foundProduct._id);
+        if (scannedSerial) setTradeInSerial(scannedSerial);
       } else if (target === "TRADEIN_OUT") {
         setReplacementProductId(foundProduct._id);
       } else if (target === "RENTAL_IN") {
         setRentalReturnProdId(foundProduct._id);
+        if (scannedSerial) setRentalReturnSerial(scannedSerial);
       } else if (target === "RENTAL_OUT") {
         setNewReplacementProdId(foundProduct._id);
         setNewReplacementPrice(foundProduct.sellingPrice || 0);
+        if (scannedSerial) setNewReplacementSerial(scannedSerial);
       } else if (target === "POS") {
         addToCart(foundProduct, scannedSerial);
       }
@@ -609,15 +682,13 @@ function SalesWorkspaceContent() {
       setSubmitting(true);
       const idempotencyKey = `ADV-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-      const res = await fetch("/api/sales", {
+      const res = await fetch("/api/sales/advance", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-idempotency-key": idempotencyKey,
         },
         body: JSON.stringify({
-          creationMode: "DIRECT_COUNTER",
-          saleSource: "ADVANCE_BOOKING",
           locationId: selectedLocation,
           salesmanId: selectedSalesman || undefined,
           customerName: customerName || "Advance Booking Customer",
@@ -629,17 +700,23 @@ function SalesWorkspaceContent() {
             condition: it.condition || "New",
             serialNumbers: it.serialNumber ? [it.serialNumber] : [],
           })),
-          notes: `Advance Deposit Received: Rs. ${advanceDeposit.toLocaleString()} (Total Booking: Rs. ${advanceTotalPrice.toLocaleString()}, Remaining: Rs. ${Math.max(0, advanceTotalPrice - advanceDeposit).toLocaleString()}) • Expected Pickup: ${expectedDate || "N/A"}`,
+          advanceAmount: advanceDeposit,
+          paymentMethod: paymentMethod || "CASH",
           createdBy: currentUser?.username || currentUser?.name || "counter-staff",
         }),
       });
 
       const data = await res.json();
       if (data.success) {
-        alert(`Advance booking ${data.data.saleNumber} registered with ${advanceItems.length} item(s) successfully!`);
+        const saleDoc = data.data?.sale;
+        alert(`Advance booking ${saleDoc?.saleNumber || ""} registered with ${advanceItems.length} item(s) successfully!`);
         setAdvanceItems([]);
         setAdvanceDeposit(0);
         setExpectedDate("");
+        if (data.data?.receiptData) {
+          setReceiptData(data.data.receiptData);
+          setShowReceiptModal(true);
+        }
       } else {
         alert(data.error || "Failed to register advance booking.");
       }
@@ -882,6 +959,190 @@ function SalesWorkspaceContent() {
     }
   };
 
+  const handleCompleteRentalBooking = async () => {
+    if (cartItems.length === 0) {
+      alert("Cart is empty.");
+      return;
+    }
+    if (!selectedLocation) {
+      alert("Please select a location.");
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      const res = await fetch("/api/sales/rentals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          locationId: selectedLocation,
+          salesmanId: selectedSalesman || undefined,
+          customerName: customerName || "Walk-in Rental Customer",
+          customerPhone: customerPhone || undefined,
+          items: cartItems.map((it) => ({
+            productId: it.product._id,
+            depositPaid: it.depositPaid !== undefined ? Number(it.depositPaid) : (it.product.originalPrice || it.unitPrice || 0),
+            perDayRate: it.perDayRate !== undefined ? Number(it.perDayRate) : 200,
+            serialNumber: (it.serialNumbers && it.serialNumbers[0]) ? it.serialNumbers[0] : undefined,
+            condition: it.product.condition || "Used",
+          })),
+          processedBy: currentUser?.username || currentUser?.name || "system",
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success && data.data) {
+        const booking = data.data;
+        const selectedSalesmanObj = salesmen.find((s) => s._id === selectedSalesman);
+
+        setCompletedReceiptData({
+          invoiceNumber: booking.bookingNumber,
+          date: new Date(),
+          locationName: locations.find((l) => l._id === selectedLocation)?.name || "Warehouse",
+          cashierName: currentUser?.username || currentUser?.name || "Counter Staff",
+          salesmanName: selectedSalesmanObj ? selectedSalesmanObj.name : "Direct Counter",
+          customerName: customerName || "Walk-in Rental Customer",
+          customerPhone: customerPhone || "N/A",
+          items: booking.items.map((it: any) => ({
+            productName: `[RENTAL DEPOSIT BOOKING] ${it.productName} (Rate: Rs. ${it.perDayRate}/day)`,
+            condition: it.condition || "Used",
+            quantity: 1,
+            unitPrice: it.depositPaid,
+            lineTotal: it.depositPaid,
+            serialNumbers: it.serialNumber ? [it.serialNumber] : [],
+          })),
+          subtotal: booking.totalDepositHeld,
+          discountAmount: 0,
+          deliveryCharges: 0,
+          totalAmount: booking.totalDepositHeld,
+          paidAmount: booking.totalDepositHeld,
+          changeDue: 0,
+          payments: [{ method: "RENTAL_SECURITY_DEPOSIT", amount: booking.totalDepositHeld }],
+        });
+
+        setShowReceiptModal(true);
+        setCartItems([]);
+      } else {
+        alert(data.error || "Failed to process rental booking.");
+      }
+    } catch {
+      alert("Error processing rental booking.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleSearchRentalBooking = async (queryText?: string) => {
+    const q = queryText || rentalSearchQuery;
+    if (!q) return;
+    try {
+      setSearchingRental(true);
+      const res = await fetch(`/api/sales/rentals?query=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data) && data.data.length > 0) {
+        setSelectedRentalBooking(data.data[0]);
+        const activeItemIds = data.data[0].items
+          .filter((it: any) => it.status === "ON_RENT")
+          .map((it: any) => it._id);
+        setSelectedRentalReturnItems(activeItemIds);
+      } else {
+        alert("No active rental booking found matching barcode/phone.");
+        setSelectedRentalBooking(null);
+      }
+    } catch {
+      alert("Error searching rental booking.");
+    } finally {
+      setSearchingRental(false);
+    }
+  };
+
+  const handleProcessPartialRentalReturn = async () => {
+    if (!selectedRentalBooking || selectedRentalReturnItems.length === 0) {
+      alert("Please select at least one rented item to return.");
+      return;
+    }
+    try {
+      setSubmittingReturn(true);
+      const res = await fetch(`/api/sales/rentals/${selectedRentalBooking._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "PARTIAL_RETURN",
+          returnedItemIds: selectedRentalReturnItems,
+          processedBy: currentUser?.username || currentUser?.name || "system",
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        const { booking, totalAccruedRentRealized, totalNetRefundToCustomer, returnedItemsSummary } = data.data;
+        setReturnSuccessMsg(`Rental Return Processed! Realized Rent: Rs. ${totalAccruedRentRealized}, Net Refund to Customer: Rs. ${totalNetRefundToCustomer}`);
+        
+        setCompletedReceiptData({
+          invoiceNumber: booking.bookingNumber,
+          date: new Date(),
+          locationName: booking.locationName,
+          cashierName: currentUser?.username || currentUser?.name || "Counter Staff",
+          salesmanName: booking.salesmanName || "Direct Counter",
+          customerName: booking.customerName || "Rental Customer",
+          customerPhone: booking.customerPhone || "N/A",
+          items: returnedItemsSummary.map((r: any) => ({
+            productName: `[RENTAL RETURNED] ${r.productName} (${r.daysRented} days @ Rs. ${r.rentFee / (r.daysRented || 1)}/day)`,
+            condition: "Used",
+            quantity: 1,
+            unitPrice: r.rentFee,
+            lineTotal: r.rentFee,
+          })),
+          subtotal: totalAccruedRentRealized,
+          discountAmount: 0,
+          deliveryCharges: 0,
+          totalAmount: totalAccruedRentRealized,
+          paidAmount: totalAccruedRentRealized,
+          changeDue: totalNetRefundToCustomer > 0 ? totalNetRefundToCustomer : 0,
+          payments: [{ method: totalNetRefundToCustomer > 0 ? "SHOP_REFUND_CASH" : "RENTAL_SETTLEMENT", amount: Math.abs(totalNetRefundToCustomer) }],
+        });
+
+        setShowReceiptModal(true);
+        setSelectedRentalBooking(null);
+        setSelectedRentalReturnItems([]);
+      } else {
+        alert(data.error || "Failed to process rental return.");
+      }
+    } catch {
+      alert("Error processing rental return.");
+    } finally {
+      setSubmittingReturn(false);
+    }
+  };
+
+  const handleAddTopUpDeposit = async () => {
+    if (!selectedRentalBooking || topUpAmountInput <= 0) {
+      alert("Please enter a valid top-up deposit amount.");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/sales/rentals/${selectedRentalBooking._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "ADD_TOP_UP",
+          topUpAmount: topUpAmountInput,
+          processedBy: currentUser?.username || currentUser?.name || "system",
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        alert(`Rs. ${topUpAmountInput} Top-Up Deposit added successfully!`);
+        setSelectedRentalBooking(data.data);
+        setTopUpModalOpen(false);
+        setTopUpAmountInput(0);
+      } else {
+        alert(data.error || "Failed to add top-up deposit.");
+      }
+    } catch {
+      alert("Error adding top-up deposit.");
+    }
+  };
+
   const handleProcessRentalSwap = async () => {
     if (!rentalReturnProdId) {
       alert("Please select the returned rental product.");
@@ -902,6 +1163,7 @@ function SalesWorkspaceContent() {
       const payload = {
         action: "RENTAL_SWAP",
         locationId: selectedLocation,
+        salesman: selectedSalesman || undefined,
         customerName: customerName || "Rental Customer",
         customerPhone: customerPhone || undefined,
         securityDepositPaid: rentalSecurityDeposit,
@@ -936,13 +1198,17 @@ function SalesWorkspaceContent() {
         setReturnSuccessMsg("Rental Return & Game Swap processed successfully!");
 
         const repTotal = returnReplacementItems.reduce((acc, it) => acc + it.unitPrice * it.quantity, 0);
+        const netDiff = repTotal - netCredit;
+        const netCashPayable = netDiff > 0 ? netDiff : 0;
+        const netCashRefund = netDiff < 0 ? Math.abs(netDiff) : 0;
+        const matchedSalesmanName = salesmen.find((s) => s._id === selectedSalesman)?.name || "Direct Counter";
 
         setCompletedReceiptData({
           invoiceNumber: data.data?.returnTxNumber || "RNT-1001",
           date: new Date(),
           locationName: locations.find((l) => l._id === selectedLocation)?.name || "Main Shop",
           cashierName: currentUser?.username || currentUser?.name || "Counter Staff",
-          salesmanName: "Direct Counter",
+          salesmanName: matchedSalesmanName,
           customerName: customerName || "Rental Customer",
           customerPhone: customerPhone || "N/A",
           items: [
@@ -965,10 +1231,10 @@ function SalesWorkspaceContent() {
           subtotal: repTotal,
           discountAmount: 0,
           deliveryCharges: 0,
-          totalAmount: Math.max(0, repTotal - netCredit),
-          paidAmount: Math.max(0, repTotal - netCredit),
-          changeDue: 0,
-          payments: [{ method: "RENTAL_CREDIT_SETTLEMENT", amount: netCredit }],
+          totalAmount: netCashPayable,
+          paidAmount: netCashPayable,
+          changeDue: netCashRefund,
+          payments: [{ method: netDiff < 0 ? "SHOP_REFUND_CASH" : "RENTAL_CREDIT_SETTLEMENT", amount: Math.abs(netDiff) }],
         });
 
         setShowReceiptModal(true);
@@ -1082,23 +1348,56 @@ function SalesWorkspaceContent() {
         </div>
 
         {/* Common Attribution & Location Header */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-              Store Location *
-            </label>
-            <select
-              value={selectedLocation}
-              onChange={(e) => setSelectedLocation(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-            >
-              {locations.map((loc) => (
-                <option key={loc._id} value={loc._id}>
-                  {loc.name}
-                </option>
-              ))}
-            </select>
-          </div>
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-3">
+          {mode === "POS" && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+              <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                <ShoppingBag className="w-3.5 h-3.5 text-indigo-400" /> POS Transaction Type:
+              </span>
+              <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setPosType("STANDARD")}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                    posType === "STANDARD"
+                      ? "bg-indigo-600 text-white shadow-md"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  🛒 Standard Counter Sale
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPosType("RENTAL")}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                    posType === "RENTAL"
+                      ? "bg-purple-600 text-white shadow-md shadow-purple-600/30"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  🎮 Rental Booking (Security Deposit)
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div>
+              <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                Store Location *
+              </label>
+              <select
+                value={selectedLocation}
+                onChange={(e) => setSelectedLocation(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              >
+                {locations.map((loc) => (
+                  <option key={loc._id} value={loc._id}>
+                    {loc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
           <div>
             <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
@@ -1224,23 +1523,60 @@ function SalesWorkspaceContent() {
                     >
                       <div className="flex-1 min-w-0">
                         <div className="font-semibold text-slate-200 truncate">{item.product.name}</div>
-                        <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5 mt-1">
-                          <span className="text-[10px] text-slate-500 uppercase font-bold">Price:</span>
-                          <input
-                            type="number"
-                            value={item.unitPrice}
-                            onChange={(e) => {
-                              const newPrice = Number(e.target.value);
-                              setCartItems(
-                                cartItems.map((it, i) =>
-                                  i === idx ? { ...it, unitPrice: Math.max(0, newPrice) } : it
-                                )
-                              );
-                            }}
-                            className="w-20 bg-slate-900 border border-slate-700 text-emerald-400 font-bold font-mono rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-emerald-500"
-                            title="Editable Unit Price"
-                          />
-                        </div>
+                        {posType === "RENTAL" ? (
+                          <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400 mt-1">
+                            <div>
+                              <span>Deposit (PKR):</span>
+                              <input
+                                type="number"
+                                value={item.depositPaid !== undefined ? item.depositPaid : (item.product.originalPrice || item.unitPrice || 0)}
+                                onChange={(e) => {
+                                  const val = Number(e.target.value);
+                                  setCartItems(
+                                    cartItems.map((it, i) =>
+                                      i === idx ? { ...it, depositPaid: val } : it
+                                    )
+                                  );
+                                }}
+                                className="w-full bg-slate-900 border border-slate-700 text-purple-400 font-bold font-mono rounded px-1.5 py-0.5 text-xs focus:outline-none focus:border-purple-500"
+                              />
+                            </div>
+                            <div>
+                              <span>Per Day Rate:</span>
+                              <input
+                                type="number"
+                                value={item.perDayRate !== undefined ? item.perDayRate : 200}
+                                onChange={(e) => {
+                                  const val = Number(e.target.value);
+                                  setCartItems(
+                                    cartItems.map((it, i) =>
+                                      i === idx ? { ...it, perDayRate: val } : it
+                                    )
+                                  );
+                                }}
+                                className="w-full bg-slate-900 border border-slate-700 text-cyan-400 font-bold font-mono rounded px-1.5 py-0.5 text-xs focus:outline-none focus:border-cyan-500"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5 mt-1">
+                            <span className="text-[10px] text-slate-500 uppercase font-bold">Price:</span>
+                            <input
+                              type="number"
+                              value={item.unitPrice}
+                              onChange={(e) => {
+                                const newPrice = Number(e.target.value);
+                                setCartItems(
+                                  cartItems.map((it, i) =>
+                                    i === idx ? { ...it, unitPrice: Math.max(0, newPrice) } : it
+                                  )
+                                );
+                              }}
+                              className="w-20 bg-slate-900 border border-slate-700 text-emerald-400 font-bold font-mono rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-emerald-500"
+                              title="Editable Unit Price"
+                            />
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-1.5">
@@ -1278,8 +1614,10 @@ function SalesWorkspaceContent() {
                       </div>
 
                       <div className="flex items-center gap-2.5 shrink-0">
-                        <span className="font-bold text-indigo-400 font-mono text-xs">
-                          Rs. {(item.unitPrice * item.quantity).toLocaleString()}
+                        <span className="font-bold text-purple-400 font-mono text-xs">
+                          Rs. {posType === "RENTAL"
+                            ? ((item.depositPaid !== undefined ? item.depositPaid : (item.product.originalPrice || item.unitPrice || 0)) * item.quantity).toLocaleString()
+                            : (item.unitPrice * item.quantity).toLocaleString()}
                         </span>
                         <button
                           type="button"
@@ -1295,162 +1633,182 @@ function SalesWorkspaceContent() {
                 </div>
               </div>
 
-              <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl space-y-2 text-xs">
-                <div className="flex justify-between text-slate-400">
-                  <span>Subtotal</span>
-                  <span>Rs. {cartSubtotal.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between text-slate-400 items-center">
-                  <span>Header Discount</span>
-                  <input
-                    type="number"
-                    value={discountAmount}
-                    onChange={(e) => setDiscountAmount(Number(e.target.value))}
-                    className="w-20 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-right text-xs"
-                  />
-                </div>
-                {/* Single vs Split Payment Toggle */}
-                <div className="pt-2 border-t border-slate-800 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                      <CreditCard className="w-3.5 h-3.5 text-indigo-400" />
-                      Payment Type:
-                    </label>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setIsSplitPayment(false)}
-                        className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition ${
-                          !isSplitPayment
-                            ? "bg-indigo-600 border-indigo-500 text-white"
-                            : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
-                        }`}
-                      >
-                        Single
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsSplitPayment(true);
-                          if (splitCash === 0 && splitCard === 0 && splitBank === 0) {
-                            setSplitCash(cartTotal);
-                          }
-                        }}
-                        className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition ${
-                          isSplitPayment
-                            ? "bg-cyan-600 border-cyan-500 text-white shadow-md shadow-cyan-600/30"
-                            : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
-                        }`}
-                      >
-                        🔀 Split Payment
-                      </button>
-                    </div>
+              <div className="bg-slate-950 border border-slate-800 p-3.5 rounded-xl space-y-3 text-xs">
+                {posType === "RENTAL" ? (
+                  <div className="flex justify-between font-bold text-purple-400">
+                    <span>Total Rental Security Deposit Held</span>
+                    <span>
+                      Rs. {cartItems.reduce((acc, it) => acc + (it.depositPaid !== undefined ? it.depositPaid : (it.product.originalPrice || it.unitPrice || 0)) * it.quantity, 0).toLocaleString()}
+                    </span>
                   </div>
-
-                  {!isSplitPayment ? (
+                ) : (
+                  <>
+                    <div className="flex justify-between text-slate-400">
+                      <span>Subtotal</span>
+                      <span>Rs. {cartSubtotal.toLocaleString()}</span>
+                    </div>
                     <div className="flex justify-between text-slate-400 items-center">
-                      <span>Payment Method</span>
-                      <select
-                        value={paymentMethod}
-                        onChange={(e) => setPaymentMethod(e.target.value)}
-                        className="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-slate-200 font-semibold"
-                      >
-                        <option value="CASH">💵 Cash</option>
-                        <option value="CARD">💳 Credit/Debit Card</option>
-                        <option value="BANK_TRANSFER">🏦 Bank Transfer / Online</option>
-                      </select>
+                      <span>Header Discount</span>
+                      <input
+                        type="number"
+                        value={discountAmount || ""}
+                        onChange={(e) => setDiscountAmount(Number(e.target.value))}
+                        className="w-20 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-right text-xs text-slate-200"
+                      />
                     </div>
-                  ) : (
-                    <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl space-y-2 text-xs">
-                      <div className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider mb-1">
-                        Split Payment Breakdown
-                      </div>
 
-                      {/* Cash Input */}
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-slate-300 font-medium flex items-center gap-1">
-                          💵 Cash (PKR):
-                        </span>
-                        <input
-                          type="number"
-                          value={splitCash}
-                          onChange={(e) => setSplitCash(Number(e.target.value))}
-                          className="w-28 bg-slate-950 border border-slate-700 text-emerald-400 font-bold rounded px-2 py-1 text-right text-xs"
-                        />
-                      </div>
-
-                      {/* Card Input */}
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-slate-300 font-medium flex items-center gap-1">
-                          💳 Card (PKR):
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="text"
-                            placeholder="Card Ref #"
-                            value={cardRef}
-                            onChange={(e) => setCardRef(e.target.value)}
-                            className="w-20 bg-slate-950 border border-slate-800 text-slate-300 rounded px-1.5 py-1 text-[10px]"
-                          />
-                          <input
-                            type="number"
-                            value={splitCard}
-                            onChange={(e) => setSplitCard(Number(e.target.value))}
-                            className="w-28 bg-slate-950 border border-slate-700 text-indigo-400 font-bold rounded px-2 py-1 text-right text-xs"
-                          />
+                    <div className="pt-2 border-t border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                          <CreditCard className="w-3.5 h-3.5 text-indigo-400" />
+                          Payment Type:
+                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setIsSplitPayment(false)}
+                            className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition ${
+                              !isSplitPayment
+                                ? "bg-indigo-600 border-indigo-500 text-white"
+                                : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            Single
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsSplitPayment(true);
+                              if (splitCash === 0 && splitCard === 0 && splitBank === 0) {
+                                setSplitCash(cartTotal);
+                              }
+                            }}
+                            className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition ${
+                              isSplitPayment
+                                ? "bg-cyan-600 border-cyan-500 text-white shadow-md shadow-cyan-600/30"
+                                : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            🔀 Split Payment
+                          </button>
                         </div>
                       </div>
 
-                      {/* Bank Input */}
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-slate-300 font-medium flex items-center gap-1">
-                          🏦 Online/Bank (PKR):
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="text"
-                            placeholder="IBFT Ref #"
-                            value={bankRef}
-                            onChange={(e) => setBankRef(e.target.value)}
-                            className="w-20 bg-slate-950 border border-slate-800 text-slate-300 rounded px-1.5 py-1 text-[10px]"
-                          />
-                          <input
-                            type="number"
-                            value={splitBank}
-                            onChange={(e) => setSplitBank(Number(e.target.value))}
-                            className="w-28 bg-slate-950 border border-slate-700 text-cyan-400 font-bold rounded px-2 py-1 text-right text-xs"
-                          />
+                      {!isSplitPayment ? (
+                        <div className="flex justify-between text-slate-400 items-center">
+                          <span>Payment Method</span>
+                          <select
+                            value={paymentMethod}
+                            onChange={(e) => setPaymentMethod(e.target.value)}
+                            className="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-slate-200 font-semibold"
+                          >
+                            <option value="CASH">💵 Cash</option>
+                            <option value="CARD">💳 Credit/Debit Card</option>
+                            <option value="BANK_TRANSFER">🏦 Bank Transfer / Online</option>
+                          </select>
                         </div>
-                      </div>
+                      ) : (
+                        <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl space-y-2 text-xs">
+                          <div className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider mb-1">
+                            Split Payment Breakdown
+                          </div>
 
-                      {/* Summary Calculation */}
-                      <div className="pt-2 border-t border-slate-800 flex items-center justify-between font-bold">
-                        <span className="text-slate-400">Total Allocated:</span>
-                        <span
-                          className={
-                            splitCash + splitCard + splitBank >= cartTotal
-                              ? "text-emerald-400"
-                              : "text-rose-400 animate-pulse"
-                          }
-                        >
-                          Rs. {(splitCash + splitCard + splitBank).toLocaleString()} / {cartTotal.toLocaleString()}
-                        </span>
+                          {/* Cash Input */}
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-slate-300 font-medium flex items-center gap-1">
+                              💵 Cash (PKR):
+                            </span>
+                            <input
+                              type="number"
+                              value={splitCash}
+                              onChange={(e) => setSplitCash(Number(e.target.value))}
+                              className="w-28 bg-slate-950 border border-slate-700 text-emerald-400 font-bold rounded px-2 py-1 text-right text-xs"
+                            />
+                          </div>
+
+                          {/* Card Input */}
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-slate-300 font-medium flex items-center gap-1">
+                              💳 Card (PKR):
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                placeholder="Card Ref #"
+                                value={cardRef}
+                                onChange={(e) => setCardRef(e.target.value)}
+                                className="w-20 bg-slate-950 border border-slate-800 text-slate-300 rounded px-1.5 py-1 text-[10px]"
+                              />
+                              <input
+                                type="number"
+                                value={splitCard}
+                                onChange={(e) => setSplitCard(Number(e.target.value))}
+                                className="w-28 bg-slate-950 border border-slate-700 text-indigo-400 font-bold rounded px-2 py-1 text-right text-xs"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Bank Input */}
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-slate-300 font-medium flex items-center gap-1">
+                              🏦 Online/Bank (PKR):
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                placeholder="IBFT Ref #"
+                                value={bankRef}
+                                onChange={(e) => setBankRef(e.target.value)}
+                                className="w-20 bg-slate-950 border border-slate-800 text-slate-300 rounded px-1.5 py-1 text-[10px]"
+                              />
+                              <input
+                                type="number"
+                                value={splitBank}
+                                onChange={(e) => setSplitBank(Number(e.target.value))}
+                                className="w-28 bg-slate-950 border border-slate-700 text-cyan-400 font-bold rounded px-2 py-1 text-right text-xs"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Summary Calculation */}
+                          <div className="pt-2 border-t border-slate-800 flex items-center justify-between font-bold">
+                            <span className="text-slate-400">Total Allocated:</span>
+                            <span
+                              className={
+                                splitCash + splitCard + splitBank >= cartTotal
+                                  ? "text-emerald-400"
+                                  : "text-rose-400 animate-pulse"
+                              }
+                            >
+                              Rs. {(splitCash + splitCard + splitBank).toLocaleString()} / {cartTotal.toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex justify-between font-bold text-emerald-400 text-sm border-t border-slate-800 pt-2">
+                        <span>Total Amount</span>
+                        <span>Rs. {cartTotal.toLocaleString()}</span>
                       </div>
                     </div>
-                  )}
-                </div>
-
-                <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-emerald-400">
-                  <span>Total Amount</span>
-                  <span>Rs. {cartTotal.toLocaleString()}</span>
-                </div>
+                  </>
+                )}
 
                 <button
-                  onClick={handleCompletePOS}
-                  disabled={submitting}
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-xl font-bold transition shadow-lg shadow-indigo-600/30"
+                  type="button"
+                  onClick={posType === "RENTAL" ? handleCompleteRentalBooking : handleCompletePOS}
+                  disabled={submitting || cartItems.length === 0}
+                  className={`w-full text-white py-3 rounded-xl font-bold transition shadow-lg uppercase text-xs tracking-wider flex items-center justify-center gap-2 pt-3 ${
+                    posType === "RENTAL"
+                      ? "bg-purple-600 hover:bg-purple-500 shadow-purple-600/30"
+                      : "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30"
+                  }`}
                 >
-                  {submitting ? "Processing..." : "Complete & Print Invoice"}
+                  {submitting
+                    ? "Processing..."
+                    : posType === "RENTAL"
+                    ? "🖨️ Complete Booking & Print Deposit Slip"
+                    : "Complete & Print Invoice"}
                 </button>
               </div>
             </div>
@@ -2114,7 +2472,7 @@ function SalesWorkspaceContent() {
                 {/* Left Column: Returned DVD & Deposit Inputs */}
                 <div className="lg:col-span-7 bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-4">
                   <h4 className="text-xs font-bold text-purple-400 uppercase tracking-wider">
-                    Returned Rental DVD & Deposit Calculation
+                    RETURNED RENTAL DVD & DEPOSIT CALCULATION
                   </h4>
 
                   {/* Barcode & Mobile Camera Scanner Box for Returned DVD */}
@@ -2122,7 +2480,7 @@ function SalesWorkspaceContent() {
                     <div className="flex items-center justify-between">
                       <label className="text-[10px] font-bold text-purple-400 uppercase tracking-wider flex items-center gap-1.5">
                         <Barcode className="w-3.5 h-3.5 text-purple-400" />
-                        Quick Barcode / Mobile Camera Scanner (Returned Item)
+                        QUICK BARCODE / MOBILE CAMERA SCANNER (RETURNED ITEM)
                       </label>
                     </div>
                     <div className="flex gap-2">
@@ -2185,6 +2543,7 @@ function SalesWorkspaceContent() {
                         onChange={(e) => setRentalReturnCondition(e.target.value)}
                         className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
                       >
+                        <option value="New">New / Unopened</option>
                         <option value="Used">Used / Rent Pool</option>
                         <option value="Like New">Like New</option>
                         <option value="Defective">Defective / Damaged</option>
@@ -2245,7 +2604,7 @@ function SalesWorkspaceContent() {
                   {/* Issued Game CD Replacement Input */}
                   <div className="border-t border-slate-800 pt-4 space-y-3">
                     <h5 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                      Add Issued Replacement Game CD (Item OUT)
+                      ADD ISSUED REPLACEMENT GAME CD (ITEM OUT)
                     </h5>
 
                     {/* Barcode & Mobile Camera Scanner Box for Replacement Game */}
@@ -2253,7 +2612,7 @@ function SalesWorkspaceContent() {
                       <div className="flex items-center justify-between">
                         <label className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
                           <Barcode className="w-3.5 h-3.5 text-cyan-400" />
-                          Quick Barcode / Mobile Camera Scanner (Replacement Game)
+                          QUICK BARCODE / MOBILE CAMERA SCANNER (REPLACEMENT GAME)
                         </label>
                       </div>
                       <div className="flex gap-2">
@@ -2374,7 +2733,7 @@ function SalesWorkspaceContent() {
                 <div className="lg:col-span-5 bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-4 flex flex-col justify-between">
                   <div className="space-y-4">
                     <h4 className="text-xs font-bold text-purple-400 uppercase tracking-wider">
-                      Net Settlement Summary
+                      NET SETTLEMENT SUMMARY
                     </h4>
 
                     <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-xs space-y-2.5">
@@ -2402,16 +2761,33 @@ function SalesWorkspaceContent() {
                           - Rs. {returnReplacementItems.reduce((acc, it) => acc + it.unitPrice * it.quantity, 0).toLocaleString()}
                         </span>
                       </div>
-                      <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-cyan-400">
-                        <span>Net Cash Amount Payable</span>
-                        <span>
-                          Rs. {Math.max(
-                            0,
-                            returnReplacementItems.reduce((acc, it) => acc + it.unitPrice * it.quantity, 0) -
-                              (Math.max(0, rentalSecurityDeposit - rentalFeeDeducted) + rentalTopUpCash)
-                          ).toLocaleString()}
-                        </span>
-                      </div>
+                      {(() => {
+                        const avail = Math.max(0, rentalSecurityDeposit - rentalFeeDeducted) + rentalTopUpCash;
+                        const repTot = returnReplacementItems.reduce((acc, it) => acc + it.unitPrice * it.quantity, 0);
+                        const diff = repTot - avail;
+                        if (diff > 0) {
+                          return (
+                            <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-cyan-400">
+                              <span>Net Cash Amount Payable</span>
+                              <span>+ Rs. {diff.toLocaleString()}</span>
+                            </div>
+                          );
+                        } else if (diff < 0) {
+                          return (
+                            <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-emerald-400">
+                              <span>Net Cash Refund to Customer</span>
+                              <span>- Rs. {Math.abs(diff).toLocaleString()}</span>
+                            </div>
+                          );
+                        } else {
+                          return (
+                            <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-purple-300">
+                              <span>Net Cash Amount Payable</span>
+                              <span>Rs. 0</span>
+                            </div>
+                          );
+                        }
+                      })()}
                     </div>
                   </div>
 
@@ -2421,7 +2797,7 @@ function SalesWorkspaceContent() {
                     className="w-full bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white py-3 rounded-xl font-bold transition shadow-lg shadow-purple-600/30 text-xs uppercase tracking-wider flex items-center justify-center gap-2 mt-4"
                   >
                     <ArrowRightLeft className="w-4 h-4" />
-                    {submittingReturn ? "Processing Rental Settlement..." : "Complete Rental Swap & Print Slip"}
+                    {submittingReturn ? "Processing Rental Settlement..." : "🎮 COMPLETE RENTAL SWAP & PRINT SLIP"}
                   </button>
                 </div>
               </div>
@@ -3061,6 +3437,67 @@ function SalesWorkspaceContent() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Top-Up Deposit Modal */}
+      {topUpModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
+                <Plus className="w-4 h-4 text-cyan-400" />
+                Add Rental Deposit Top-Up
+              </h3>
+              <button
+                type="button"
+                onClick={() => setTopUpModalOpen(false)}
+                className="text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1">Top-Up Amount (PKR) *</label>
+              <input
+                type="number"
+                placeholder="e.g. 14000"
+                value={topUpAmountInput || ""}
+                onChange={(e) => setTopUpAmountInput(Number(e.target.value))}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-cyan-400 font-bold font-mono focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setTopUpModalOpen(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAddTopUpDeposit}
+                disabled={topUpAmountInput <= 0}
+                className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-lg shadow-cyan-600/30"
+              >
+                Confirm Top-Up Deposit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Camera Barcode Scanner Modal */}
+      {showCameraModal && (
+        <CameraBarcodeScannerModal
+          isOpen={showCameraModal}
+          onClose={() => setShowCameraModal(false)}
+          onScanSuccess={(scannedCode) => {
+            handleResolveBarcode(scannedCode);
+            setShowCameraModal(false);
+          }}
+        />
+      )}
       </div>
     </div>
   );

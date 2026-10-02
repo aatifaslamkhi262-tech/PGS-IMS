@@ -92,9 +92,9 @@ export const Navbar: React.FC<NavbarProps> = () => {
 
   // Active checks for categories
   const isSalesActive =
+    pathname.startsWith("/sales") ||
     pathname === "/pos" ||
-    pathname === "/warehouse-queue" ||
-    pathname.startsWith("/sales/");
+    pathname === "/warehouse-queue";
 
   const isInventoryActive =
     pathname === "/" ||
@@ -420,9 +420,9 @@ export const Navbar: React.FC<NavbarProps> = () => {
       {user && (
         <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900 border-t border-slate-800 flex justify-around items-center h-14 px-1 shadow-lg">
           <Link
-            href="/pos"
+            href="/sales?mode=POS"
             className={`flex flex-col items-center justify-center w-full h-full text-[10px] font-bold transition-colors ${
-              pathname === "/pos" ? "text-emerald-400" : "text-emerald-500/80 hover:text-emerald-300"
+              pathname.startsWith("/sales") ? "text-emerald-400" : "text-emerald-500/80 hover:text-emerald-300"
             }`}
           >
             <ShoppingCart className="w-4 h-4 mb-0.5" />
@@ -431,9 +431,9 @@ export const Navbar: React.FC<NavbarProps> = () => {
 
           {(isAdmin || isWarehouse) && (
             <Link
-              href="/warehouse-queue"
+              href="/sales?mode=QUEUE"
               className={`flex flex-col items-center justify-center w-full h-full text-[10px] font-semibold transition-colors ${
-                pathname === "/warehouse-queue" ? "text-amber-400" : "text-slate-400 hover:text-slate-200"
+                pathname.startsWith("/sales") ? "text-amber-400" : "text-slate-400 hover:text-slate-200"
               }`}
             >
               <Clock className="w-4 h-4 mb-0.5" />

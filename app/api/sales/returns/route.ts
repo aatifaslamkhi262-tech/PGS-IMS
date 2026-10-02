@@ -7,6 +7,7 @@ import { Inventory } from "@/models/Inventory";
 import { InventoryMovement } from "@/models/InventoryMovement";
 import { SerialNumber } from "@/models/SerialNumber";
 import { Location } from "@/models/Location";
+import { User } from "@/models/User";
 import { updateAverageCostOnIntake, deductInventoryWithAverageCost } from "@/lib/averageCostEngine";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 import { recordCashMovement } from "@/lib/cashSessionEngine";
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { action, originalSaleId, locationId, customerName, customerPhone, securityDepositPaid, rentalFeeDeducted, additionalTopUpCash, returnedItem, returnedItems, replacementItems, paymentMethod, cashAmount, nonCashAmount, processedBy, notes } = body;
+    const { action, originalSaleId, locationId, salesman, customerName, customerPhone, securityDepositPaid, rentalFeeDeducted, additionalTopUpCash, returnedItem, returnedItems, replacementItems, paymentMethod, cashAmount, nonCashAmount, processedBy, notes } = body;
     idempotencyKeyHeader = request.headers.get("x-idempotency-key") || body.idempotencyKey || "";
 
     if (idempotencyKeyHeader) {
@@ -57,6 +58,13 @@ export async function POST(request: Request) {
     if (!location) {
       if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
       return NextResponse.json({ success: false, error: "Location not found." }, { status: 400 });
+    }
+
+    let salesmanUser: any = null;
+    if (salesman) {
+      salesmanUser = await User.findById(salesman);
+    } else if (originalSale?.salesman) {
+      salesmanUser = await User.findById(originalSale.salesman);
     }
 
     const session = await mongoose.startSession();
@@ -120,7 +128,7 @@ export async function POST(request: Request) {
       const lineTotal = returnValuation * returnQty;
       returnTotalValue += lineTotal;
 
-      await updateAverageCostOnIntake(
+      const intakeRes = await updateAverageCostOnIntake(
         {
           productId: product._id,
           locationId: targetLocationId,
@@ -148,6 +156,9 @@ export async function POST(request: Request) {
         reason: action === "RENTAL_SWAP"
           ? `Rental Return Intake (Deposit: Rs. ${secDepositPaid}, Rent Deducted: Rs. ${rentDeducted})`
           : `Return against Invoice ${originalSale?.saleNumber || ""} (${condition})`,
+        beforeQuantity: Math.max(0, (intakeRes?.newQuantity || 1) - returnQty),
+        afterQuantity: intakeRes?.newQuantity || 1,
+        performedBy: processedBy || auth.user?.username || "system",
         createdBy: processedBy || auth.user?.username || "system",
       });
 
@@ -244,6 +255,9 @@ export async function POST(request: Request) {
           reason: action === "RENTAL_SWAP"
             ? `Rental Swap Issue (${product.name})`
             : `Exchange Replacement Issue against Invoice ${originalSale?.saleNumber || ""}`,
+          beforeQuantity: (deductRes.remainingQty || 0) + repQty,
+          afterQuantity: deductRes.remainingQty || 0,
+          performedBy: processedBy || auth.user?.username || "system",
           createdBy: processedBy || auth.user?.username || "system",
         });
 
@@ -282,6 +296,79 @@ export async function POST(request: Request) {
       settlementStatus = "CUSTOMER_PAYS";
     } else if (netDifference < 0) {
       settlementStatus = "SHOP_PAYS";
+    }
+
+    // Save Exchange / Rental Swap Invoice in Sale collection for Salesman Attribution & Daily Reporting
+    if (processedReplacements.length > 0 || action === "RENTAL_SWAP") {
+      let exchangeSaleItems = processedReplacements.map((it) => ({
+        product: it.product,
+        productName: it.productName,
+        sku: it.sku,
+        barcode: it.sku,
+        condition: it.condition || "Used",
+        quantity: it.quantity,
+        unitCost: it.unitPrice,
+        unitPrice: it.unitPrice,
+        minSellingPrice: it.unitPrice,
+        discountAmount: 0,
+        lineTotal: it.lineTotal,
+        grossProfit: 0,
+      }));
+
+      if (exchangeSaleItems.length === 0 && action === "RENTAL_SWAP") {
+        const rentFeeVal = Number(rentDeducted || 0);
+        exchangeSaleItems = [
+          {
+            product: targetLocationId,
+            productName: `[RENTAL REALIZED SERVICE] Rent Usage Cut: Rs. ${rentFeeVal.toLocaleString()}`,
+            sku: "RENT-SERVICE",
+            barcode: "RENT-SERVICE",
+            condition: "Service",
+            quantity: 1,
+            unitCost: 0,
+            unitPrice: rentFeeVal,
+            minSellingPrice: rentFeeVal,
+            discountAmount: 0,
+            lineTotal: rentFeeVal,
+            grossProfit: rentFeeVal,
+          },
+        ];
+      }
+
+      if (exchangeSaleItems.length > 0) {
+        const newExchangeSale = new Sale({
+          saleNumber: returnTxNumber,
+          creationMode: "DIRECT_COUNTER",
+          saleSource: action === "RENTAL_SWAP" ? "EXCHANGE" : "EXCHANGE",
+          location: targetLocationId,
+          locationName: location.name,
+          salesman: salesmanUser?._id || originalSale?.salesman,
+          salesmanName: salesmanUser?.name || salesmanUser?.username || originalSale?.salesmanName || "Direct Counter",
+          customerName: customerName || originalSale?.customerName || "Rental Customer",
+          customerPhone: customerPhone || originalSale?.customerPhone,
+          items: exchangeSaleItems,
+          subtotal: replacementTotalValue || Number(rentDeducted || 0),
+          discountAmount: 0,
+          taxAmount: 0,
+          deliveryCharges: 0,
+          totalAmount: netDifference > 0 ? netDifference : (replacementTotalValue || Number(rentDeducted || 0)),
+          totalPaid: netDifference > 0 ? netDifference : (replacementTotalValue || Number(rentDeducted || 0)),
+          balanceDue: 0,
+          totalCost: 0,
+          netProfit: Number(rentDeducted || 0),
+          status: "COMPLETED",
+          notes: notes || (action === "RENTAL_SWAP" ? "Rental Deposit Return & Exchange Swap" : "Invoice Return Exchange"),
+          createdBy: processedBy || auth.user?.username || "system",
+          completedBy: processedBy || auth.user?.username || "system",
+          completedAt: new Date(),
+        });
+
+        if (isTxActive) {
+          await newExchangeSale.save({ session });
+        } else {
+          await newExchangeSale.save();
+        }
+      }
     }
 
     // Customer Ledger Records

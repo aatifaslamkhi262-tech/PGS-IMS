@@ -5,20 +5,84 @@ import { Payment } from "@/models/Payment";
 import { Location } from "@/models/Location";
 import { CashMovement, CashMovementType } from "@/models/CashMovement";
 
-export async function generateSessionNumber(): Promise<string> {
+export async function generateSessionNumber(session?: ClientSession): Promise<string> {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const count = await CashSession.countDocuments({
-    sessionNumber: new RegExp(`^SES-${dateStr}`),
+  const prefix = `SES-${dateStr}-`;
+
+  const countQuery: any = CashSession.countDocuments({
+    sessionNumber: new RegExp(`^${prefix}`),
   });
-  return `SES-${dateStr}-${String(count + 1).padStart(3, "0")}`;
+  if (session && countQuery && typeof countQuery.session === "function") {
+    countQuery.session(session);
+  }
+  const count = typeof countQuery?.exec === "function" ? await countQuery.exec() : await countQuery;
+  let nextSeq = (count || 0) + 1;
+
+  if (count > 0) {
+    let lastDoc: any = null;
+    const rawQuery: any = CashSession.findOne({
+      sessionNumber: new RegExp(`^${prefix}`),
+    });
+    if (rawQuery && typeof rawQuery.sort === "function") {
+      const sortedQuery = rawQuery.sort({ sessionNumber: -1 });
+      if (session && typeof sortedQuery.session === "function") {
+        sortedQuery.session(session);
+      }
+      lastDoc = typeof sortedQuery.exec === "function" ? await sortedQuery.exec() : await sortedQuery;
+    } else if (rawQuery) {
+      lastDoc = await rawQuery;
+    }
+
+    if (lastDoc && lastDoc.sessionNumber) {
+      const parts = lastDoc.sessionNumber.split("-");
+      const lastSeq = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(lastSeq) && lastSeq >= nextSeq) {
+        nextSeq = lastSeq + 1;
+      }
+    }
+  }
+
+  return `${prefix}${String(nextSeq).padStart(3, "0")}`;
 }
 
-export async function generateCashMovementNumber(): Promise<string> {
+export async function generateCashMovementNumber(session?: ClientSession): Promise<string> {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const count = await CashMovement.countDocuments({
-    movementNumber: new RegExp(`^CSM-${dateStr}`),
+  const prefix = `CSM-${dateStr}-`;
+
+  const countQuery: any = CashMovement.countDocuments({
+    movementNumber: new RegExp(`^${prefix}`),
   });
-  return `CSM-${dateStr}-${String(count + 1).padStart(4, "0")}`;
+  if (session && countQuery && typeof countQuery.session === "function") {
+    countQuery.session(session);
+  }
+  const count = typeof countQuery?.exec === "function" ? await countQuery.exec() : await countQuery;
+  let nextSeq = (count || 0) + 1;
+
+  if (count > 0) {
+    let lastDoc: any = null;
+    const rawQuery: any = CashMovement.findOne({
+      movementNumber: new RegExp(`^${prefix}`),
+    });
+    if (rawQuery && typeof rawQuery.sort === "function") {
+      const sortedQuery = rawQuery.sort({ movementNumber: -1 });
+      if (session && typeof sortedQuery.session === "function") {
+        sortedQuery.session(session);
+      }
+      lastDoc = typeof sortedQuery.exec === "function" ? await sortedQuery.exec() : await sortedQuery;
+    } else if (rawQuery) {
+      lastDoc = await rawQuery;
+    }
+
+    if (lastDoc && lastDoc.movementNumber) {
+      const parts = lastDoc.movementNumber.split("-");
+      const lastSeq = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(lastSeq) && lastSeq >= nextSeq) {
+        nextSeq = lastSeq + 1;
+      }
+    }
+  }
+
+  return `${prefix}${String(nextSeq).padStart(4, "0")}`;
 }
 
 export interface RecordCashMovementInput {
@@ -43,7 +107,7 @@ export async function recordCashMovement(
   const amount = Math.abs(Number(input.amount || 0));
   if (amount <= 0) return null;
 
-  const movementNumber = await generateCashMovementNumber();
+  const movementNumber = await generateCashMovementNumber(session);
 
   const movement = new CashMovement({
     movementNumber,
