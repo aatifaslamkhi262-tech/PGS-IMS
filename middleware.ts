@@ -12,7 +12,7 @@ export async function middleware(request: NextRequest) {
       headers: {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, x-idempotency-key",
       },
     });
   }
