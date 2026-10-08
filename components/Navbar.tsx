@@ -21,6 +21,7 @@ import {
   ChevronDown,
   LayoutDashboard,
   BarChart3,
+  AlertTriangle,
   Users,
   Handshake,
 } from "lucide-react";
@@ -377,6 +378,14 @@ export const Navbar: React.FC<NavbarProps> = () => {
                         >
                           <BarChart3 className="w-4 h-4 text-amber-400" />
                           <span>Stock-Out Report</span>
+                        </Link>
+
+                        <Link
+                          href="/reports/costing-audit"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-rose-400 transition"
+                        >
+                          <AlertTriangle className="w-4 h-4 text-rose-400" />
+                          <span>Costing & Pricing Audit</span>
                         </Link>
                       </div>
                     </div>
