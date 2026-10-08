@@ -50,6 +50,8 @@ export async function POST(request: Request) {
 
     const sale = saleResult.sale;
     sale.status = "PAYMENT_PENDING";
+    sale.totalPaid = Number(advanceAmount);
+    sale.balanceDue = Math.max(0, sale.totalAmount - Number(advanceAmount));
     await sale.save();
 
     // 2. Mark serials as Reserved if serialized

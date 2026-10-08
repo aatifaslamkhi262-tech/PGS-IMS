@@ -64,6 +64,7 @@ export async function POST(
       payments: allPayments.map((p: any) => ({
         method: p.paymentMethod,
         amount: p.amount,
+        notes: p.notes,
       })),
     };
 

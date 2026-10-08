@@ -634,8 +634,8 @@ export async function completeSale(input: CompleteSaleInput) {
 
     // 10. Mark Sale COMPLETED
     sale.status = "COMPLETED";
-    sale.totalPaid = totalAllocated;
-    sale.balanceDue = 0;
+    sale.totalPaid = grandTotalPaid;
+    sale.balanceDue = Math.max(0, sale.totalAmount - grandTotalPaid);
     sale.completedBy = input.completedBy;
     sale.paymentReceivedBy = input.completedBy;
     sale.billedBy = input.completedBy;

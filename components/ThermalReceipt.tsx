@@ -27,10 +27,13 @@ interface ThermalReceiptProps {
     totalAmount: number;
     paidAmount: number;
     changeDue: number;
+    balanceDue?: number;
+    status?: string;
     payments: Array<{
       method: string;
       amount: number;
       referenceNumber?: string;
+      notes?: string;
     }>;
   };
   onClose: () => void;
@@ -132,6 +135,15 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptProps> = ({ receiptData
             <h2 className="text-lg font-black uppercase tracking-wider text-black">PGS GAME SHOP</h2>
             <p className="text-xs font-bold text-black">Multi-Branch Retail & Wholesale Gaming Hub</p>
             <p className="text-xs font-bold text-black">Location: {receiptData.locationName}</p>
+            {(receiptData.status === "ADVANCE_BOOKED" || (receiptData.balanceDue !== undefined && receiptData.balanceDue > 0)) ? (
+              <div className="text-center bg-black text-white font-black text-xs py-1 my-1 uppercase rounded tracking-wider">
+                *** ADVANCE BOOKING RECEIPT ***
+              </div>
+            ) : (
+              <div className="text-center bg-gray-200 text-black font-black text-[11px] py-0.5 my-1 uppercase tracking-wider border border-black">
+                *** RECEIPT - PAID IN FULL ***
+              </div>
+            )}
           </div>
 
           {/* Details */}
@@ -232,16 +244,26 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptProps> = ({ receiptData
             </div>
 
             <div className="pt-2 space-y-1 text-xs text-black font-bold">
-              {receiptData.payments.map((p, idx) => (
-                <div key={idx} className="flex justify-between text-black font-bold">
-                  <span>Paid ({p.method}):</span>
-                  <span>Rs. {p.amount.toLocaleString()}</span>
-                </div>
-              ))}
+              {receiptData.payments.map((p, idx) => {
+                const isAdv = p.notes?.toLowerCase().includes("advance") || (receiptData.status === "ADVANCE_BOOKED" && idx === 0);
+                const pLabel = isAdv ? `Advance Deposit (${p.method})` : `Paid (${p.method})`;
+                return (
+                  <div key={idx} className="flex justify-between text-black font-bold">
+                    <span>{pLabel}:</span>
+                    <span>Rs. {p.amount.toLocaleString()}</span>
+                  </div>
+                );
+              })}
               {receiptData.changeDue > 0 && (
                 <div className="flex justify-between text-black font-black">
                   <span>Change Returned:</span>
                   <span>Rs. {receiptData.changeDue.toLocaleString()}</span>
+                </div>
+              )}
+              {receiptData.balanceDue !== undefined && receiptData.balanceDue > 0 && (
+                <div className="flex justify-between text-xs font-black border-2 border-black p-1.5 mt-2 bg-gray-100 uppercase">
+                  <span>REMAINING BALANCE DUE:</span>
+                  <span>Rs. {receiptData.balanceDue.toLocaleString()}</span>
                 </div>
               )}
             </div>

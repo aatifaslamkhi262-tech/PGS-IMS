@@ -2004,49 +2004,68 @@ function SalesWorkspaceContent() {
                     )}
 
                     {/* Totals & Actions Footer */}
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-800">
-                      <div className="flex items-center gap-4 text-xs font-mono">
-                        {sale.deliveryCharges > 0 && (
-                          <span className="text-slate-400">
-                            Delivery: <strong className="text-slate-200">Rs. {sale.deliveryCharges.toLocaleString()}</strong>
-                          </span>
-                        )}
-                        <span className="text-slate-200 font-bold">
-                          Total Payable: <span className="text-emerald-400 font-extrabold text-sm">Rs. {sale.totalAmount?.toLocaleString()}</span>
-                        </span>
-                      </div>
+                    {(() => {
+                      const cardPaid = sale.totalPaid ?? 0;
+                      const cardDue = sale.balanceDue !== undefined && sale.balanceDue > 0
+                        ? sale.balanceDue
+                        : (sale.status === "COMPLETED" ? 0 : Math.max(0, (sale.totalAmount || 0) - cardPaid));
+                      const isAdvance = sale.saleSource === "ADVANCE_BOOKING" || cardPaid > 0;
 
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => {
-                            setReassignSale(sale);
-                            setTargetSalesmanId(sale.salesman?._id || sale.salesman || "");
-                            setShowReassignModal(true);
-                          }}
-                          className="bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
-                        >
-                          ✏️ Edit Salesman
-                        </button>
-                        {sale.status !== "COMPLETED" && (
-                          <button
-                            onClick={() => {
-                              setSelectedQueueSale(sale);
-                              setQueuePaymentMethod((sale.paymentMethod as any) || "CASH");
-                              setShowVerifyModal(true);
-                            }}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg font-bold shadow-lg shadow-emerald-600/20 transition flex items-center gap-1"
-                          >
-                            ✅ Verify & Complete
-                          </button>
-                        )}
-                        <button
-                          onClick={() => handleOpenCancelModal(sale)}
-                          className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
-                        >
-                          🗑️ Cancel
-                        </button>
-                      </div>
-                    </div>
+                      return (
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-800">
+                          <div className="flex flex-wrap items-center gap-4 text-xs font-mono">
+                            {sale.deliveryCharges > 0 && (
+                              <span className="text-slate-400">
+                                Delivery: <strong className="text-slate-200">Rs. {sale.deliveryCharges.toLocaleString()}</strong>
+                              </span>
+                            )}
+                            <span className="text-slate-400">
+                              Total: <strong className="text-slate-200">Rs. {sale.totalAmount?.toLocaleString()}</strong>
+                            </span>
+                            {cardPaid > 0 && (
+                              <span className="text-purple-400 font-semibold">
+                                Advance Paid: <strong>- Rs. {cardPaid.toLocaleString()}</strong>
+                              </span>
+                            )}
+                            <span className="text-slate-200 font-bold">
+                              {isAdvance ? "Remaining Balance Due:" : "Total Payable:"}{" "}
+                              <span className="text-amber-400 font-extrabold text-sm">Rs. {cardDue.toLocaleString()}</span>
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                setReassignSale(sale);
+                                setTargetSalesmanId(sale.salesman?._id || sale.salesman || "");
+                                setShowReassignModal(true);
+                              }}
+                              className="bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
+                            >
+                              ✏️ Edit Salesman
+                            </button>
+                            {sale.status !== "COMPLETED" && (
+                              <button
+                                onClick={() => {
+                                  setSelectedQueueSale(sale);
+                                  setQueuePaymentMethod((sale.paymentMethod as any) || "CASH");
+                                  setShowVerifyModal(true);
+                                }}
+                                className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg font-bold shadow-lg shadow-emerald-600/20 transition flex items-center gap-1"
+                              >
+                                ✅ {cardDue > 0 ? `Collect Rs. ${cardDue.toLocaleString()} & Complete` : "Verify & Complete"}
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleOpenCancelModal(sale)}
+                              className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
+                            >
+                              🗑️ Cancel
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
@@ -3405,38 +3424,61 @@ function SalesWorkspaceContent() {
               </div>
 
               <div className="space-y-3 text-xs">
-                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
-                  <div className="flex justify-between text-slate-300">
-                    <span>Customer:</span>
-                    <span className="font-bold text-slate-100">{selectedQueueSale.customerName || "Walk-in Customer"}</span>
-                  </div>
-                  {selectedQueueSale.customerPhone && (
-                    <div className="flex justify-between text-slate-400">
-                      <span>Phone:</span>
-                      <span className="font-mono text-slate-300">{selectedQueueSale.customerPhone}</span>
+                {(() => {
+                  const mTotal = selectedQueueSale.totalAmount || 0;
+                  const mPaid = selectedQueueSale.totalPaid || 0;
+                  const mDue = selectedQueueSale.balanceDue !== undefined && selectedQueueSale.balanceDue > 0
+                    ? selectedQueueSale.balanceDue
+                    : (selectedQueueSale.status === "COMPLETED" ? 0 : Math.max(0, mTotal - mPaid));
+                  const mFinal = Math.max(0, mDue + Number(queuePriceAdjustment || 0));
+
+                  return (
+                    <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1.5">
+                      <div className="flex justify-between text-slate-300">
+                        <span>Customer:</span>
+                        <span className="font-bold text-slate-100">{selectedQueueSale.customerName || "Walk-in Customer"}</span>
+                      </div>
+                      {selectedQueueSale.customerPhone && (
+                        <div className="flex justify-between text-slate-400">
+                          <span>Phone:</span>
+                          <span className="font-mono text-slate-300">{selectedQueueSale.customerPhone}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-slate-400">
+                        <span>Salesman:</span>
+                        <span className="text-indigo-400 font-semibold">{selectedQueueSale.salesmanName || "Direct Counter"}</span>
+                      </div>
+                      <div className="pt-2 border-t border-slate-800 space-y-1">
+                        <div className="flex justify-between text-slate-400 font-mono">
+                          <span>Total Booked Price:</span>
+                          <span className="text-slate-200">Rs. {mTotal.toLocaleString()}</span>
+                        </div>
+                        {mPaid > 0 && (
+                          <div className="flex justify-between text-purple-400 font-mono font-semibold">
+                            <span>Advance Deposit Paid:</span>
+                            <span>- Rs. {mPaid.toLocaleString()}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-amber-400 font-mono font-bold text-xs">
+                          <span>Remaining Balance Due:</span>
+                          <span className="font-extrabold">Rs. {mDue.toLocaleString()}</span>
+                        </div>
+                        {queuePriceAdjustment !== 0 && (
+                          <div className="flex justify-between font-mono font-bold text-xs text-amber-400">
+                            <span>Adjustment / Surcharge:</span>
+                            <span>{queuePriceAdjustment > 0 ? `+ Rs. ${queuePriceAdjustment.toLocaleString()}` : `- Rs. ${Math.abs(queuePriceAdjustment).toLocaleString()}`}</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex justify-between text-slate-100 font-mono font-bold pt-2 border-t border-slate-800 text-sm">
+                        <span>Final Collection Today:</span>
+                        <span className="text-emerald-400 text-base font-black">
+                          Rs. {mFinal.toLocaleString()}
+                        </span>
+                      </div>
                     </div>
-                  )}
-                  <div className="flex justify-between text-slate-400">
-                    <span>Salesman:</span>
-                    <span className="text-indigo-400 font-semibold">{selectedQueueSale.salesmanName || "Direct Counter"}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-100 font-mono font-bold pt-2 border-t border-slate-800 text-xs">
-                    <span>Base Balance Due:</span>
-                    <span>Rs. {((selectedQueueSale.balanceDue !== undefined && selectedQueueSale.balanceDue > 0 ? selectedQueueSale.balanceDue : selectedQueueSale.totalAmount) || 0).toLocaleString()}</span>
-                  </div>
-                  {queuePriceAdjustment !== 0 && (
-                    <div className="flex justify-between font-mono font-bold text-xs text-amber-400">
-                      <span>Adjustment / Surcharge:</span>
-                      <span>{queuePriceAdjustment > 0 ? `+ Rs. ${queuePriceAdjustment.toLocaleString()}` : `- Rs. ${Math.abs(queuePriceAdjustment).toLocaleString()}`}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between text-slate-100 font-mono font-bold pt-2 border-t border-slate-800 text-sm">
-                    <span>Final Collection Amount:</span>
-                    <span className="text-emerald-400 text-base">
-                      Rs. {Math.max(0, ((selectedQueueSale.balanceDue !== undefined && selectedQueueSale.balanceDue > 0 ? selectedQueueSale.balanceDue : selectedQueueSale.totalAmount) || 0) + Number(queuePriceAdjustment || 0)).toLocaleString()}
-                    </span>
-                  </div>
-                </div>
+                  );
+                })()}
 
                 {/* +/- Price Adjustment Input Field */}
                 <div className="space-y-1.5 bg-slate-950 p-3 rounded-xl border border-slate-800">
