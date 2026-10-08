@@ -205,15 +205,16 @@ export async function PUT(
 
     await invoice.save();
 
-    // Sync baseline Product prices for valid invoice items (> 0)
     const { Product } = await import("@/models/Product");
     for (const item of invoice.items) {
       if (item.unitCost > 0 || item.sellingPrice > 0) {
+        const existingProd = await Product.findById(item.product);
+        const shouldUpdateCost = item.unitCost > 0 && (!existingProd?.costPrice || existingProd.costPrice <= 0);
         await Product.updateOne(
           { _id: item.product },
           {
             $set: {
-              ...(item.unitCost > 0 && { costPrice: item.unitCost }),
+              ...(shouldUpdateCost && { costPrice: item.unitCost }),
               ...(item.sellingPrice > 0 && { sellingPrice: item.sellingPrice }),
               ...(item.minSellingPrice > 0 && { minSellingPrice: item.minSellingPrice }),
             },

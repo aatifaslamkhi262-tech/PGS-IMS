@@ -22,8 +22,18 @@ export async function GET(request: Request) {
       query.status = { $in: ["DRAFT", "CHECKOUT", "PAYMENT_PENDING"] };
     }
 
-    if (locationId) {
+    const salesmanId = searchParams.get("salesmanId");
+
+    if (locationId && locationId !== "ALL") {
       query.location = locationId;
+    }
+
+    if (salesmanId && salesmanId !== "ALL") {
+      if (salesmanId === "DIRECT") {
+        query.$or = [{ salesman: { $exists: false } }, { salesman: null }];
+      } else {
+        query.salesman = salesmanId;
+      }
     }
 
     if (search && search.trim() !== "") {

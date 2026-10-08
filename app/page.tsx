@@ -860,7 +860,7 @@ export default function ProductListPage() {
                         {p.pricingSource === "WEIGHTED_AVERAGE" && (
                           <div>
                             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                              Weighted Avg
+                              Weighted Avg ({p.condition || "New"})
                             </span>
                           </div>
                         )}

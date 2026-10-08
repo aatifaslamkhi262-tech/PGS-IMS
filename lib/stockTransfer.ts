@@ -6,6 +6,7 @@ import { InventoryMovement } from "@/models/InventoryMovement";
 import { Location } from "@/models/Location";
 import { User } from "@/models/User";
 import { Types } from "mongoose";
+import { isValidCost, blendAverageCost, COST_PLACEHOLDER_MAX } from "@/lib/costing";
 
 /**
  * Generate unique Transfer Number: TRF-YYYYMMDD-XXX
@@ -216,7 +217,15 @@ export async function executeDispatch({
     currentTransferId: transfer._id.toString(),
   });
 
-  // 3. Validate & Deduct Stock from Source Location
+  // 3. Pre-validate ALL items before making ANY deductions (Atomic multi-item validation)
+  const validatedItems: Array<{
+    item: any;
+    product: any;
+    inv: any;
+    unitCost: number;
+    beforeQty: number;
+  }> = [];
+
   for (const item of transfer.items) {
     const product = await Product.findById(item.product);
     if (!product) {
@@ -236,6 +245,18 @@ export async function executeDispatch({
       );
     }
 
+    const unitCost = (inv && inv.averageCost && isValidCost(inv.averageCost)) ? inv.averageCost : 0;
+    if (!isValidCost(unitCost)) {
+      throw new Error(
+        `Cannot dispatch transfer: Source inventory for '${product.name}' (${item.condition}) has no valid average cost (averageCost <= ${COST_PLACEHOLDER_MAX}). Please update cost in Product Directory before transferring.`
+      );
+    }
+
+    validatedItems.push({ item, product, inv, unitCost, beforeQty: currentQty });
+  }
+
+  // 4. All items validated! Now perform deductions, serial status updates, and snapshot unitCost
+  for (const { item, product, inv, unitCost, beforeQty } of validatedItems) {
     // Update serial statuses to Transferred
     if (product.serialTracking && item.serialNumbers) {
       for (const sn of item.serialNumbers) {
@@ -252,16 +273,21 @@ export async function executeDispatch({
       }
     }
 
-    // Deduct stock from Source
-    const beforeQty = inv!.quantity;
-    inv!.quantity -= item.quantity;
-    inv!.status = inv!.quantity > 0 ? "In Stock" : "Out of Stock";
-    await inv!.save();
+    const remainingQty = beforeQty - item.quantity;
+    inv.quantity = remainingQty;
+    inv.totalCostValue = Math.round(remainingQty * unitCost * 100) / 100;
+    inv.status = remainingQty > 0 ? "In Stock" : "Out of Stock";
+    await inv.save();
+
+    // Snapshot cost for transfer
+    item.unitCost = unitCost;
 
     // Log InventoryMovement audit entry
     await InventoryMovement.create({
       product: item.product,
       quantity: item.quantity,
+      unitCost: unitCost,
+      totalCost: Math.round(item.quantity * unitCost * 100) / 100,
       serialNumbers: item.serialNumbers || [],
       sourceLocation: sourceLoc._id,
       sourceName: sourceLoc.name,
@@ -270,7 +296,7 @@ export async function executeDispatch({
       type: "TRANSFER",
       referenceTransaction: transfer.transferNumber,
       beforeQuantity: beforeQty,
-      afterQuantity: inv!.quantity,
+      afterQuantity: remainingQty,
       performedBy: actionUsername,
       dispatchedBy: actionUsername,
       carrierUser: carrier._id,
@@ -361,6 +387,13 @@ export async function executeReceive({
 
     // 1. Update Destination Inventory only for GOOD / UNDAMAGED quantity
     if (goodQty > 0) {
+      if (!item.unitCost || item.unitCost <= 0) {
+        throw new Error(
+          `Cannot receive transfer item '${product?.name || item.product}' (${item.condition}): unitCost is <= 0 on transfer. Fallback to product costPrice is disabled to prevent inventory cost corruption.`
+        );
+      }
+      const itemUnitCost = item.unitCost;
+
       let inv = await Inventory.findOne({
         product: item.product,
         location: transfer.destinationLocation,
@@ -373,12 +406,26 @@ export async function executeReceive({
           location: transfer.destinationLocation,
           condition: item.condition,
           quantity: goodQty,
+          averageCost: itemUnitCost,
+          totalCostValue: Math.round(goodQty * itemUnitCost * 100) / 100,
           serialTracking: product?.serialTracking || false,
           status: "In Stock",
         });
       } else {
-        inv.quantity += goodQty;
-        inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
+        const existingQty = Math.max(0, inv.quantity || 0);
+        const existingAvg = (inv.averageCost && isValidCost(inv.averageCost)) ? inv.averageCost : 0;
+        const newQty = existingQty + goodQty;
+        const newAvg = blendAverageCost({
+          existingQty,
+          existingAvg,
+          incomingQty: goodQty,
+          incomingCost: itemUnitCost,
+        });
+
+        inv.quantity = newQty;
+        inv.averageCost = newAvg;
+        inv.totalCostValue = Math.round(newQty * newAvg * 100) / 100;
+        inv.status = newQty > 0 ? "In Stock" : "Out of Stock";
       }
       await inv.save();
     }
@@ -611,16 +658,31 @@ export async function executeCancelTransfer({
 
       const beforeQty = inv ? inv.quantity : 0;
       if (!inv) {
+        const initialCost = isValidCost(item.unitCost) ? (item.unitCost as number) : 0;
         inv = new Inventory({
           product: item.product,
           location: sourceLoc._id,
           condition: item.condition,
           quantity: item.quantity,
+          averageCost: initialCost,
+          totalCostValue: Math.round(item.quantity * initialCost * 100) / 100,
           serialTracking: product?.serialTracking || false,
           status: "In Stock",
         });
       } else {
-        inv.quantity += item.quantity;
+        const existingQty = Math.max(0, inv.quantity || 0);
+        const existingAvg = (inv.averageCost && isValidCost(inv.averageCost)) ? inv.averageCost : 0;
+        inv.quantity = existingQty + item.quantity;
+        // executeCancelTransfer must NEVER throw if item.unitCost is invalid:
+        if (isValidCost(item.unitCost)) {
+          inv.averageCost = blendAverageCost({
+            existingQty,
+            existingAvg,
+            incomingQty: item.quantity,
+            incomingCost: item.unitCost as number,
+          });
+        }
+        inv.totalCostValue = Math.round(inv.quantity * (inv.averageCost || 0) * 100) / 100;
         inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
       }
       await inv.save();
@@ -729,11 +791,14 @@ export async function syncUnrestoredCancelledTransfers() {
               location: sourceLoc._id,
               condition: item.condition,
               quantity: item.quantity,
+              averageCost: item.unitCost || 0,
+              totalCostValue: Math.round(item.quantity * (item.unitCost || 0) * 100) / 100,
               serialTracking: product?.serialTracking || false,
               status: "In Stock",
             });
           } else {
             inv.quantity += item.quantity;
+            inv.totalCostValue = Math.round(inv.quantity * (inv.averageCost || 0) * 100) / 100;
             inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
           }
           await inv.save();

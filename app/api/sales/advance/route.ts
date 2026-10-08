@@ -247,8 +247,10 @@ export async function DELETE(request: Request) {
     }
 
     // 2. Refund payments recorded for this sale
-    const cashPayments = await Payment.find({ sale: sale._id, paymentMethod: "CASH", status: "PAID" });
-    const totalCashPaid = cashPayments.reduce((sum, p) => sum + p.amount, 0);
+    const allPaidPayments = await Payment.find({ sale: sale._id, status: "PAID" });
+    const totalPaidSum = allPaidPayments.reduce((sum, p) => sum + Number(p.amount), 0);
+    const cashPayments = allPaidPayments.filter((p) => p.paymentMethod === "CASH");
+    const totalCashPaid = cashPayments.reduce((sum, p) => sum + Number(p.amount), 0);
 
     await Payment.updateMany({ sale: sale._id }, { $set: { status: "REFUNDED" } });
 
@@ -272,7 +274,20 @@ export async function DELETE(request: Request) {
       });
     }
 
-    // 4. Update sale status to CANCELLED
+    // 4. Update Customer Ledger to refund/reverse advance balance if customer exists
+    if (sale.customer && totalPaidSum > 0) {
+      await recordCustomerLedgerEntry({
+        customerId: sale.customer.toString(),
+        type: "ADVANCE_REFUND",
+        amount: totalPaidSum,
+        referenceType: "AdvanceBooking",
+        referenceId: sale.saleNumber,
+        notes: `Advance deposit refund for cancelled booking #${sale.saleNumber}`,
+        createdBy: "system",
+      });
+    }
+
+    // 5. Update sale status to CANCELLED
     sale.status = "CANCELLED";
     sale.cancelledAt = new Date();
     sale.cancellationReason = "Advance booking cancelled by user";

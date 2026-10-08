@@ -16,6 +16,7 @@ export interface ITransferItem {
   condition: string; // "New" | "Used"
   quantity: number;
   serialNumbers?: string[];
+  unitCost?: number;
 }
 
 export interface IDamagedReceiveItem {
@@ -106,6 +107,11 @@ const TransferItemSchema = new Schema(
     serialNumbers: {
       type: [String],
       default: [],
+    },
+    unitCost: {
+      type: Number,
+      min: 0,
+      default: 0,
     },
   },
   { _id: false }

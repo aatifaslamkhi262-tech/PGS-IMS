@@ -59,11 +59,11 @@ function SalesWorkspaceContent() {
   const [currentUser, setCurrentUser] = useState<any | null>(null);
   const [loadingMaster, setLoadingMaster] = useState(true);
 
-  // Common Header State
-  const [selectedLocation, setSelectedLocation] = useState("");
+  // Common Header State (Default to ALL for global visibility)
+  const [selectedLocation, setSelectedLocation] = useState("ALL");
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
-  const [selectedSalesman, setSelectedSalesman] = useState("");
+  const [selectedSalesman, setSelectedSalesman] = useState("ALL");
 
   // Mode: POS State
   const [cartItems, setCartItems] = useState<any[]>([]);
@@ -105,7 +105,15 @@ function SalesWorkspaceContent() {
   const [selectedQueueSale, setSelectedQueueSale] = useState<any | null>(null);
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [queuePaymentMethod, setQueuePaymentMethod] = useState<"CASH" | "CARD" | "BANK_TRANSFER">("CASH");
+  const [queuePriceAdjustment, setQueuePriceAdjustment] = useState<number>(0);
   const [completingQueueSale, setCompletingQueueSale] = useState(false);
+
+  // Cancellation Modal States
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelSaleTarget, setCancelSaleTarget] = useState<any | null>(null);
+  const [cancelReason, setCancelReason] = useState<string>("Customer Forfeited Advance (Non-refundable)");
+  const [forfeitAdvanceInput, setForfeitAdvanceInput] = useState<boolean>(true);
+  const [cancellingSale, setCancellingSale] = useState(false);
 
   const handleReassignSalesman = async () => {
     if (!reassignSale) return;
@@ -132,11 +140,19 @@ function SalesWorkspaceContent() {
     if (!selectedQueueSale) return;
     try {
       setCompletingQueueSale(true);
+
+      const remainingBalance = selectedQueueSale.balanceDue !== undefined && selectedQueueSale.balanceDue > 0
+        ? selectedQueueSale.balanceDue
+        : Math.max(0, selectedQueueSale.totalAmount - (selectedQueueSale.totalPaid || 0));
+      const baseCheckoutAmount = remainingBalance > 0 ? remainingBalance : selectedQueueSale.totalAmount;
+      const finalCheckoutAmount = Math.max(0, baseCheckoutAmount + Number(queuePriceAdjustment || 0));
+
       const res = await fetch(`/api/sales/${selectedQueueSale._id}/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          paymentAllocations: [{ method: queuePaymentMethod, amount: selectedQueueSale.totalAmount }],
+          paymentAllocations: [{ method: queuePaymentMethod, amount: finalCheckoutAmount }],
+          notes: queuePriceAdjustment !== 0 ? `Price Adjustment / Late Fee: Rs. ${queuePriceAdjustment}` : undefined,
         }),
       });
       const data = await res.json();
@@ -146,34 +162,40 @@ function SalesWorkspaceContent() {
         );
         const locName = locObj ? locObj.name : "Warehouse";
 
-        setCompletedReceiptData({
-          invoiceNumber: data.invoice?.invoiceNumber || selectedQueueSale.saleNumber,
-          date: new Date().toLocaleString(),
-          locationName: locName,
-          cashierName: currentUser?.username || "Warehouse Cashier",
-          salesmanName: selectedQueueSale.salesmanName || "Direct Counter",
-          customerName: selectedQueueSale.customerName || "Walk-in Customer",
-          customerPhone: selectedQueueSale.customerPhone || "N/A",
-          items: (selectedQueueSale.items || []).map((it: any) => ({
-            productName: it.productName || "Product Item",
-            condition: it.condition || "New",
-            quantity: it.quantity || 1,
-            unitPrice: it.unitPrice || 0,
-            lineTotal: it.lineTotal || (it.quantity * (it.unitPrice || 0)),
-            serialNumbers: it.serialNumbers || [],
-          })),
-          subtotal: selectedQueueSale.subtotal || selectedQueueSale.totalAmount,
-          discountAmount: selectedQueueSale.discountAmount || 0,
-          deliveryCharges: selectedQueueSale.deliveryCharges || 0,
-          totalAmount: selectedQueueSale.totalAmount,
-          paidAmount: selectedQueueSale.totalAmount,
-          changeDue: 0,
-          payments: [{ method: queuePaymentMethod, amount: selectedQueueSale.totalAmount }],
-        });
+        if (data.receiptData) {
+          setCompletedReceiptData(data.receiptData);
+        } else {
+          setCompletedReceiptData({
+            invoiceNumber: data.invoice?.invoiceNumber || selectedQueueSale.saleNumber,
+            date: new Date().toLocaleString(),
+            locationName: locName,
+            cashierName: currentUser?.username || "Warehouse Cashier",
+            salesmanName: selectedQueueSale.salesmanName || "Direct Counter",
+            customerName: selectedQueueSale.customerName || "Walk-in Customer",
+            customerPhone: selectedQueueSale.customerPhone || "N/A",
+            items: (selectedQueueSale.items || []).map((it: any) => ({
+              productName: it.productName || "Product Item",
+              condition: it.condition || "New",
+              quantity: it.quantity || 1,
+              unitPrice: it.unitPrice || 0,
+              lineTotal: it.lineTotal || (it.quantity * (it.unitPrice || 0)),
+              serialNumbers: it.serialNumbers || [],
+            })),
+            subtotal: selectedQueueSale.subtotal || selectedQueueSale.totalAmount,
+            discountAmount: selectedQueueSale.discountAmount || 0,
+            deliveryCharges: selectedQueueSale.deliveryCharges || 0,
+            totalAmount: selectedQueueSale.totalAmount + Number(queuePriceAdjustment || 0),
+            paidAmount: selectedQueueSale.totalAmount + Number(queuePriceAdjustment || 0),
+            changeDue: 0,
+            balanceDue: 0,
+            payments: [{ method: queuePaymentMethod, amount: finalCheckoutAmount }],
+          });
+        }
 
         setShowReceiptModal(true);
         setShowVerifyModal(false);
         setSelectedQueueSale(null);
+        setQueuePriceAdjustment(0);
         fetchQueue();
       } else {
         alert(data.error || "Failed to complete queue sale.");
@@ -387,7 +409,6 @@ function SalesWorkspaceContent() {
 
         if (locRes.success && locRes.data.length > 0) {
           setLocations(locRes.data);
-          setSelectedLocation(locRes.data[0]._id);
         }
         if (prodRes.success) setProducts(prodRes.data);
         if (userRes.success) setSalesmen(userRes.data);
@@ -406,12 +427,12 @@ function SalesWorkspaceContent() {
     if (mode === "QUEUE") {
       fetchQueue();
     }
-  }, [mode, selectedLocation, queueStatusFilter]);
+  }, [mode, selectedLocation, selectedSalesman, queueStatusFilter]);
 
   const fetchQueue = async () => {
     try {
       setLoadingQueue(true);
-      const res = await fetch(`/api/sales/queue?locationId=${selectedLocation}&status=${queueStatusFilter}`);
+      const res = await fetch(`/api/sales/queue?locationId=${selectedLocation || "ALL"}&salesmanId=${selectedSalesman || "ALL"}&status=${queueStatusFilter}`);
       const data = await res.json();
       if (data.success) {
         setPendingSales(data.data);
@@ -423,23 +444,38 @@ function SalesWorkspaceContent() {
     }
   };
 
-  const handleCancelQueueSale = async (saleId: string, saleNumber: string) => {
-    if (!confirm(`Are you sure you want to cancel and remove order ${saleNumber} from the queue?`)) {
-      return;
-    }
+  const handleOpenCancelModal = (sale: any) => {
+    setCancelSaleTarget(sale);
+    setCancelReason("Customer Forfeited Advance (Non-refundable / Store Retains Deposit)");
+    setForfeitAdvanceInput(sale.saleSource === "ADVANCE_BOOKING" || sale.status === "PAYMENT_PENDING");
+    setShowCancelModal(true);
+  };
+
+  const handleExecuteSaleCancellation = async () => {
+    if (!cancelSaleTarget) return;
     try {
-      const res = await fetch(`/api/sales/${saleId}`, {
+      setCancellingSale(true);
+      const res = await fetch(`/api/sales/${cancelSaleTarget._id}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          forfeitAdvance: forfeitAdvanceInput,
+          cancellationReason: cancelReason,
+        }),
       });
       const data = await res.json();
       if (data.success) {
-        alert(`Order ${saleNumber} cancelled and removed from queue.`);
+        alert(data.message || `Order ${cancelSaleTarget.saleNumber} cancelled successfully.`);
+        setShowCancelModal(false);
+        setCancelSaleTarget(null);
         fetchQueue();
       } else {
         alert(data.error || "Failed to cancel sale.");
       }
-    } catch (err: any) {
+    } catch {
       alert("Error cancelling sale.");
+    } finally {
+      setCancellingSale(false);
     }
   };
 
@@ -493,8 +529,11 @@ function SalesWorkspaceContent() {
       alert("Cart is empty.");
       return;
     }
-    if (!selectedLocation) {
-      alert("Please select a location.");
+    const targetLocationId = (selectedLocation && selectedLocation !== "ALL")
+      ? selectedLocation
+      : (locations[0]?._id || "");
+    if (!targetLocationId) {
+      alert("Please select a valid Store Location.");
       return;
     }
 
@@ -518,7 +557,10 @@ function SalesWorkspaceContent() {
       return;
     }
 
-    const selectedSalesmanObj = salesmen.find((s) => s._id === selectedSalesman);
+    const targetSalesmanId = (selectedSalesman && selectedSalesman !== "ALL" && selectedSalesman !== "DIRECT")
+      ? selectedSalesman
+      : undefined;
+    const selectedSalesmanObj = targetSalesmanId ? salesmen.find((s) => s._id === targetSalesmanId) : undefined;
 
     try {
       setSubmitting(true);
@@ -532,9 +574,9 @@ function SalesWorkspaceContent() {
         },
         body: JSON.stringify({
           creationMode: "DIRECT_COUNTER",
-          saleSource: selectedSalesman ? "SALESMAN" : "DIRECT_COUNTER",
-          locationId: selectedLocation,
-          salesmanId: selectedSalesman || undefined,
+          saleSource: targetSalesmanId ? "SALESMAN" : "DIRECT_COUNTER",
+          locationId: targetLocationId,
+          salesmanId: targetSalesmanId,
           salesmanName: selectedSalesmanObj ? selectedSalesmanObj.name : undefined,
           customerName: customerName || "Walk-in Customer",
           customerPhone: customerPhone || undefined,
@@ -682,6 +724,17 @@ function SalesWorkspaceContent() {
       setSubmitting(true);
       const idempotencyKey = `ADV-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
+      const targetLocationId = (selectedLocation && selectedLocation !== "ALL")
+        ? selectedLocation
+        : (locations[0]?._id || "");
+      if (!targetLocationId) {
+        alert("Please select a valid Store Location.");
+        return;
+      }
+      const targetSalesmanId = (selectedSalesman && selectedSalesman !== "ALL" && selectedSalesman !== "DIRECT")
+        ? selectedSalesman
+        : undefined;
+
       const res = await fetch("/api/sales/advance", {
         method: "POST",
         headers: {
@@ -689,8 +742,8 @@ function SalesWorkspaceContent() {
           "x-idempotency-key": idempotencyKey,
         },
         body: JSON.stringify({
-          locationId: selectedLocation,
-          salesmanId: selectedSalesman || undefined,
+          locationId: targetLocationId,
+          salesmanId: targetSalesmanId,
           customerName: customerName || "Advance Booking Customer",
           customerPhone: customerPhone || undefined,
           items: advanceItems.map((it) => ({
@@ -714,7 +767,7 @@ function SalesWorkspaceContent() {
         setAdvanceDeposit(0);
         setExpectedDate("");
         if (data.data?.receiptData) {
-          setReceiptData(data.data.receiptData);
+          setCompletedReceiptData(data.data.receiptData);
           setShowReceiptModal(true);
         }
       } else {
@@ -778,8 +831,11 @@ function SalesWorkspaceContent() {
 
       const data = await res.json();
       if (data.success) {
-        setReceiptData(data.data.receiptData);
-        alert(`Direct Trade-In ${data.data.tradeInNumber} completed successfully!`);
+        if (data.data?.receiptData) {
+          setCompletedReceiptData(data.data.receiptData);
+          setShowReceiptModal(true);
+        }
+        alert(`Direct Trade-In ${data.data?.tradeInNumber || ""} completed successfully!`);
       } else {
         alert(data.error || "Failed to process Trade-In.");
       }
@@ -1391,6 +1447,7 @@ function SalesWorkspaceContent() {
                 onChange={(e) => setSelectedLocation(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
               >
+                <option value="ALL">🌐 All Store Locations</option>
                 {locations.map((loc) => (
                   <option key={loc._id} value={loc._id}>
                     {loc.name}
@@ -1434,7 +1491,8 @@ function SalesWorkspaceContent() {
               onChange={(e) => setSelectedSalesman(e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
             >
-              <option value="">Direct Counter / Self</option>
+              <option value="ALL">👥 All Staff / All Salesmen</option>
+              <option value="DIRECT">Direct Counter / Self</option>
               {salesmen.map((s) => (
                 <option key={s._id} value={s._id}>
                   {s.name} (@{s.username})
@@ -1982,7 +2040,7 @@ function SalesWorkspaceContent() {
                           </button>
                         )}
                         <button
-                          onClick={() => handleCancelQueueSale(sale._id, sale.saleNumber)}
+                          onClick={() => handleOpenCancelModal(sale)}
                           className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
                         >
                           🗑️ Cancel
@@ -3362,9 +3420,54 @@ function SalesWorkspaceContent() {
                     <span>Salesman:</span>
                     <span className="text-indigo-400 font-semibold">{selectedQueueSale.salesmanName || "Direct Counter"}</span>
                   </div>
+                  <div className="flex justify-between text-slate-100 font-mono font-bold pt-2 border-t border-slate-800 text-xs">
+                    <span>Base Balance Due:</span>
+                    <span>Rs. {((selectedQueueSale.balanceDue !== undefined && selectedQueueSale.balanceDue > 0 ? selectedQueueSale.balanceDue : selectedQueueSale.totalAmount) || 0).toLocaleString()}</span>
+                  </div>
+                  {queuePriceAdjustment !== 0 && (
+                    <div className="flex justify-between font-mono font-bold text-xs text-amber-400">
+                      <span>Adjustment / Surcharge:</span>
+                      <span>{queuePriceAdjustment > 0 ? `+ Rs. ${queuePriceAdjustment.toLocaleString()}` : `- Rs. ${Math.abs(queuePriceAdjustment).toLocaleString()}`}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-slate-100 font-mono font-bold pt-2 border-t border-slate-800 text-sm">
-                    <span>Total Amount Payable:</span>
-                    <span className="text-emerald-400 text-base">Rs. {selectedQueueSale.totalAmount?.toLocaleString()}</span>
+                    <span>Final Collection Amount:</span>
+                    <span className="text-emerald-400 text-base">
+                      Rs. {Math.max(0, ((selectedQueueSale.balanceDue !== undefined && selectedQueueSale.balanceDue > 0 ? selectedQueueSale.balanceDue : selectedQueueSale.totalAmount) || 0) + Number(queuePriceAdjustment || 0)).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+
+                {/* +/- Price Adjustment Input Field */}
+                <div className="space-y-1.5 bg-slate-950 p-3 rounded-xl border border-slate-800">
+                  <label className="block text-[11px] font-bold text-amber-400 uppercase tracking-wider flex items-center justify-between">
+                    <span>Price Adjustment / Late Fee (+ / - PKR)</span>
+                    <span className="text-[10px] text-slate-400 font-normal">Enter e.g. 1000 or -500</span>
+                  </label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="number"
+                      placeholder="e.g. 1000 or -500"
+                      value={queuePriceAdjustment || ""}
+                      onChange={(e) => setQueuePriceAdjustment(Number(e.target.value))}
+                      className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs font-mono text-amber-400 font-bold focus:outline-none focus:border-amber-500"
+                    />
+                    <div className="flex gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setQueuePriceAdjustment((prev) => prev + 1000)}
+                        className="px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 rounded-lg text-[10px] font-bold"
+                      >
+                        +1,000
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setQueuePriceAdjustment(0)}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-lg text-[10px] font-bold"
+                      >
+                        Reset
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -3416,6 +3519,7 @@ function SalesWorkspaceContent() {
                   onClick={() => {
                     setShowVerifyModal(false);
                     setSelectedQueueSale(null);
+                    setQueuePriceAdjustment(0);
                   }}
                   className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
                 >
@@ -3432,6 +3536,115 @@ function SalesWorkspaceContent() {
                   ) : (
                     <span>Complete & Print Invoice 🖨️</span>
                   )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Cancellation Reason & Non-refundable Advance Modal */}
+        {showCancelModal && cancelSaleTarget && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-md w-full space-y-5 shadow-2xl">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h3 className="text-sm font-bold text-rose-400 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400" />
+                  Cancel Order #{cancelSaleTarget.saleNumber}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowCancelModal(false);
+                    setCancelSaleTarget(null);
+                  }}
+                  className="text-slate-400 hover:text-slate-200 text-sm font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1 font-mono">
+                  <div className="flex justify-between text-slate-300">
+                    <span>Customer:</span>
+                    <span className="font-bold text-slate-100">{cancelSaleTarget.customerName || "Walk-in Customer"}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Total Order Bill:</span>
+                    <span className="font-bold text-slate-200">Rs. {cancelSaleTarget.totalAmount?.toLocaleString()}</span>
+                  </div>
+                  {(cancelSaleTarget.totalPaid || 0) > 0 && (
+                    <div className="flex justify-between text-purple-400 font-bold">
+                      <span>Advance Paid:</span>
+                      <span>Rs. {cancelSaleTarget.totalPaid?.toLocaleString()}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Select Cancellation Reason *
+                  </label>
+                  <select
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-rose-500"
+                  >
+                    <option value="Customer Forfeited Advance (Non-refundable / Store Retains Deposit)">
+                      🚫 Customer Forfeited Advance (Non-refundable Deposit)
+                    </option>
+                    <option value="Customer Requested Refund & Cancel">
+                      🔄 Customer Requested Refund & Cancel
+                    </option>
+                    <option value="Out of Stock / Product Unavailable">
+                      📦 Out of Stock / Product Unavailable
+                    </option>
+                    <option value="Customer Changed Mind / Other">
+                      ❓ Customer Changed Mind / Other
+                    </option>
+                  </select>
+                </div>
+
+                {/* Non-refundable Advance Deposit Toggle Option */}
+                {(cancelSaleTarget.totalPaid || 0) > 0 && (
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                    <label className="flex items-center gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={forfeitAdvanceInput}
+                        onChange={(e) => setForfeitAdvanceInput(e.target.checked)}
+                        className="w-4 h-4 rounded text-rose-600 focus:ring-rose-500 border-slate-700 bg-slate-900"
+                      />
+                      <span className="text-xs font-bold text-rose-400">
+                        Retain Advance Deposit as Store Income (Non-refundable Policy)
+                      </span>
+                    </label>
+                    <p className="text-[11px] text-slate-400 pl-6">
+                      {forfeitAdvanceInput
+                        ? `✓ Customer's deposit of Rs. ${cancelSaleTarget.totalPaid?.toLocaleString()} will NOT be refunded. Store retains cash as income.`
+                        : `✓ Advance deposit will be refunded to customer ledger / cash.`}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCancelModal(false);
+                    setCancelSaleTarget(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-800 bg-slate-950 text-slate-300 text-xs font-semibold hover:bg-slate-800 transition"
+                >
+                  Dismiss
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExecuteSaleCancellation}
+                  disabled={cancellingSale}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-rose-600/20 transition flex items-center justify-center gap-2"
+                >
+                  {cancellingSale ? "Processing..." : "Confirm Cancel Order"}
                 </button>
               </div>
             </div>

@@ -15,6 +15,7 @@ interface TransferItem {
     product: { name: string; sku: string; barcode: string; serialTracking: boolean; costPrice?: number; sellingPrice?: number };
     condition: string;
     quantity: number;
+    unitCost?: number;
     serialNumbers?: string[];
   }>;
   reason?: string;
@@ -27,17 +28,48 @@ interface TransferItem {
   createdAt: string;
 }
 
+interface LocationOption {
+  _id: string;
+  name: string;
+  code: string;
+}
+
 export default function TransfersPage() {
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
+  const [locations, setLocations] = useState<LocationOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [sourceLocation, setSourceLocation] = useState("");
+  const [destinationLocation, setDestinationLocation] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [error, setError] = useState("");
   const [expandedTransferId, setExpandedTransferId] = useState<string | null>(null);
 
   const toggleExpand = (id?: string) => {
     if (!id) return;
     setExpandedTransferId((prev) => (prev === id ? null : id));
+  };
+
+  const setDatePreset = (preset: "today" | "yesterday" | "clear") => {
+    if (preset === "clear") {
+      setStartDate("");
+      setEndDate("");
+      return;
+    }
+    const today = new Date();
+    if (preset === "today") {
+      const dStr = today.toISOString().slice(0, 10);
+      setStartDate(dStr);
+      setEndDate(dStr);
+    } else if (preset === "yesterday") {
+      const y = new Date(today);
+      y.setDate(y.getDate() - 1);
+      const yStr = y.toISOString().slice(0, 10);
+      setStartDate(yStr);
+      setEndDate(yStr);
+    }
   };
 
   const handleDeleteTransfer = async (id: string, transferNumber: string, isDispatched: boolean) => {
@@ -91,6 +123,10 @@ export default function TransfersPage() {
       const params = new URLSearchParams();
       if (search.trim()) params.append("search", search.trim());
       if (statusFilter !== "ALL") params.append("status", statusFilter);
+      if (sourceLocation) params.append("sourceLocation", sourceLocation);
+      if (destinationLocation) params.append("destinationLocation", destinationLocation);
+      if (startDate) params.append("startDate", startDate);
+      if (endDate) params.append("endDate", endDate);
       if (params.toString()) url += `?${params.toString()}`;
 
       const res = await fetch(url);
@@ -106,6 +142,19 @@ export default function TransfersPage() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const fetchLocations = async () => {
+      try {
+        const res = await fetch("/api/locations");
+        const data = await res.json();
+        if (data.success) setLocations(data.data);
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    fetchLocations();
+  }, []);
 
   useEffect(() => {
     fetchTransfers();
@@ -161,42 +210,132 @@ export default function TransfersPage() {
         </div>
 
         {/* Filters */}
-        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex flex-col md:flex-row gap-4 items-center justify-between">
-          <div className="flex flex-wrap gap-2 w-full md:w-auto">
-            {["ALL", "Pending_Approval", "Approved", "Dispatched", "Received", "Rejected"].map((st) => (
+        <div className="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4">
+          {/* Status Tabs */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-1.5">
+              {["ALL", "Pending_Approval", "Approved", "Dispatched", "Received", "Rejected"].map((st) => (
+                <button
+                  key={st}
+                  onClick={() => setStatusFilter(st)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                    statusFilter === st
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                      : "bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                  }`}
+                >
+                  {st === "ALL" ? "All Transfers" : st.replace("_", " ")}
+                </button>
+              ))}
+            </div>
+
+            {/* Quick Date Presets */}
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-slate-500 text-[11px]">Quick Date:</span>
               <button
-                key={st}
-                onClick={() => setStatusFilter(st)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  statusFilter === st
-                    ? "bg-blue-600 text-white shadow"
-                    : "bg-slate-800/90 hover:bg-slate-700 text-slate-300 border border-slate-700/60"
-                }`}
+                type="button"
+                onClick={() => setDatePreset("today")}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-semibold cursor-pointer"
               >
-                {st === "ALL" ? "All Transfers" : st.replace("_", " ")}
+                Today
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => setDatePreset("yesterday")}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-semibold cursor-pointer"
+              >
+                Yesterday
+              </button>
+              {(startDate || endDate) && (
+                <button
+                  type="button"
+                  onClick={() => setDatePreset("clear")}
+                  className="px-2 py-1 rounded-lg text-rose-400 hover:underline text-[11px] cursor-pointer"
+                >
+                  Clear Date
+                </button>
+              )}
+            </div>
           </div>
 
+          {/* Location & Date Dropdowns */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-1 border-t border-slate-800/80">
+            <div>
+              <label className="block text-[11px] text-slate-400 mb-1">Source Location (From)</label>
+              <select
+                value={sourceLocation}
+                onChange={(e) => setSourceLocation(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200"
+              >
+                <option value="">-- All Source Locations --</option>
+                {locations.map((loc) => (
+                  <option key={loc._id} value={loc._id}>
+                    {loc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] text-slate-400 mb-1">Destination Branch (To)</label>
+              <select
+                value={destinationLocation}
+                onChange={(e) => setDestinationLocation(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200"
+              >
+                <option value="">-- All Destination Locations --</option>
+                {locations.map((loc) => (
+                  <option key={loc._id} value={loc._id}>
+                    {loc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] text-slate-400 mb-1">Start Date</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] text-slate-400 mb-1">End Date</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200"
+              />
+            </div>
+          </div>
+
+          {/* Search Keywords & Apply Button */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               fetchTransfers();
             }}
-            className="flex gap-2 w-full md:w-80"
+            className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1 border-t border-slate-800/80"
           >
-            <input
-              type="text"
-              placeholder="Search ref, carrier, user..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-            />
+            <div className="w-full sm:w-96">
+              <input
+                type="text"
+                placeholder="Search ref, carrier, username, serial..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
             <button
               type="submit"
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-lg border border-slate-700"
+              className="w-full sm:w-auto px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow cursor-pointer transition"
             >
-              Search
+              Apply Filters
             </button>
           </form>
         </div>
@@ -218,11 +357,15 @@ export default function TransfersPage() {
               {/* Mobile Card View (< md) */}
               <div className="block md:hidden divide-y divide-slate-800">
                 {transfers.map((tr) => {
-                  const totalValuation = tr.items.reduce((sum, item) => {
-                    const selling = (item.product as any)?.sellingPrice;
-                    const cost = (item.product as any)?.costPrice;
-                    const rate = (selling && selling > 1) ? selling : (cost || 0);
-                    return sum + ((item.quantity || 1) * rate);
+                  const totalCostVal = tr.items.reduce((sum, item) => {
+                    const cost = item.unitCost !== undefined && item.unitCost !== null && item.unitCost > 0
+                      ? item.unitCost
+                      : ((item.product as any)?.costPrice || 0);
+                    return sum + ((item.quantity || 1) * cost);
+                  }, 0);
+                  const totalSaleVal = tr.items.reduce((sum, item) => {
+                    const selling = (item.product as any)?.sellingPrice || 0;
+                    return sum + ((item.quantity || 1) * selling);
                   }, 0);
                   const isExpanded = expandedTransferId === tr._id;
 
@@ -283,12 +426,15 @@ export default function TransfersPage() {
                       {/* Total Valuation & Action Bar */}
                       <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/60">
                         <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-emerald-400">Rs. {totalValuation.toLocaleString("en-PK")}</span>
+                          <div className="flex flex-col text-left font-mono">
+                            <span className="text-[11px] font-bold text-amber-300">Cost: Rs. {totalCostVal.toLocaleString("en-PK")}</span>
+                            <span className="text-[10px] font-semibold text-emerald-400">Sale: Rs. {totalSaleVal.toLocaleString("en-PK")}</span>
+                          </div>
                           <button
                             onClick={() => toggleExpand(tr._id)}
-                            className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold underline flex items-center gap-0.5"
+                            className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold underline flex items-center gap-0.5 ml-2"
                           >
-                            <span>{isExpanded ? "Hide Details" : "Quick Audit"}</span>
+                            <span>{isExpanded ? "Hide" : "Audit"}</span>
                             {isExpanded ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
                           </button>
                         </div>
@@ -340,16 +486,18 @@ export default function TransfersPage() {
                           {/* Mobile Vertical Cards Stack (Zero Horizontal Scroll!) */}
                           <div className="space-y-2">
                             {tr.items.map((it, iIdx) => {
-                              const selling = (it.product as any)?.sellingPrice;
-                              const cost = (it.product as any)?.costPrice;
-                              const unitRate = (selling && selling > 1) ? selling : (cost || 0);
-                              const lineTotal = (it.quantity || 1) * unitRate;
+                              const cost = it.unitCost !== undefined && it.unitCost !== null && it.unitCost > 0
+                                ? it.unitCost
+                                : ((it.product as any)?.costPrice || 0);
+                              const selling = (it.product as any)?.sellingPrice || 0;
+                              const lineCost = (it.quantity || 1) * cost;
+                              const lineSale = (it.quantity || 1) * selling;
                               return (
                                 <div
                                   key={iIdx}
                                   className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col gap-2"
                                 >
-                                  {/* Header: Item Name, Condition & Line Total */}
+                                  {/* Header: Item Name, Condition & Line Totals */}
                                   <div className="flex flex-wrap items-center justify-between gap-1.5">
                                     <div className="flex items-center gap-1.5 flex-wrap">
                                       <span className="font-bold text-slate-100 text-xs">{it.product?.name || "Item"}</span>
@@ -361,20 +509,20 @@ export default function TransfersPage() {
                                       </span>
                                     </div>
                                     <div className="font-mono text-right">
-                                      <span className="text-[9px] text-slate-500 uppercase block font-semibold">Total</span>
-                                      <span className="font-bold text-emerald-400 text-xs">Rs. {lineTotal.toLocaleString("en-PK")}</span>
+                                      <div className="text-amber-300 font-bold text-xs">Cost: Rs. {lineCost.toLocaleString("en-PK")}</div>
+                                      <div className="text-emerald-400 font-semibold text-[10px]">Sale: Rs. {lineSale.toLocaleString("en-PK")}</div>
                                     </div>
                                   </div>
 
-                                  {/* SKU, Barcode & Rate */}
+                                  {/* SKU, Barcode & Rates */}
                                   <div className="flex flex-wrap items-center justify-between text-[10px] gap-1 pt-1 border-t border-slate-900 font-mono text-slate-400">
                                     <div className="truncate max-w-[200px]">
                                       {it.product?.sku && <span>SKU: {it.product.sku}</span>}
                                       {it.product?.barcode && <span className="ml-1.5">| {it.product.barcode}</span>}
                                     </div>
-                                    <div>
-                                      <span>Rate: </span>
-                                      <span className="text-slate-200 font-semibold">Rs. {unitRate.toLocaleString("en-PK")}</span>
+                                    <div className="text-right">
+                                      <span>Unit Cost: <strong className="text-amber-300">Rs. {cost.toLocaleString("en-PK")}</strong> | </span>
+                                      <span>Unit Sale: <strong className="text-emerald-400">Rs. {selling.toLocaleString("en-PK")}</strong></span>
                                     </div>
                                   </div>
 
@@ -437,7 +585,7 @@ export default function TransfersPage() {
                       <th className="py-3.5 px-4 whitespace-nowrap">From</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">To</th>
                       <th className="py-3.5 px-4">Items / Qty</th>
-                      <th className="py-3.5 px-4 text-right whitespace-nowrap">Total Valuation</th>
+                      <th className="py-3.5 px-4 text-right whitespace-nowrap">Valuation (Cost / Sale)</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">Carried By</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">Dispatched By</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">Status</th>
@@ -446,11 +594,15 @@ export default function TransfersPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-800">
                     {transfers.map((tr) => {
-                      const totalValuation = tr.items.reduce((sum, item) => {
-                        const cost = (item.product as any)?.costPrice;
-                        const selling = (item.product as any)?.sellingPrice;
-                        const rate = (selling && selling > 1) ? selling : (cost || 0);
-                        return sum + ((item.quantity || 1) * rate);
+                      const totalCostVal = tr.items.reduce((sum, item) => {
+                        const cost = (item.unitCost !== undefined && item.unitCost !== null && item.unitCost > 0)
+                          ? item.unitCost
+                          : ((item.product as any)?.costPrice || 0);
+                        return sum + ((item.quantity || 1) * cost);
+                      }, 0);
+                      const totalSaleVal = tr.items.reduce((sum, item) => {
+                        const selling = (item.product as any)?.sellingPrice || 0;
+                        return sum + ((item.quantity || 1) * selling);
                       }, 0);
                       const isExpanded = expandedTransferId === tr._id;
                       return (
@@ -503,8 +655,9 @@ export default function TransfersPage() {
                                 )}
                               </div>
                             </td>
-                            <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-400 whitespace-nowrap">
-                              Rs. {totalValuation.toLocaleString("en-PK")}
+                            <td className="py-3.5 px-4 text-right font-mono whitespace-nowrap">
+                              <div className="text-amber-300 font-bold text-xs">Cost: Rs. {totalCostVal.toLocaleString("en-PK")}</div>
+                              <div className="text-emerald-400 font-semibold text-[11px]">Sale: Rs. {totalSaleVal.toLocaleString("en-PK")}</div>
                             </td>
                             <td className="py-3.5 px-4 whitespace-nowrap">
                               {tr.carrierName ? (
@@ -580,10 +733,12 @@ export default function TransfersPage() {
                                   {/* Items & Serials List (Vertical Cards Layout - No Horizontal Scroll) */}
                                   <div className="space-y-2.5">
                                     {tr.items.map((it, iIdx) => {
-                                      const selling = (it.product as any)?.sellingPrice;
-                                      const cost = (it.product as any)?.costPrice;
-                                      const unitRate = (selling && selling > 1) ? selling : (cost || 0);
-                                      const lineTotal = (it.quantity || 1) * unitRate;
+                                      const cost = it.unitCost !== undefined && it.unitCost !== null && it.unitCost > 0
+                                        ? it.unitCost
+                                        : ((it.product as any)?.costPrice || 0);
+                                      const selling = (it.product as any)?.sellingPrice || 0;
+                                      const lineCost = (it.quantity || 1) * cost;
+                                      const lineSale = (it.quantity || 1) * selling;
                                       return (
                                         <div
                                           key={iIdx}
@@ -601,8 +756,8 @@ export default function TransfersPage() {
                                               </span>
                                             </div>
                                             <div className="text-right font-mono">
-                                              <span className="text-[9px] text-slate-400 block uppercase font-semibold">Line Total</span>
-                                              <span className="font-bold text-emerald-400 text-sm">Rs. {lineTotal.toLocaleString("en-PK")}</span>
+                                              <div className="text-amber-300 font-bold text-xs">Cost: Rs. {lineCost.toLocaleString("en-PK")}</div>
+                                              <div className="text-emerald-400 font-semibold text-[11px]">Sale: Rs. {lineSale.toLocaleString("en-PK")}</div>
                                             </div>
                                           </div>
 
@@ -620,9 +775,9 @@ export default function TransfersPage() {
                                                 </span>
                                               )}
                                             </div>
-                                            <div>
-                                              <span className="text-slate-400">Unit Price: </span>
-                                              <span className="text-slate-200 font-semibold">Rs. {unitRate.toLocaleString("en-PK")}</span>
+                                            <div className="flex items-center gap-3">
+                                              <span>Unit Cost: <strong className="text-amber-300 font-semibold">Rs. {cost.toLocaleString("en-PK")}</strong></span>
+                                              <span>Unit Sale: <strong className="text-emerald-400 font-semibold">Rs. {selling.toLocaleString("en-PK")}</strong></span>
                                             </div>
                                           </div>
 

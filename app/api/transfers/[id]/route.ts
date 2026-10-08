@@ -39,12 +39,16 @@ export async function GET(
       const pId = it.product._id ? it.product._id.toString() : it.product.toString();
       const pricing = batchPricing[pId];
       const effective = resolveProductEffectivePricing(it.product, pricing);
+      const finalCost = (it.unitCost !== undefined && it.unitCost !== null && it.unitCost > 0)
+        ? it.unitCost
+        : (effective.costPrice || (it.product as any)?.costPrice || 0);
 
       return {
         ...it,
+        unitCost: finalCost,
         product: {
           ...it.product,
-          costPrice: effective.costPrice,
+          costPrice: finalCost,
           sellingPrice: effective.sellingPrice,
           minSellingPrice: effective.minSellingPrice,
           pricingSource: effective.source,

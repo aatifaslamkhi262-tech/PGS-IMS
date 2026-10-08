@@ -93,16 +93,19 @@ export async function POST(
       const beforeQty = existingInv ? existingInv.quantity : 0;
       const afterQty = Math.max(0, beforeQty - returnQty);
 
+      const poolCost = existingInv?.averageCost || unitCost || 0;
+      const newTotalCostValue = Math.round(afterQty * poolCost * 100) / 100;
+
       if (isTxActive) {
         await Inventory.findOneAndUpdate(
           invFilter,
-          { $set: { quantity: afterQty } },
+          { $set: { quantity: afterQty, totalCostValue: newTotalCostValue, status: afterQty > 0 ? "In Stock" : "Out of Stock" } },
           { upsert: true, session }
         );
       } else {
         await Inventory.findOneAndUpdate(
           invFilter,
-          { $set: { quantity: afterQty } },
+          { $set: { quantity: afterQty, totalCostValue: newTotalCostValue, status: afterQty > 0 ? "In Stock" : "Out of Stock" } },
           { upsert: true }
         );
       }

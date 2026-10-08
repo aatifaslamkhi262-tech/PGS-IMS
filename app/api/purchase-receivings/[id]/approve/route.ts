@@ -40,6 +40,25 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
 
   const parentInvoice = await PurchaseInvoice.findById(receiving.purchaseInvoice, null, sessionOptions);
 
+  const { isValidCost, COST_PLACEHOLDER_MAX } = await import("@/lib/costing");
+
+  // 2b. Pre-validate ALL receiving item costs before making ANY DB writes/intakes
+  for (const item of receiving.items) {
+    const productObj = await Product.findById(item.product, null, sessionOptions);
+    if (!productObj) {
+      throw new Error(`Product not found: ${item.product}`);
+    }
+    const invLine = parentInvoice?.items.find(
+      (line: any) => line.product.toString() === item.product.toString() && line.condition === item.condition
+    );
+    const lineCost = invLine?.unitCost !== undefined ? invLine.unitCost : 0;
+    if (!isValidCost(lineCost)) {
+      throw new Error(
+        `Invoice line cost missing/placeholder for product '${productObj.name}' (${item.condition}) [cost: ${lineCost}]. Please update purchase invoice with valid cost (cost > ${COST_PLACEHOLDER_MAX}) before approving receiving.`
+      );
+    }
+  }
+
   // 3. Update Inventory, SerialNumbers, and InventoryMovement for each item idempotently
   for (const item of receiving.items) {
     const productObj = await Product.findById(item.product, null, sessionOptions);
@@ -78,9 +97,7 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
       const invLine = parentInvoice?.items.find(
         (line: any) => line.product.toString() === item.product.toString() && line.condition === item.condition
       );
-      const unitCost = invLine?.unitCost !== undefined && invLine.unitCost >= 0
-        ? invLine.unitCost
-        : (productObj.costPrice || 0);
+      const unitCost = invLine!.unitCost;
 
       // Update Inventory quantity, moving average cost, and status via averageCostEngine (handles save internally)
       const intakeRes = await updateAverageCostOnIntake(
@@ -98,11 +115,14 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
 
       // Update baseline Product master prices upon approved physical receiving
       if (invLine) {
+        const resolvedCost = intakeRes.newAverageCost > 0 ? intakeRes.newAverageCost : (invLine.unitCost > 0 ? invLine.unitCost : 0);
         await Product.updateOne(
           { _id: item.product },
           {
             $set: {
-              ...(invLine.unitCost > 0 && { costPrice: invLine.unitCost }),
+              ...(resolvedCost > 0 && {
+                costPrice: resolvedCost,
+              }),
               ...(invLine.sellingPrice > 0 && { sellingPrice: invLine.sellingPrice }),
               ...(invLine.minSellingPrice > 0 && { minSellingPrice: invLine.minSellingPrice }),
             },

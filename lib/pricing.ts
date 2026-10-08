@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { dbConnect } from "@/lib/db";
 import { PurchaseReceiving } from "@/models/PurchaseReceiving";
 import { PurchaseInvoice } from "@/models/PurchaseInvoice";
@@ -15,6 +16,72 @@ export interface EffectivePricing {
   sellingPrice: number;
   minSellingPrice: number;
   source: "MANUAL_OVERRIDE" | "WEIGHTED_AVERAGE" | "LATEST_INVOICE" | "PRODUCT_MASTER";
+}
+
+/** Product-wise quantity-weighted average of Inventory.averageCost (sirf qty > 0 pools). */
+export async function getInventoryCostMap(productIds: string[]): Promise<Record<string, number>> {
+  const ids = productIds
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  if (!ids.length) return {};
+
+  try {
+    const { default: mongooseInstance } = await import("mongoose");
+    const { Inventory } = await import("@/models/Inventory");
+
+    // In mocked/disconnected unit test environments, avoid hanging on unmocked buffer
+    const isMocked = Inventory && typeof (Inventory as any).aggregate === "function" && (Inventory as any).aggregate.mock;
+    if (mongooseInstance.connection.readyState !== 1 && !isMocked) {
+      return {};
+    }
+
+    const rows = await Inventory.aggregate([
+      { $match: { product: { $in: ids }, quantity: { $gt: 0 }, averageCost: { $gt: 1 } } },
+      {
+        $group: {
+          _id: { product: "$product", condition: "$condition" },
+          qty: { $sum: "$quantity" },
+          value: { $sum: { $multiply: ["$quantity", "$averageCost"] } },
+        },
+      },
+    ]);
+
+    const out: Record<string, number> = {};
+    const productTotals: Record<string, { totalQty: number; totalVal: number }> = {};
+
+    if (Array.isArray(rows)) {
+      for (const r of rows) {
+        if (!r.qty || r.qty <= 0) continue;
+        const avg = Math.round((r.value / r.qty) * 100) / 100;
+        if (r._id && typeof r._id === "object" && (r._id as any).product) {
+          const pId = (r._id as any).product.toString();
+          const cond = (r._id as any).condition || "New";
+          out[`${pId}:${cond}`] = avg;
+
+          if (!productTotals[pId]) {
+            productTotals[pId] = { totalQty: 0, totalVal: 0 };
+          }
+          productTotals[pId].totalQty += r.qty;
+          productTotals[pId].totalVal += r.value;
+        } else if (r._id) {
+          const pId = r._id.toString();
+          out[pId] = avg;
+        }
+      }
+
+      // Compute true weighted overall average for product-level fallback key
+      for (const [pId, totals] of Object.entries(productTotals)) {
+        if (totals.totalQty > 0) {
+          const overallAvg = Math.round((totals.totalVal / totals.totalQty) * 100) / 100;
+          out[pId] = overallAvg;
+          out[`${pId}:overall`] = overallAvg;
+        }
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -36,7 +103,7 @@ export function resolveProductEffectivePricing(
   // Case B: Manual edit exists AND manual edit timestamp is NEWER than latest invoice/receiving date
   if (manualDate > 0 && manualDate > invoiceDate) {
     return {
-      costPrice: product?.costPrice ?? 0,
+      costPrice: weightedPricing?.avgCostPrice ?? product?.costPrice ?? 0,
       sellingPrice: product?.sellingPrice ?? 0,
       minSellingPrice: product?.minSellingPrice ?? 0,
       source: "MANUAL_OVERRIDE",
@@ -75,50 +142,25 @@ export function resolveProductEffectivePricing(
 }
 
 /**
- * Calculates dynamic, quantity-weighted average purchase cost, and extracts the latest (newest)
- * selling price and minimum selling price using only APPROVED physical receiving transactions.
- * Supports Moving Baseline Average Costing when a manual baseline cost edit exists.
+ * Extracts the latest (newest) selling price and minimum selling price
+ * using only APPROVED physical receiving transactions.
+ * Note: avgCostPrice is intentionally null here because unit cost is
+ * strictly overlaid from active Inventory pools via getInventoryCostMap.
  */
 export function calculateProductWeightedPricingFromReceivings(
   productId: string,
   receivings: any[],
   productBaseline?: {
-    costBaselineAmount?: number;
-    costBaselineQty?: number;
-    costBaselineAt?: Date | string | null;
     manuallyEditedAt?: Date | string | null;
     costPrice?: number;
   }
 ): WeightedPricingResult {
-  const manualDate = productBaseline?.costBaselineAt
-    ? new Date(productBaseline.costBaselineAt).getTime()
-    : productBaseline?.manuallyEditedAt
-    ? new Date(productBaseline.manuallyEditedAt).getTime()
-    : 0;
-
   let totalQty = 0;
-  let totalCostAmount = 0;
   let maxDate: Date | null = null;
   let latestSellingPrice: number | null = null;
   let latestMinSellingPrice: number | null = null;
 
-  // Filter receivings after manualDate if manual baseline exists
-  const activeReceivings = manualDate > 0
-    ? receivings.filter((r) => {
-        const invoice = r.purchaseInvoice as any;
-        const recDate = r.approvedAt || r.updatedAt || r.createdAt || (invoice && invoice.createdAt);
-        return recDate && new Date(recDate).getTime() > manualDate;
-      })
-    : receivings;
-
-  if (manualDate > 0 && activeReceivings.length > 0) {
-    const baseAmount = productBaseline?.costBaselineAmount ?? productBaseline?.costPrice ?? 0;
-    const baseQty = productBaseline?.costBaselineQty ?? 1;
-    totalQty += baseQty;
-    totalCostAmount += baseQty * baseAmount;
-  }
-
-  for (const r of activeReceivings) {
+  for (const r of receivings) {
     const invoice = r.purchaseInvoice as any;
     if (!invoice) continue;
 
@@ -134,7 +176,6 @@ export function calculateProductWeightedPricingFromReceivings(
 
     const qty = receivingItem.quantityReceived || 0;
     totalQty += qty;
-    totalCostAmount += qty * (invoiceItem.unitCost || 0);
 
     const recDate = r.approvedAt || r.updatedAt || r.createdAt || invoice.createdAt;
     const parsedDate = recDate ? new Date(recDate) : null;
@@ -162,7 +203,7 @@ export function calculateProductWeightedPricingFromReceivings(
 
   return {
     priceConfigured: true,
-    avgCostPrice: Math.round((totalCostAmount / totalQty) * 100) / 100,
+    avgCostPrice: null, // cost ab Inventory se overlay hoti hai
     avgSellingPrice: latestSellingPrice,
     avgMinSellingPrice: latestMinSellingPrice,
     lastInvoiceDate: maxDate,
@@ -170,10 +211,9 @@ export function calculateProductWeightedPricingFromReceivings(
 }
 
 /**
- * Calculates dynamic, quantity-weighted average purchase cost, and extracts the latest (newest)
- * selling price and minimum selling price using only APPROVED physical receiving transactions.
+ * Internal pricing extraction for single product.
  */
-export async function calculateProductWeightedPricing(productId: string): Promise<WeightedPricingResult> {
+async function calculateProductWeightedPricingInner(productId: string): Promise<WeightedPricingResult> {
   try {
     await dbConnect();
   } catch {
@@ -200,10 +240,9 @@ export async function calculateProductWeightedPricing(productId: string): Promis
 
   let product: any = null;
   try {
-    const { default: mongoose } = await import("mongoose");
     if (mongoose.Types.ObjectId.isValid(productId) && mongoose.connection.readyState === 1) {
       const { Product } = await import("@/models/Product");
-      product = await Product.findById(productId).select("manuallyEditedAt costBaselineAmount costBaselineQty costBaselineAt costPrice").lean();
+      product = await Product.findById(productId).select("manuallyEditedAt costPrice condition").lean();
     }
   } catch {
     // Ignore in mocked unit test environments
@@ -218,8 +257,17 @@ export async function calculateProductWeightedPricing(productId: string): Promis
 }
 
 /**
- * Batch calculates dynamic, quantity-weighted average purchase cost, and extracts latest
- * selling price and minimum selling price for multiple product IDs in 1-2 optimized MongoDB queries.
+ * Calculates dynamic product pricing with Inventory moving average cost overlay.
+ */
+export async function calculateProductWeightedPricing(productId: string): Promise<WeightedPricingResult> {
+  const base = await calculateProductWeightedPricingInner(productId);
+  const costs = await getInventoryCostMap([productId]);
+  return { ...base, avgCostPrice: costs[productId] ?? null };
+}
+
+/**
+ * Batch calculates dynamic selling prices and overlays quantity-weighted average cost
+ * directly from active Inventory pools for multiple product IDs.
  */
 export async function batchCalculateProductWeightedPricing(
   productIds: string[]
@@ -235,7 +283,7 @@ export async function batchCalculateProductWeightedPricing(
 
   const [products, receivings] = await Promise.all([
     Product.find({ _id: { $in: validIds } })
-      .select("manuallyEditedAt costBaselineAmount costBaselineQty costBaselineAt costPrice")
+      .select("manuallyEditedAt costPrice condition")
       .lean(),
     PurchaseReceiving.find({
       status: "Approved",
@@ -316,7 +364,7 @@ export async function batchCalculateProductWeightedPricing(
         const fb = fallbackInvoiceMap[id];
         results[id] = {
           priceConfigured: true,
-          avgCostPrice: fb.unitCost,
+          avgCostPrice: null, // Cost is never guessed from unreceived invoices
           avgSellingPrice: fb.sellingPrice,
           avgMinSellingPrice: fb.minSellingPrice,
           lastInvoiceDate: fb.date,
@@ -333,15 +381,29 @@ export async function batchCalculateProductWeightedPricing(
     }
   }
 
+  // Cost overlay directly from Inventory.averageCost matching product condition
+  const costs = await getInventoryCostMap(validIds);
+  for (const id of validIds) {
+    if (results[id]) {
+      const prod = productMap.get(id);
+      const cond = prod?.condition || "New";
+      const matchedCost = costs[`${id}:${cond}`] ?? costs[id] ?? null;
+      results[id] = { ...results[id], avgCostPrice: matchedCost };
+      if (matchedCost !== null && matchedCost !== undefined) {
+        results[id].priceConfigured = true;
+      }
+    }
+  }
+
   return results;
 }
 
 /**
  * Fallback pricing function when no approved physical receiving exists yet.
  * Looks up the most recent PurchaseInvoice created for this product.
+ * Selling prices are extracted, but avgCostPrice is strictly null.
  */
 async function getPricingFromLatestInvoice(productId: string): Promise<WeightedPricingResult> {
-  const { default: mongoose } = await import("mongoose");
   if (!mongoose.Types.ObjectId.isValid(productId)) {
     return {
       priceConfigured: false,
@@ -366,7 +428,7 @@ async function getPricingFromLatestInvoice(productId: string): Promise<WeightedP
       if (item) {
         return {
           priceConfigured: true,
-          avgCostPrice: item.unitCost || 0,
+          avgCostPrice: null, // Unreceived invoice does not set cost
           avgSellingPrice: item.sellingPrice || 0,
           avgMinSellingPrice: item.minSellingPrice || 0,
           lastInvoiceDate: (latestInvoice as any).createdAt ? new Date((latestInvoice as any).createdAt) : null,

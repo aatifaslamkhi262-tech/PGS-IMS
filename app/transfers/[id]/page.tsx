@@ -47,6 +47,7 @@ interface TransferData {
     product: { _id?: string; name: string; sku: string; barcode: string; serialTracking: boolean; costPrice?: number; sellingPrice?: number };
     condition: string;
     quantity: number;
+    unitCost?: number;
     serialNumbers?: string[];
   }>;
   reason?: string;
@@ -757,17 +758,23 @@ export default function TransferDetailPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 text-xs font-mono">
+          <div className="flex items-center gap-3 text-xs font-mono flex-wrap">
             <span className="text-slate-400">
               Total Items: <strong className="text-indigo-400">{transfer.items.reduce((sum, i) => sum + i.quantity, 0)}</strong>
             </span>
             <span className="text-slate-700">|</span>
+            <span className="px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-300 rounded-lg font-bold">
+              Cost Valuation: Rs. {transfer.items.reduce((sum, i) => {
+                const cost = i.unitCost !== undefined && i.unitCost !== null && i.unitCost > 0
+                  ? i.unitCost
+                  : ((i.product as any)?.costPrice || 0);
+                return sum + (i.quantity * cost);
+              }, 0).toLocaleString("en-PK")}
+            </span>
             <span className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg font-bold">
-              Total Selling Valuation: Rs. {transfer.items.reduce((sum, i) => {
-                const selling = (i.product as any)?.sellingPrice;
-                const cost = (i.product as any)?.costPrice;
-                const price = (selling && selling > 1) ? selling : (cost || 0);
-                return sum + (i.quantity * price);
+              Selling Valuation: Rs. {transfer.items.reduce((sum, i) => {
+                const selling = (i.product as any)?.sellingPrice || 0;
+                return sum + (i.quantity * selling);
               }, 0).toLocaleString("en-PK")}
             </span>
           </div>
@@ -787,10 +794,12 @@ export default function TransferDetailPage() {
               return pName.includes(q) || sku.includes(q) || barcode.includes(q) || cond.includes(q) || serialsMatch;
             })
             .map((it, idx) => {
-              const selling = (it.product as any)?.sellingPrice;
-              const cost = (it.product as any)?.costPrice;
-              const unitPrice = (selling && selling > 1) ? selling : (cost || 0);
-              const lineTotal = it.quantity * unitPrice;
+              const cost = it.unitCost !== undefined && it.unitCost !== null && it.unitCost > 0
+                ? it.unitCost
+                : ((it.product as any)?.costPrice || 0);
+              const selling = (it.product as any)?.sellingPrice || 0;
+              const lineCost = it.quantity * cost;
+              const lineSale = it.quantity * selling;
               return (
                 <div key={idx} className="p-4 space-y-2">
                   <div className="flex items-start justify-between gap-2">
@@ -805,9 +814,12 @@ export default function TransferDetailPage() {
                     </span>
                   </div>
 
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-xs">
-                    <span className="text-slate-400">Qty: <strong className="text-indigo-400">{it.quantity}</strong> × Rs. {unitPrice.toLocaleString("en-PK")}</span>
-                    <span className="font-mono font-bold text-emerald-400 text-sm">Rs. {lineTotal.toLocaleString("en-PK")}</span>
+                  <div className="flex flex-wrap items-center justify-between pt-2 border-t border-slate-800/60 text-xs font-mono gap-2">
+                    <span className="text-slate-400">Qty: <strong className="text-indigo-400">{it.quantity}</strong></span>
+                    <div className="text-right">
+                      <div className="text-amber-300 font-bold">Cost: Rs. {lineCost.toLocaleString("en-PK")} <span className="text-[10px] text-slate-500">(@{cost.toLocaleString("en-PK")})</span></div>
+                      <div className="text-emerald-400 font-semibold">Sale: Rs. {lineSale.toLocaleString("en-PK")} <span className="text-[10px] text-slate-500">(@{selling.toLocaleString("en-PK")})</span></div>
+                    </div>
                   </div>
 
                   {it.serialNumbers && it.serialNumbers.length > 0 && (
@@ -839,8 +851,10 @@ export default function TransferDetailPage() {
                 <th className="px-4 py-4">SKU / Barcode</th>
                 <th className="px-4 py-4">Condition</th>
                 <th className="px-4 py-4 text-center">Quantity</th>
+                <th className="px-4 py-4 text-right">Unit Cost</th>
                 <th className="px-4 py-4 text-right">Selling Price</th>
-                <th className="px-4 py-4 text-right">Line Total</th>
+                <th className="px-4 py-4 text-right">Total Cost</th>
+                <th className="px-4 py-4 text-right">Total Sale</th>
                 <th className="px-5 py-4">Serial Numbers</th>
               </tr>
             </thead>
@@ -857,10 +871,12 @@ export default function TransferDetailPage() {
                   return pName.includes(q) || sku.includes(q) || barcode.includes(q) || cond.includes(q) || serialsMatch;
                 })
                 .map((it, idx) => {
-                  const selling = (it.product as any)?.sellingPrice;
-                  const cost = (it.product as any)?.costPrice;
-                  const unitPrice = (selling && selling > 1) ? selling : (cost || 0);
-                  const lineTotal = it.quantity * unitPrice;
+                  const cost = it.unitCost !== undefined && it.unitCost !== null && it.unitCost > 0
+                    ? it.unitCost
+                    : ((it.product as any)?.costPrice || 0);
+                  const selling = (it.product as any)?.sellingPrice || 0;
+                  const lineCost = it.quantity * cost;
+                  const lineSale = it.quantity * selling;
                 return (
                   <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
                     <td className="px-5 py-4 font-bold text-slate-100">{it.product?.name || "Product"}</td>
@@ -875,11 +891,17 @@ export default function TransferDetailPage() {
                     <td className="px-4 py-4 text-center font-mono font-bold text-indigo-400 text-sm">
                       {it.quantity}
                     </td>
-                    <td className="px-4 py-4 text-right font-mono text-slate-300">
-                      Rs. {unitPrice.toLocaleString("en-PK")}
+                    <td className="px-4 py-4 text-right font-mono text-amber-300 font-semibold">
+                      Rs. {cost.toLocaleString("en-PK")}
+                    </td>
+                    <td className="px-4 py-4 text-right font-mono text-slate-300 font-semibold">
+                      Rs. {selling.toLocaleString("en-PK")}
+                    </td>
+                    <td className="px-4 py-4 text-right font-mono font-bold text-amber-300">
+                      Rs. {lineCost.toLocaleString("en-PK")}
                     </td>
                     <td className="px-4 py-4 text-right font-mono font-bold text-emerald-400">
-                      Rs. {lineTotal.toLocaleString("en-PK")}
+                      Rs. {lineSale.toLocaleString("en-PK")}
                     </td>
                     <td className="px-5 py-4">
                       {it.serialNumbers && it.serialNumbers.length > 0 ? (

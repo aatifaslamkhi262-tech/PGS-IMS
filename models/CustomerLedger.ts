@@ -5,6 +5,7 @@ export type CustomerLedgerType =
   | "PAYMENT"
   | "RETURN_CREDIT"
   | "ADVANCE_DEPOSIT"
+  | "ADVANCE_REFUND"
   | "STORE_CREDIT_ISSUED"
   | "STORE_CREDIT_REDEEMED"
   | "DEBT_ADJUSTMENT";
@@ -58,6 +59,7 @@ const CustomerLedgerSchema: Schema = new Schema(
         "PAYMENT",
         "RETURN_CREDIT",
         "ADVANCE_DEPOSIT",
+        "ADVANCE_REFUND",
         "STORE_CREDIT_ISSUED",
         "STORE_CREDIT_REDEEMED",
         "DEBT_ADJUSTMENT",

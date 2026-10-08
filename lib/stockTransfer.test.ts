@@ -12,6 +12,7 @@ import {
   executeReceive,
   executeReturnToSource,
   executeDirectReject,
+  executeCancelTransfer,
 } from "@/lib/stockTransfer";
 import mongoose, { Types } from "mongoose";
 
@@ -118,6 +119,8 @@ describe("Stock Transfer Module & Audit Tests", () => {
       location: warehouseLocId,
       condition: "New",
       quantity: 10,
+      averageCost: 5000,
+      totalCostValue: 50000,
       status: "In Stock",
     });
     vi.spyOn(invDoc, "save").mockResolvedValue(invDoc as any);
@@ -301,6 +304,8 @@ describe("Stock Transfer Module & Audit Tests", () => {
       location: warehouseLocId,
       condition: "New",
       quantity: 5,
+      averageCost: 50000,
+      totalCostValue: 250000,
     });
     vi.spyOn(invDoc, "save").mockResolvedValue(invDoc as any);
 
@@ -370,6 +375,7 @@ describe("Stock Transfer Module & Audit Tests", () => {
           condition: "New",
           quantity: 1,
           serialNumbers: ["SN-1001"],
+          unitCost: 15000,
         },
       ],
       createdBy: "kamran_mgr",
@@ -477,4 +483,494 @@ describe("Stock Transfer Module & Audit Tests", () => {
     expect(result.returnTransfer.sourceLocation).toEqual(branch1LocId);
     expect(result.returnTransfer.destinationLocation).toEqual(warehouseLocId);
   });
+
+  it("11. Should preserve moving average cost valuation upon dispatch and populate InventoryMovement", async () => {
+    const sourceLocDoc = { _id: warehouseLocId, name: "Main Warehouse" };
+    const destLocDoc = { _id: branch1LocId, name: "Branch Gulshan" };
+
+    const transferDoc = new StockTransfer({
+      _id: new Types.ObjectId(),
+      transferNumber: "TRF-20260827-040",
+      status: "Approved",
+      sourceLocation: warehouseLocId,
+      destinationLocation: branch1LocId,
+      items: [{ product: nonSerialProdId, condition: "New", quantity: 2 }],
+      createdBy: "admin",
+    });
+    vi.spyOn(transferDoc, "save").mockResolvedValue(transferDoc as any);
+
+    const invDoc = new Inventory({
+      product: nonSerialProdId,
+      location: warehouseLocId,
+      condition: "New",
+      quantity: 10,
+      averageCost: 15000,
+      totalCostValue: 150000,
+      status: "In Stock",
+    });
+    vi.spyOn(invDoc, "save").mockResolvedValue(invDoc as any);
+
+    vi.spyOn(StockTransfer, "findById").mockReturnValue({
+      populate: () => ({
+        populate: () => Promise.resolve(transferDoc),
+      }),
+    } as any);
+
+    vi.spyOn(User, "findById").mockResolvedValue({
+      _id: carrierUserId,
+      name: "Carrier User",
+      username: "carrier1",
+      active: true,
+    } as any);
+
+    vi.spyOn(Location, "findById").mockImplementation(((id: any) => {
+      const idStr = id ? id.toString() : "";
+      if (idStr === branch1LocId.toString()) return Promise.resolve(destLocDoc as any);
+      return Promise.resolve(sourceLocDoc as any);
+    }) as any);
+
+    vi.spyOn(Product, "findById").mockResolvedValue({
+      _id: nonSerialProdId,
+      name: "FC 27",
+      serialTracking: false,
+    } as any);
+
+    vi.spyOn(Inventory, "findOne").mockResolvedValue(invDoc as any);
+    vi.spyOn(InventoryMovement, "create").mockResolvedValue({} as any);
+
+    const result = await executeDispatch({
+      transferId: transferDoc._id.toString(),
+      actionUsername: "admin",
+      carrierUserId: carrierUserId.toString(),
+    });
+
+    // 1. Transfer item received snapshotted unitCost
+    expect(result.items[0].unitCost).toBe(15000);
+    // 2. Source inventory deducted quantity and updated totalCostValue
+    expect(invDoc.quantity).toBe(8);
+    expect(invDoc.totalCostValue).toBe(120000);
+    // 3. InventoryMovement has unitCost and totalCost
+    expect(InventoryMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "TRANSFER",
+        unitCost: 15000,
+        totalCost: 30000,
+      })
+    );
+  });
+
+  it("12. Should calculate weighted moving average cost upon destination receipt", async () => {
+    const destLocDoc = { _id: branch1LocId, name: "Branch Gulshan" };
+
+    const transferDoc = new StockTransfer({
+      _id: new Types.ObjectId(),
+      transferNumber: "TRF-20260827-041",
+      status: "Dispatched",
+      sourceLocation: warehouseLocId,
+      destinationLocation: branch1LocId,
+      items: [{ product: nonSerialProdId, condition: "New", quantity: 2, unitCost: 16000 }],
+      createdBy: "admin",
+    });
+    vi.spyOn(transferDoc, "save").mockResolvedValue(transferDoc as any);
+
+    // Existing pool at Branch: 3 units @ 11000 cost = 33000 value
+    const destInvDoc = new Inventory({
+      product: nonSerialProdId,
+      location: branch1LocId,
+      condition: "New",
+      quantity: 3,
+      averageCost: 11000,
+      totalCostValue: 33000,
+      status: "In Stock",
+    });
+    vi.spyOn(destInvDoc, "save").mockResolvedValue(destInvDoc as any);
+
+    vi.spyOn(StockTransfer, "findById").mockReturnValue({
+      populate: () => ({
+        populate: () => Promise.resolve(transferDoc),
+      }),
+    } as any);
+
+    vi.spyOn(Location, "findById").mockResolvedValue(destLocDoc as any);
+    vi.spyOn(Product, "findById").mockResolvedValue({
+      _id: nonSerialProdId,
+      name: "FC 27",
+      serialTracking: false,
+    } as any);
+
+    vi.spyOn(Inventory, "findOne").mockResolvedValue(destInvDoc as any);
+
+    const result = await executeReceive({
+      transferId: transferDoc._id.toString(),
+      receivingUsername: "branch_staff",
+    });
+
+    expect(result.status).toBe("Received");
+    // New Qty = 3 + 2 = 5
+    expect(destInvDoc.quantity).toBe(5);
+    // New Avg Cost = (3 * 11000 + 2 * 16000) / 5 = (33000 + 32000) / 5 = 65000 / 5 = 13000
+    expect(destInvDoc.averageCost).toBe(13000);
+    expect(destInvDoc.totalCostValue).toBe(65000);
+  });
+
+  it("13. Should recalculate totalCostValue when restoring cancelled transfer", async () => {
+    const sourceLocDoc = { _id: warehouseLocId, name: "Main Warehouse" };
+
+    const transferDoc = new StockTransfer({
+      _id: new Types.ObjectId(),
+      transferNumber: "TRF-20260827-042",
+      status: "Dispatched",
+      sourceLocation: warehouseLocId,
+      destinationLocation: branch1LocId,
+      items: [{ product: nonSerialProdId, condition: "New", quantity: 2, unitCost: 14000 }],
+      dispatchedAt: new Date(),
+    });
+    vi.spyOn(transferDoc, "save").mockResolvedValue(transferDoc as any);
+
+    const sourceInvDoc = new Inventory({
+      product: nonSerialProdId,
+      location: warehouseLocId,
+      condition: "New",
+      quantity: 5,
+      averageCost: 14000,
+      totalCostValue: 70000,
+      status: "In Stock",
+    });
+    vi.spyOn(sourceInvDoc, "save").mockResolvedValue(sourceInvDoc as any);
+
+    vi.spyOn(StockTransfer, "findById").mockReturnValue({
+      populate: () => ({
+        populate: () => Promise.resolve(transferDoc),
+      }),
+    } as any);
+
+    vi.spyOn(Location, "findById").mockResolvedValue(sourceLocDoc as any);
+    vi.spyOn(Product, "findById").mockResolvedValue({
+      _id: nonSerialProdId,
+      name: "FC 27",
+    } as any);
+    vi.spyOn(Inventory, "findOne").mockResolvedValue(sourceInvDoc as any);
+    vi.spyOn(InventoryMovement, "find").mockResolvedValue([{ referenceTransaction: "TRF-20260827-042" }] as any);
+    vi.spyOn(InventoryMovement, "findOne").mockResolvedValue(null);
+    vi.spyOn(InventoryMovement, "create").mockResolvedValue({} as any);
+
+    const result = await executeCancelTransfer({
+      transferId: transferDoc._id.toString(),
+      actionUsername: "admin",
+      reason: "Customer cancelled",
+    });
+
+    expect(result.status).toBe("Cancelled");
+    // Quantity restored: 5 + 2 = 7
+    expect(sourceInvDoc.quantity).toBe(7);
+    // TotalCostValue updated: 7 * 14000 = 98000
+    expect(sourceInvDoc.totalCostValue).toBe(98000);
+  });
+
+  it("14. A -> B transfer locks source averageCost on dispatch and destination pool updates with correct moving average on receive", async () => {
+    // Phase 1: Dispatch from Source (Warehouse has 10 pcs @ 14000)
+    const transferDoc = new StockTransfer({
+      _id: new Types.ObjectId(),
+      transferNumber: "TRF-20261005-099",
+      type: "Normal",
+      sourceLocation: warehouseLocId,
+      destinationLocation: branch1LocId,
+      status: "Approved",
+      items: [
+        {
+          product: nonSerialProdId,
+          condition: "New",
+          quantity: 2,
+        },
+      ],
+      createdBy: "admin",
+    });
+
+    const sourceLocDoc = new Location({
+      _id: warehouseLocId,
+      name: "Warehouse",
+      code: "WH-01",
+      type: "Warehouse",
+      active: true,
+    });
+    const destLocDoc = new Location({
+      _id: branch1LocId,
+      name: "G-14 Branch",
+      code: "BR-G14",
+      type: "Branch",
+      active: true,
+    });
+    const carrierUserDoc = new User({
+      _id: carrierUserId,
+      name: "Adeel",
+      username: "adeel",
+      role: "Salesman",
+      active: true,
+    });
+
+    const sourceInvDoc = new Inventory({
+      product: nonSerialProdId,
+      location: warehouseLocId,
+      condition: "New",
+      quantity: 10,
+      averageCost: 14000,
+      totalCostValue: 140000,
+      status: "In Stock",
+    });
+
+    vi.spyOn(StockTransfer, "findById").mockReturnValue({
+      populate: () => ({
+        populate: () => Promise.resolve(transferDoc),
+      }),
+    } as any);
+
+    vi.spyOn(User, "findById").mockResolvedValue(carrierUserDoc as any);
+    vi.spyOn(Location, "findById").mockImplementation((id: any) => {
+      if (id.toString() === warehouseLocId.toString()) return Promise.resolve(sourceLocDoc) as any;
+      if (id.toString() === branch1LocId.toString()) return Promise.resolve(destLocDoc) as any;
+      return Promise.resolve(null);
+    });
+    vi.spyOn(Product, "findById").mockResolvedValue({
+      _id: nonSerialProdId,
+      name: "PS5 FC 27",
+      serialTracking: false,
+      costPrice: 14000,
+    } as any);
+
+    vi.spyOn(Inventory, "findOne").mockResolvedValue(sourceInvDoc as any);
+    vi.spyOn(sourceInvDoc, "save").mockResolvedValue(sourceInvDoc as any);
+    vi.spyOn(transferDoc, "save").mockResolvedValue(transferDoc as any);
+    vi.spyOn(InventoryMovement, "create").mockResolvedValue({} as any);
+
+    // Execute Dispatch
+    await executeDispatch({
+      transferId: transferDoc._id.toString(),
+      actionUsername: "admin",
+      carrierUserId: carrierUserId.toString(),
+    });
+
+    // Verify Source Lock & Deduct:
+    expect(sourceInvDoc.quantity).toBe(8);
+    expect(sourceInvDoc.averageCost).toBe(14000);
+    expect(sourceInvDoc.totalCostValue).toBe(112000); // 8 * 14000
+    // Transfer item locked source unitCost:
+    expect(transferDoc.items[0].unitCost).toBe(14000);
+    expect(transferDoc.status).toBe("Dispatched");
+
+    // Phase 2: Receive at Destination (Branch G-14) when G-14 has 0 initial stock
+    let destinationInvDoc: any = null;
+    vi.spyOn(Inventory, "findOne").mockImplementation(() => Promise.resolve(destinationInvDoc) as any);
+    vi.spyOn(Inventory.prototype, "save").mockImplementation(function (this: any) {
+      destinationInvDoc = this;
+      return Promise.resolve(this);
+    });
+
+    await executeReceive({
+      transferId: transferDoc._id.toString(),
+      receivingUsername: "branch_user",
+    });
+
+    expect(destinationInvDoc).toBeDefined();
+    expect(destinationInvDoc.quantity).toBe(2);
+    expect(destinationInvDoc.averageCost).toBe(14000);
+    expect(destinationInvDoc.totalCostValue).toBe(28000); // 2 * 14000
+
+    // Phase 3: Second Transfer arrives at Destination (1 pc @ 17,000)
+    const secondTransferDoc = new StockTransfer({
+      _id: new Types.ObjectId(),
+      transferNumber: "TRF-20261005-100",
+      type: "Normal",
+      sourceLocation: warehouseLocId,
+      destinationLocation: branch1LocId,
+      status: "Dispatched",
+      items: [
+        {
+          product: nonSerialProdId,
+          condition: "New",
+          quantity: 1,
+          unitCost: 17000,
+        },
+      ],
+      createdBy: "admin",
+    });
+
+    vi.spyOn(StockTransfer, "findById").mockReturnValue({
+      populate: () => ({
+        populate: () => Promise.resolve(secondTransferDoc),
+      }),
+    } as any);
+    vi.spyOn(secondTransferDoc, "save").mockResolvedValue(secondTransferDoc as any);
+
+    await executeReceive({
+      transferId: secondTransferDoc._id.toString(),
+      receivingUsername: "branch_user",
+    });
+
+    // Verification of Weighted Average:
+    // Existing: 2 pcs @ 14,000 = 28,000
+    // Incoming: 1 pc @ 17,000 = 17,000
+    // Total Value: 45,000 / 3 pcs = 15,000
+    expect(destinationInvDoc.quantity).toBe(3);
+    expect(destinationInvDoc.averageCost).toBe(15000);
+    expect(destinationInvDoc.totalCostValue).toBe(45000);
+  });
+
+  it("15. Stale-avg: dest pool qty 0 avg 12k, receive 2@16k -> destination resets to 16,000 (never resurrects stale 12k)", async () => {
+    const destLocDoc = { _id: branch1LocId, name: "Branch G-14" };
+
+    const transferDoc = new StockTransfer({
+      _id: new Types.ObjectId(),
+      transferNumber: "TRF-20261005-STALE",
+      status: "Dispatched",
+      sourceLocation: warehouseLocId,
+      destinationLocation: branch1LocId,
+      items: [
+        {
+          product: nonSerialProdId,
+          condition: "New",
+          quantity: 2,
+          unitCost: 16000,
+        },
+      ],
+      createdBy: "admin",
+    });
+    vi.spyOn(transferDoc, "save").mockResolvedValue(transferDoc as any);
+
+    // Existing pool has 0 quantity, but stale averageCost = 12000 from past stock
+    const destInvDoc = new Inventory({
+      product: nonSerialProdId,
+      location: branch1LocId,
+      condition: "New",
+      quantity: 0,
+      averageCost: 12000,
+      totalCostValue: 0,
+      status: "Out of Stock",
+    });
+    vi.spyOn(destInvDoc, "save").mockResolvedValue(destInvDoc as any);
+
+    vi.spyOn(StockTransfer, "findById").mockReturnValue({
+      populate: () => ({
+        populate: () => Promise.resolve(transferDoc),
+      }),
+    } as any);
+
+    vi.spyOn(Location, "findById").mockResolvedValue(destLocDoc as any);
+    vi.spyOn(Product, "findById").mockResolvedValue({
+      _id: nonSerialProdId,
+      name: "FC 27",
+      serialTracking: false,
+    } as any);
+    vi.spyOn(Inventory, "findOne").mockResolvedValue(destInvDoc as any);
+
+    await executeReceive({
+      transferId: transferDoc._id.toString(),
+      receivingUsername: "branch_user",
+    });
+
+    // Destination MUST reset to incoming 16,000, NEVER blending or keeping stale 12,000!
+    expect(destInvDoc.quantity).toBe(2);
+    expect(destInvDoc.averageCost).toBe(16000);
+    expect(destInvDoc.totalCostValue).toBe(32000);
+    expect(destInvDoc.status).toBe("In Stock");
+  });
+
+  it("16. Dispatch zero cost -> block, multi-item transfer pre-validation prevents partial deduction of valid item", async () => {
+    const item1ProdId = new Types.ObjectId();
+    const item2ZeroCostProdId = new Types.ObjectId();
+
+    const transferDoc = new StockTransfer({
+      _id: new Types.ObjectId(),
+      transferNumber: "TRF-20261005-ATOMIC",
+      type: "Normal",
+      sourceLocation: warehouseLocId,
+      destinationLocation: branch1LocId,
+      status: "Approved",
+      items: [
+        {
+          product: item1ProdId,
+          condition: "New",
+          quantity: 2,
+        },
+        {
+          product: item2ZeroCostProdId,
+          condition: "New",
+          quantity: 1,
+        },
+      ],
+      createdBy: "admin",
+    });
+
+    const sourceLocDoc = new Location({ _id: warehouseLocId, name: "Warehouse", active: true });
+    const destLocDoc = new Location({ _id: branch1LocId, name: "Branch G-14", active: true });
+    const carrierUserDoc = new User({ _id: carrierUserId, name: "Adeel", active: true });
+
+    // Item 1 has valid stock and cost (5 pcs @ 10,000)
+    const inv1 = new Inventory({
+      product: item1ProdId,
+      location: warehouseLocId,
+      condition: "New",
+      quantity: 5,
+      averageCost: 10000,
+      totalCostValue: 50000,
+      status: "In Stock",
+    });
+
+    // Item 2 has stock but ZERO cost (1 pc @ 0)
+    const inv2 = new Inventory({
+      product: item2ZeroCostProdId,
+      location: warehouseLocId,
+      condition: "New",
+      quantity: 1,
+      averageCost: 0,
+      totalCostValue: 0,
+      status: "In Stock",
+    });
+
+    const inv1SaveSpy = vi.spyOn(inv1, "save");
+    const inv2SaveSpy = vi.spyOn(inv2, "save");
+
+    vi.spyOn(StockTransfer, "findById").mockReturnValue({
+      populate: () => ({
+        populate: () => Promise.resolve(transferDoc),
+      }),
+    } as any);
+
+    vi.spyOn(User, "findById").mockResolvedValue(carrierUserDoc as any);
+    vi.spyOn(Location, "findById").mockImplementation((id: any) => {
+      if (id.toString() === warehouseLocId.toString()) return Promise.resolve(sourceLocDoc) as any;
+      if (id.toString() === branch1LocId.toString()) return Promise.resolve(destLocDoc) as any;
+      return Promise.resolve(null);
+    });
+
+    vi.spyOn(Product, "findById").mockImplementation((id: any) => {
+      if (id.toString() === item1ProdId.toString()) return Promise.resolve({ _id: item1ProdId, name: "Item 1 Valid", serialTracking: false }) as any;
+      if (id.toString() === item2ZeroCostProdId.toString()) return Promise.resolve({ _id: item2ZeroCostProdId, name: "Item 2 Zero Cost", serialTracking: false }) as any;
+      return Promise.resolve(null);
+    });
+
+    vi.spyOn(Inventory, "findOne").mockImplementation((query: any) => {
+      if (query.product.toString() === item1ProdId.toString()) return Promise.resolve(inv1) as any;
+      if (query.product.toString() === item2ZeroCostProdId.toString()) return Promise.resolve(inv2) as any;
+      return Promise.resolve(null);
+    });
+
+    // Expect executeDispatch to fail because Item 2 has unitCost <= 0
+    await expect(
+      executeDispatch({
+        transferId: transferDoc._id.toString(),
+        actionUsername: "admin",
+        carrierUserId: carrierUserId.toString(),
+      })
+    ).rejects.toThrow(/averageCost <= 1/);
+
+    // CRITICAL ATOMICITY ASSERTION:
+    // Item 1 was VALID, but because Item 2 failed pre-validation,
+    // Item 1 must NEVER have been deducted! inv1.save() must NOT have been called!
+    expect(inv1SaveSpy).not.toHaveBeenCalled();
+    expect(inv2SaveSpy).not.toHaveBeenCalled();
+    expect(inv1.quantity).toBe(5); // completely untouched!
+    expect(inv1.totalCostValue).toBe(50000);
+    expect(transferDoc.status).toBe("Approved"); // NOT changed to Dispatched
+  });
 });
+

@@ -218,56 +218,137 @@ export async function PUT(
       product.manuallyEditedAt = new Date();
     }
 
-    if (isCostPriceChanged) {
-      product.costBaselineAmount = costPrice;
-      product.costBaselineQty = 1;
-      product.costBaselineAt = new Date();
+    // Safe atomic transaction for inventory & product update
+    const { default: mongoose } = await import("mongoose");
+    let session: any = undefined;
+    let useTransaction = true;
 
-      const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
-      const { CostAdjustment } = await import("@/models/CostAdjustment");
-
-      const pricingBeforeEdit = await calculateProductWeightedPricing(product._id.toString());
-      const effectiveBeforeEdit = resolveProductEffectivePricing(product, pricingBeforeEdit);
-
-      const costType = body.costType === "HISTORICAL_CORRECTION" ? "HISTORICAL_CORRECTION" : "MANUAL_OVERRIDE";
-      const reason = (body.costReason || body.reason || "").trim() || "Manual Cost Adjustment in Product Directory";
-      const reference = (body.costReference || body.reference || "").trim() || "Manual Product Directory Edit";
-
-      await CostAdjustment.create({
-        product: product._id,
-        previousCost: effectiveBeforeEdit.costPrice,
-        newCost: costPrice,
-        costType,
-        reason,
-        changedBy: auth.user?.userId,
-        userRole: auth.user?.role || "Admin",
-        reference,
-      });
+    try {
+      session = await mongoose.startSession();
+      session.startTransaction();
+    } catch {
+      useTransaction = false;
+      session = undefined;
     }
 
-    // Apply updates on SAME record ID
-    if (body.name !== undefined) product.name = body.name.trim();
-    product.sku = cleanSku;
-    product.barcode = cleanBarcode;
-    if (body.serialTracking !== undefined) product.serialTracking = Boolean(body.serialTracking);
-    if (body.category !== undefined) product.category = body.category || null;
-    if (body.productGroup !== undefined) product.productGroup = body.productGroup || null;
-    product.brand = brandVal;
-    product.modelNumber = modelVal;
-    product.model = modelVal;
-    product.color = colorVal;
-    product.condition = nextCondition;
-    product.costPrice = costPrice;
-    product.sellingPrice = sellingPrice;
-    product.minSellingPrice = minSellingPrice;
-    if (body.images !== undefined) {
-      // Ensure images have proper structure
-      product.images = Array.isArray(body.images) ? body.images : [];
-    }
-    if (body.description !== undefined) product.description = body.description ? body.description.trim() : null;
-    if (body.active !== undefined) product.active = Boolean(body.active);
+    try {
+      if (isCostPriceChanged) {
+        const { Inventory } = await import("@/models/Inventory");
+        const targetCondition = nextCondition || product.condition || "New";
+        const invQuery = Inventory.find({ product: product._id, condition: targetCondition });
+        if (session) invQuery.session(session);
+        const activeInventories = await invQuery.exec();
 
-    await product.save();
+        const totalStock = activeInventories.reduce((sum, inv) => sum + (inv.quantity || 0), 0);
+        if (totalStock <= 0) {
+          if (session) {
+            try {
+              if (session.inTransaction()) await session.abortTransaction();
+              await session.endSession();
+            } catch {}
+          }
+          return NextResponse.json(
+            {
+              success: false,
+              error: `Cannot manually override cost when product stock for condition '${targetCondition}' is 0. Cost is updated automatically when physical receiving is approved.`,
+            },
+            { status: 400 }
+          );
+        }
+
+        // Synchronize Inventory average cost baseline across pools for THIS condition only
+        for (const inv of activeInventories) {
+          inv.averageCost = costPrice;
+          inv.totalCostValue = Math.round((inv.quantity || 0) * costPrice * 100) / 100;
+          if (session) {
+            await inv.save({ session });
+          } else {
+            await inv.save();
+          }
+        }
+
+        const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
+        const { CostAdjustment } = await import("@/models/CostAdjustment");
+
+        const pricingBeforeEdit = await calculateProductWeightedPricing(product._id.toString());
+        const effectiveBeforeEdit = resolveProductEffectivePricing(product, pricingBeforeEdit);
+
+        const costType = body.costType === "HISTORICAL_CORRECTION" ? "HISTORICAL_CORRECTION" : "MANUAL_OVERRIDE";
+        const reason = (body.costReason || body.reason || "").trim() || "Manual Cost Adjustment in Product Directory";
+        const reference = (body.costReference || body.reference || "").trim() || "Manual Product Directory Edit";
+
+        if (session) {
+          await CostAdjustment.create(
+            [
+              {
+                product: product._id,
+                previousCost: effectiveBeforeEdit.costPrice,
+                newCost: costPrice,
+                costType,
+                reason,
+                changedBy: auth.user?.userId,
+                userRole: auth.user?.role || "Admin",
+                reference,
+              },
+            ],
+            { session }
+          );
+        } else {
+          await CostAdjustment.create({
+            product: product._id,
+            previousCost: effectiveBeforeEdit.costPrice,
+            newCost: costPrice,
+            costType,
+            reason,
+            changedBy: auth.user?.userId,
+            userRole: auth.user?.role || "Admin",
+            reference,
+          });
+        }
+      }
+
+      // Apply updates on SAME record ID
+      if (body.name !== undefined) product.name = body.name.trim();
+      product.sku = cleanSku;
+      product.barcode = cleanBarcode;
+      if (body.serialTracking !== undefined) product.serialTracking = Boolean(body.serialTracking);
+      if (body.category !== undefined) product.category = body.category || null;
+      if (body.productGroup !== undefined) product.productGroup = body.productGroup || null;
+      product.brand = brandVal;
+      product.modelNumber = modelVal;
+      product.model = modelVal;
+      product.color = colorVal;
+      product.condition = nextCondition;
+      product.costPrice = costPrice;
+      product.sellingPrice = sellingPrice;
+      product.minSellingPrice = minSellingPrice;
+      if (body.images !== undefined) {
+        // Ensure images have proper structure
+        product.images = Array.isArray(body.images) ? body.images : [];
+      }
+      if (body.description !== undefined) product.description = body.description ? body.description.trim() : null;
+      if (body.active !== undefined) product.active = Boolean(body.active);
+
+      if (session) {
+        await product.save({ session });
+        await session.commitTransaction();
+        await session.endSession();
+      } else {
+        await product.save();
+      }
+    } catch (saveErr) {
+      if (session) {
+        try {
+          if (session.inTransaction()) {
+            await session.abortTransaction();
+          }
+          await session.endSession();
+        } catch {
+          // ignore cleanup error
+        }
+      }
+      throw saveErr;
+    }
 
     const updatedProduct = await Product.findById(product._id)
       .populate("category", "name code")

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import { PurchaseInvoice } from "../../models/PurchaseInvoice";
 import { PurchaseReceiving } from "../../models/PurchaseReceiving";
+import { Inventory } from "../../models/Inventory";
 import { calculateProductWeightedPricing } from "../../lib/pricing";
 
 vi.mock("../../lib/db", () => ({
@@ -13,6 +14,14 @@ vi.mock("../../models/PurchaseReceiving", () => {
   return {
     PurchaseReceiving: {
       find: mockFind,
+    },
+  };
+});
+
+vi.mock("../../models/Inventory", () => {
+  return {
+    Inventory: {
+      aggregate: vi.fn().mockResolvedValue([]),
     },
   };
 });
@@ -102,6 +111,7 @@ describe("Batch Pricing & Weighted Average Rules", () => {
           },
         },
       ]);
+      (Inventory.aggregate as any).mockResolvedValue([{ _id: prodId, qty: 5, value: 500000 }]);
 
       const result = await calculateProductWeightedPricing(prodId.toString());
       expect(result.priceConfigured).toBe(true);
@@ -136,6 +146,7 @@ describe("Batch Pricing & Weighted Average Rules", () => {
           },
         },
       ]);
+      (Inventory.aggregate as any).mockResolvedValue([{ _id: prodId, qty: 15, value: 1550000 }]);
 
       const result = await calculateProductWeightedPricing(prodId.toString());
       expect(result.priceConfigured).toBe(true);
@@ -156,6 +167,7 @@ describe("Batch Pricing & Weighted Average Rules", () => {
           },
         },
       ]);
+      (Inventory.aggregate as any).mockResolvedValue([{ _id: prodId, qty: 4, value: 400 }]);
 
       const result = await calculateProductWeightedPricing(prodId.toString());
       expect(result.priceConfigured).toBe(true);
@@ -193,6 +205,7 @@ describe("Batch Pricing & Weighted Average Rules", () => {
           },
         },
       ]);
+      (Inventory.aggregate as any).mockResolvedValue([{ _id: prodId, qty: 5, value: 500000 }]);
 
       const result = await calculateProductWeightedPricing(prodId.toString());
       // Product card must show Rs. 120,000 and Rs. 110,000 — NOT "Price Not Configured"

@@ -66,9 +66,14 @@ const InventorySchema: Schema = new Schema(
 InventorySchema.index({ product: 1, location: 1, condition: 1 }, { unique: true });
 InventorySchema.index({ status: 1 });
 
-// Helper to determine status before save
+// Helper to determine status and log warning for placeholder cost before save
 InventorySchema.pre("save", function (this: any) {
   this.status = this.quantity > 0 ? "In Stock" : "Out of Stock";
+  if (this.quantity > 0 && (this.averageCost === undefined || this.averageCost === null || this.averageCost <= 1)) {
+    console.warn(
+      `[Inventory Warning] Saving active inventory (qty: ${this.quantity}) with unknown/placeholder cost (${this.averageCost}) for product: ${this.product}, location: ${this.location}, condition: ${this.condition}`
+    );
+  }
 });
 
 export const Inventory: Model<IInventory> =

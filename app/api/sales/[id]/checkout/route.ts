@@ -29,6 +29,44 @@ export async function POST(
       notes,
     });
 
+    const completedSaleDoc = result.sale;
+    const invoiceDoc = result.invoice;
+
+    const PaymentModule = (await import("@/models/Payment")).Payment;
+    const allPayments = await PaymentModule.find({ sale: completedSaleDoc._id, status: "PAID" }).lean();
+    const totalPaidSum = allPayments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
+
+    const receiptData = {
+      invoiceNumber: invoiceDoc?.invoiceNumber || completedSaleDoc.saleNumber,
+      saleNumber: completedSaleDoc.saleNumber,
+      date: invoiceDoc?.createdAt || new Date(),
+      locationName: completedSaleDoc.locationName || "Warehouse",
+      cashierName: auth.user.username,
+      salesmanName: completedSaleDoc.salesmanName || "Direct Counter",
+      customerName: completedSaleDoc.customerName || "Walk-in Customer",
+      customerPhone: completedSaleDoc.customerPhone || "N/A",
+      items: (completedSaleDoc.items || []).map((it: any) => ({
+        productName: it.productName || "Product Item",
+        condition: it.condition || "New",
+        quantity: it.quantity || 1,
+        unitPrice: it.unitPrice || 0,
+        lineTotal: it.lineTotal || (it.quantity * (it.unitPrice || 0)),
+        serialNumbers: it.serialNumbers || [],
+      })),
+      subtotal: completedSaleDoc.subtotal,
+      discountAmount: completedSaleDoc.discountAmount || 0,
+      deliveryCharges: completedSaleDoc.deliveryCharges || 0,
+      totalAmount: completedSaleDoc.totalAmount,
+      paidAmount: totalPaidSum,
+      changeDue: 0,
+      balanceDue: 0,
+      status: "COMPLETED",
+      payments: allPayments.map((p: any) => ({
+        method: p.paymentMethod,
+        amount: p.amount,
+      })),
+    };
+
     return NextResponse.json({
       success: true,
       message: result.alreadyCompleted
@@ -36,6 +74,7 @@ export async function POST(
         : "Sale completed and invoice finalized successfully.",
       data: result.sale,
       invoice: result.invoice,
+      receiptData,
     });
   } catch (error: any) {
     return NextResponse.json(

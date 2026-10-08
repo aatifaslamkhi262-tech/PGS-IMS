@@ -139,6 +139,17 @@ export async function recordCustomerLedgerEntry(
       }
       break;
 
+    case "ADVANCE_REFUND":
+      debit = amount;
+      if (newAdvance >= amount) {
+        newAdvance -= amount;
+      } else {
+        const remaining = amount - newAdvance;
+        newAdvance = 0;
+        newOutstanding = Math.max(0, newOutstanding + remaining);
+      }
+      break;
+
     case "DEBT_ADJUSTMENT":
       debit = amount;
       newOutstanding = Math.max(0, newOutstanding + amount);

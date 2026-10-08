@@ -54,19 +54,19 @@ export async function updateAverageCostOnIntake(
     });
   }
 
-  const existingQty = inv.quantity || 0;
-  const existingAvgCost = inv.averageCost || 0;
+  const existingQty = Math.max(0, inv.quantity || 0);
+  const existingAvgCost = Math.max(0, inv.averageCost || 0);
 
-  let newAverageCost = intakeCost;
-  if (existingQty > 0) {
-    const totalExistingValue = existingQty * existingAvgCost;
-    const totalIntakeValue = intakeQty * intakeCost;
-    newAverageCost = (totalExistingValue + totalIntakeValue) / (existingQty + intakeQty);
-    newAverageCost = Math.round(newAverageCost * 100) / 100;
-  }
+  const { blendAverageCost } = await import("@/lib/costing");
+  const newAverageCost = blendAverageCost({
+    existingQty,
+    existingAvg: existingAvgCost,
+    incomingQty: intakeQty,
+    incomingCost: intakeCost,
+  });
 
   const newQuantity = existingQty + intakeQty;
-  const totalCostValue = Math.round(newQuantity * newAverageCost * 100) / 100;
+  const totalCostValue = Math.round(Math.max(0, newQuantity) * newAverageCost * 100) / 100;
 
   inv.quantity = newQuantity;
   inv.averageCost = newAverageCost;

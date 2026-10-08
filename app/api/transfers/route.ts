@@ -23,6 +23,8 @@ export async function GET(req: NextRequest) {
     const destinationLocation = searchParams.get("destinationLocation") || "";
     const type = searchParams.get("type") || "";
     const olderThanDays = searchParams.get("olderThanDays") || searchParams.get("dispatchedOlderThanDays") || "";
+    const startDate = searchParams.get("startDate") || "";
+    const endDate = searchParams.get("endDate") || "";
 
     const query: any = {};
     if (search.trim()) {
@@ -37,7 +39,7 @@ export async function GET(req: NextRequest) {
         { "items.serialNumbers": searchRegex },
       ];
     }
-    if (status) {
+    if (status && status !== "ALL") {
       query.status = status;
     }
     if (sourceLocation) {
@@ -48,6 +50,17 @@ export async function GET(req: NextRequest) {
     }
     if (type) {
       query.type = type;
+    }
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) {
+        query.createdAt.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = end;
+      }
     }
     if (olderThanDays) {
       const days = parseInt(olderThanDays, 10);
@@ -92,12 +105,16 @@ export async function GET(req: NextRequest) {
           const pId = it.product._id ? it.product._id.toString() : it.product.toString();
           const pricing = batchPricing[pId];
           const effective = resolveProductEffectivePricing(it.product, pricing);
+          const finalCost = (it.unitCost !== undefined && it.unitCost !== null && it.unitCost > 0)
+            ? it.unitCost
+            : (effective.costPrice || (it.product as any)?.costPrice || 0);
 
           return {
             ...it,
+            unitCost: finalCost,
             product: {
               ...it.product,
-              costPrice: effective.costPrice,
+              costPrice: finalCost,
               sellingPrice: effective.sellingPrice,
               minSellingPrice: effective.minSellingPrice,
               pricingSource: effective.source,

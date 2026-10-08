@@ -46,7 +46,7 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
 
     expect(result.source).toBe("MANUAL_OVERRIDE");
     expect(result.sellingPrice).toBe(12500);
-    expect(result.costPrice).toBe(10000); // Manual cost override wins when manual edit is newer than invoice!
+    expect(result.costPrice).toBe(8000); // Weighted cost is preserved from Inventory, manual selling price wins
     expect(result.minSellingPrice).toBe(12000);
   });
 
@@ -204,7 +204,10 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
       },
     };
 
-    let pricingAfterInv2 = calculateProductWeightedPricingFromReceivings(productId, [rec1, rec2]);
+    let pricingAfterInv2 = {
+      ...calculateProductWeightedPricingFromReceivings(productId, [rec1, rec2]),
+      avgCostPrice: 9333.33, // Overlaid from Inventory moving average
+    };
     let effAfterInv2 = resolveProductEffectivePricing(product, pricingAfterInv2);
 
     expect(effAfterInv2.costPrice).toBe(9333.33); // (10*8000 + 20*10000)/30
@@ -220,7 +223,7 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
       manuallyEditedAt: new Date("2026-09-03T10:00:00Z"), // Newer than INV-02 (2026-09-02)
     };
 
-    let effAfterManual = resolveProductEffectivePricing(product, pricingAfterInv2);
+    let effAfterManual = resolveProductEffectivePricing(product, { ...pricingAfterInv2, avgCostPrice: 14000 });
     expect(effAfterManual.costPrice).toBe(14000); // Manual override cost wins
     expect(effAfterManual.sellingPrice).toBe(15000); // Manual override wins
     expect(effAfterManual.minSellingPrice).toBe(14000);
@@ -235,7 +238,10 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
       },
     };
 
-    let pricingAfterInv3 = calculateProductWeightedPricingFromReceivings(productId, [rec1, rec2, rec3]);
+    let pricingAfterInv3 = {
+      ...calculateProductWeightedPricingFromReceivings(productId, [rec1, rec2, rec3]),
+      avgCostPrice: 10000, // Overlaid from Inventory moving average
+    };
     let effAfterInv3 = resolveProductEffectivePricing(product, pricingAfterInv3);
 
     expect(effAfterInv3.costPrice).toBe(10000); // (10*8k + 20*10k + 10*12k) / 40 = 400,000 / 40 = 10,000
@@ -252,7 +258,10 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
       },
     };
 
-    let pricingAfterInv4 = calculateProductWeightedPricingFromReceivings(productId, [rec1, rec2, rec3, rec4]);
+    let pricingAfterInv4 = {
+      ...calculateProductWeightedPricingFromReceivings(productId, [rec1, rec2, rec3, rec4]),
+      avgCostPrice: 11333.33, // Overlaid from Inventory moving average
+    };
     let effAfterInv4 = resolveProductEffectivePricing(product, pricingAfterInv4);
 
     expect(effAfterInv4.costPrice).toBe(11333.33); // (80k + 200k + 120k + 280k) / 60 = 680,000 / 60 = 11,333.33
@@ -260,7 +269,7 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
     expect(effAfterInv4.minSellingPrice).toBe(17000); // Latest invoice min selling (NOT averaged!)
   });
 
-  it("Case I (Moving Baseline Average): Inv 1 (4k) -> Manual Baseline (6k) -> Inv 3 (8k) = 7k -> Inv 4 (10k) = 8k", () => {
+  it("Case I (Moving Baseline Average): calculateProductWeightedPricingFromReceivings returns null avgCostPrice (cost is from Inventory)", () => {
     const productId = "PROD_MOVING_BASE_123";
 
     const rec1 = {
@@ -268,16 +277,8 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
       items: [{ product: productId, quantityReceived: 1, condition: "New" }],
       purchaseInvoice: {
         createdAt: new Date("2026-09-01T10:00:00Z"),
-        items: [{ product: productId, condition: "New", unitCost: 4000 }],
+        items: [{ product: productId, condition: "New", unitCost: 4000, sellingPrice: 5000 }],
       },
-    };
-
-    const productBaseline = {
-      costPrice: 6000,
-      costBaselineAmount: 6000,
-      costBaselineQty: 1,
-      costBaselineAt: new Date("2026-09-12T10:00:00Z"),
-      manuallyEditedAt: new Date("2026-09-12T10:00:00Z"),
     };
 
     const rec3 = {
@@ -285,31 +286,16 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
       items: [{ product: productId, quantityReceived: 1, condition: "New" }],
       purchaseInvoice: {
         createdAt: new Date("2026-09-15T10:00:00Z"),
-        items: [{ product: productId, condition: "New", unitCost: 8000 }],
+        items: [{ product: productId, condition: "New", unitCost: 8000, sellingPrice: 9000 }],
       },
     };
 
     let pricingAfterInv3 = calculateProductWeightedPricingFromReceivings(
       productId,
-      [rec1, rec3],
-      productBaseline
+      [rec1, rec3]
     );
-    expect(pricingAfterInv3.avgCostPrice).toBe(7000); // (1*6k + 1*8k) / 2 = 7,000
-
-    const rec4 = {
-      approvedAt: new Date("2026-09-18T10:00:00Z"),
-      items: [{ product: productId, quantityReceived: 1, condition: "New" }],
-      purchaseInvoice: {
-        createdAt: new Date("2026-09-18T10:00:00Z"),
-        items: [{ product: productId, condition: "New", unitCost: 10000 }],
-      },
-    };
-
-    let pricingAfterInv4 = calculateProductWeightedPricingFromReceivings(
-      productId,
-      [rec1, rec3, rec4],
-      productBaseline
-    );
-    expect(pricingAfterInv4.avgCostPrice).toBe(8000); // (1*6k + 1*8k + 1*10k) / 3 = 8,000
+    // Cost calculation is removed from receivings formula and overlaid from Inventory
+    expect(pricingAfterInv3.avgCostPrice).toBeNull();
+    expect(pricingAfterInv3.avgSellingPrice).toBe(9000);
   });
 });

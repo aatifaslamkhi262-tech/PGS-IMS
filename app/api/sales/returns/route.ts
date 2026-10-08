@@ -128,16 +128,61 @@ export async function POST(request: Request) {
       const lineTotal = returnValuation * returnQty;
       returnTotalValue += lineTotal;
 
-      const intakeRes = await updateAverageCostOnIntake(
-        {
-          productId: product._id,
-          locationId: targetLocationId,
+      const { isValidCost } = await import("@/lib/costing");
+
+      let beforeQty = 0;
+      let afterQty = 0;
+
+      if (isValidCost(returnValuation)) {
+        const currentInv = await Inventory.findOne({
+          product: product._id,
+          location: targetLocationId,
           condition,
-          quantity: returnQty,
-          unitCost: returnValuation,
-        },
-        isTxActive ? session : undefined
-      );
+        });
+        beforeQty = currentInv ? currentInv.quantity : 0;
+        const intakeRes = await updateAverageCostOnIntake(
+          {
+            productId: product._id,
+            locationId: targetLocationId,
+            condition,
+            quantity: returnQty,
+            unitCost: returnValuation,
+          },
+          isTxActive ? session : undefined
+        );
+        afterQty = intakeRes.newQuantity;
+      } else {
+        console.warn(
+          `[Sales Return Warning] Agreed return valuation <= 1 (${returnValuation}) for product '${product.name}' (${condition}). Increasing quantity by ${returnQty} without modifying pool averageCost.`
+        );
+        let inv = await Inventory.findOne({
+          product: product._id,
+          location: targetLocationId,
+          condition,
+        });
+        beforeQty = inv ? inv.quantity : 0;
+        if (!inv) {
+          inv = new Inventory({
+            product: product._id,
+            location: targetLocationId,
+            condition,
+            quantity: returnQty,
+            averageCost: 0,
+            totalCostValue: 0,
+            status: "In Stock",
+          });
+        } else {
+          inv.quantity += returnQty;
+          inv.totalCostValue = Math.round(inv.quantity * (inv.averageCost || 0) * 100) / 100;
+          inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
+        }
+        afterQty = inv.quantity;
+        if (isTxActive && session) {
+          await inv.save({ session });
+        } else {
+          await inv.save();
+        }
+      }
 
       const movement = new InventoryMovement({
         product: product._id,
@@ -156,8 +201,8 @@ export async function POST(request: Request) {
         reason: action === "RENTAL_SWAP"
           ? `Rental Return Intake (Deposit: Rs. ${secDepositPaid}, Rent Deducted: Rs. ${rentDeducted})`
           : `Return against Invoice ${originalSale?.saleNumber || ""} (${condition})`,
-        beforeQuantity: Math.max(0, (intakeRes?.newQuantity || 1) - returnQty),
-        afterQuantity: intakeRes?.newQuantity || 1,
+        beforeQuantity: beforeQty,
+        afterQuantity: afterQty,
         performedBy: processedBy || auth.user?.username || "system",
         createdBy: processedBy || auth.user?.username || "system",
       });

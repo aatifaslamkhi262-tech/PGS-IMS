@@ -73,6 +73,16 @@ export async function DELETE(
       return NextResponse.json({ success: true, message: "Sale is already cancelled.", data: sale });
     }
 
+    let body: any = {};
+    try {
+      body = await req.json();
+    } catch {
+      body = {};
+    }
+
+    const forfeitAdvance = Boolean(body.forfeitAdvance);
+    const cancellationReason = body.cancellationReason?.trim() || "Cancelled by user";
+
     // If completed, revert stock and serials
     if (sale.status === "COMPLETED") {
       const invoice = await Invoice.findOne({ sale: sale._id });
@@ -175,16 +185,76 @@ export async function DELETE(
           createdBy: auth.user.username,
         });
       }
+    } else {
+      // For non-COMPLETED sales (e.g. PAYMENT_PENDING / CHECKOUT / DRAFT advance bookings)
+      // 1. Unreserve any serial numbers marked Reserved/Available
+      for (const item of sale.items) {
+        if (item.serialNumbers && item.serialNumbers.length > 0) {
+          await SerialNumber.updateMany(
+            { serialNumber: { $in: item.serialNumbers } },
+            { $set: { status: "Available", location: sale.locationName || "Warehouse" } }
+          );
+        }
+      }
+
+      // 2. Process payments recorded
+      const allPaidPayments = await Payment.find({ sale: sale._id, status: "PAID" });
+      const totalPaidSum = allPaidPayments.reduce((sum, p) => sum + Number(p.amount), 0);
+      const cashPayments = allPaidPayments.filter((p) => p.paymentMethod === "CASH");
+      const totalCashPaid = cashPayments.reduce((sum, p) => sum + Number(p.amount), 0);
+
+      if (forfeitAdvance) {
+        // Mark payments as FORFEITED (non-refundable deposit retained by store)
+        await Payment.updateMany({ sale: sale._id }, { status: "FORFEITED" });
+      } else {
+        await Payment.updateMany({ sale: sale._id }, { status: "REFUNDED" });
+
+        const activeCashSession = await CashSession.findOne({
+          location: sale.location,
+          cashier: auth.user.username,
+          status: "OPEN",
+        });
+
+        if (activeCashSession && totalCashPaid > 0) {
+          await recordCashMovement({
+            sessionId: activeCashSession._id.toString(),
+            locationId: sale.location.toString(),
+            cashier: auth.user.username,
+            type: "CASH_REFUND",
+            amount: totalCashPaid,
+            direction: "OUT",
+            referenceType: "Sale",
+            referenceId: sale.saleNumber,
+            notes: `Cash refund for cancelled advance/pending sale ${sale.saleNumber}`,
+          });
+        }
+      }
+
+      if (sale.customer && totalPaidSum > 0) {
+        await recordCustomerLedgerEntry({
+          customerId: sale.customer.toString(),
+          type: "ADVANCE_REFUND",
+          amount: totalPaidSum,
+          referenceType: "AdvanceBooking",
+          referenceId: sale.saleNumber,
+          notes: forfeitAdvance
+            ? `Advance deposit forfeited (Non-refundable cancellation): ${cancellationReason}`
+            : `Advance deposit refund for cancelled booking ${sale.saleNumber}`,
+          createdBy: auth.user.username,
+        });
+      }
     }
 
     sale.status = "CANCELLED";
     sale.cancelledAt = new Date();
-    sale.cancellationReason = "Cancelled by user";
+    sale.cancellationReason = cancellationReason;
     await sale.save();
 
     return NextResponse.json({
       success: true,
-      message: "Sale cancelled and stock restored successfully.",
+      message: forfeitAdvance
+        ? "Sale cancelled and advance deposit forfeited as store income successfully."
+        : "Sale cancelled, serials unreserved, and customer advance ledger updated successfully.",
       data: sale,
     });
   } catch (error: any) {
