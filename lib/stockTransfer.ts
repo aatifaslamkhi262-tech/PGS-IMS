@@ -245,7 +245,10 @@ export async function executeDispatch({
       );
     }
 
-    const unitCost = (inv && inv.averageCost && isValidCost(inv.averageCost)) ? inv.averageCost : 0;
+    const unitCost: number = (inv && inv.averageCost && isValidCost(inv.averageCost))
+      ? inv.averageCost
+      : (isValidCost(item.unitCost) ? (item.unitCost ?? 0) : (isValidCost(product.costPrice) ? (product.costPrice ?? 0) : 0));
+
     if (!isValidCost(unitCost)) {
       throw new Error(
         `Cannot dispatch transfer: Source inventory for '${product.name}' (${item.condition}) has no valid average cost (averageCost <= ${COST_PLACEHOLDER_MAX}). Please update cost in Product Directory before transferring.`
@@ -275,6 +278,9 @@ export async function executeDispatch({
 
     const remainingQty = beforeQty - item.quantity;
     inv.quantity = remainingQty;
+    if (!isValidCost(inv.averageCost)) {
+      inv.averageCost = unitCost;
+    }
     inv.totalCostValue = Math.round(remainingQty * unitCost * 100) / 100;
     inv.status = remainingQty > 0 ? "In Stock" : "Out of Stock";
     await inv.save();
