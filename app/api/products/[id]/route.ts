@@ -209,8 +209,12 @@ export async function PUT(
       );
     }
 
-    // Track if any price field was intentionally changed to a new value
-    const isCostPriceChanged = body.costPrice !== undefined && Number(body.costPrice) !== product.costPrice;
+    // Track if cost price was explicitly requested to be overridden by user
+    const hasExplicitReason = Boolean((body.costReason || body.reason || "").trim());
+    const isCostPriceChanged = body.costPrice !== undefined && 
+      Number(body.costPrice) !== product.costPrice &&
+      (body.isCostOverride === true || hasExplicitReason || body.costType === "HISTORICAL_CORRECTION");
+
     const isSellingPriceChanged = body.sellingPrice !== undefined && Number(body.sellingPrice) !== product.sellingPrice;
     const isMinSellingPriceChanged = body.minSellingPrice !== undefined && Number(body.minSellingPrice) !== product.minSellingPrice;
 
@@ -234,6 +238,13 @@ export async function PUT(
     try {
       if (isCostPriceChanged) {
         const { Inventory } = await import("@/models/Inventory");
+        const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
+        const { CostAdjustment } = await import("@/models/CostAdjustment");
+
+        // Compute pricing BEFORE modifying pools so previousCost accurately reflects pre-edit state
+        const pricingBeforeEdit = await calculateProductWeightedPricing(product._id.toString());
+        const effectiveBeforeEdit = resolveProductEffectivePricing(product, pricingBeforeEdit);
+
         const targetCondition = nextCondition || product.condition || "New";
         const invQuery = Inventory.find({ product: product._id, condition: targetCondition });
         if (session) invQuery.session(session);
@@ -266,12 +277,6 @@ export async function PUT(
             await inv.save();
           }
         }
-
-        const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
-        const { CostAdjustment } = await import("@/models/CostAdjustment");
-
-        const pricingBeforeEdit = await calculateProductWeightedPricing(product._id.toString());
-        const effectiveBeforeEdit = resolveProductEffectivePricing(product, pricingBeforeEdit);
 
         const costType = body.costType === "HISTORICAL_CORRECTION" ? "HISTORICAL_CORRECTION" : "MANUAL_OVERRIDE";
         const reason = (body.costReason || body.reason || "").trim() || "Manual Cost Adjustment in Product Directory";

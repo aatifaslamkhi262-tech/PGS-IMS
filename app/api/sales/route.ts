@@ -7,6 +7,7 @@ import { User } from "@/models/User";
 import { createSaleInput, completeSale } from "@/lib/salesEngine";
 import { verifyRole } from "@/lib/auth/rbac";
 import { lockIdempotencyKey, completeIdempotencyKey, failIdempotencyKey } from "@/lib/idempotencyEngine";
+import { sendOwnerOrderAlert } from "@/lib/emailService";
 
 export async function GET(req: NextRequest) {
   try {
@@ -180,6 +181,28 @@ export async function POST(req: NextRequest) {
       notes,
       createdBy: auth.user.username,
     });
+
+    // Trigger instant email alert for online sales (non-blocking)
+    if (["WEBSITE", "WHATSAPP", "INSTAGRAM", "PHONE"].includes(source)) {
+      sendOwnerOrderAlert({
+        saleNumber: createResult.sale.saleNumber,
+        saleSource: createResult.sale.saleSource,
+        customerName: createResult.sale.customerName,
+        customerPhone: createResult.sale.customerPhone,
+        items: (createResult.sale.items || []).map((it: any) => ({
+          productName: it.productName,
+          condition: it.condition,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          lineTotal: it.lineTotal,
+        })),
+        subtotal: createResult.sale.subtotal,
+        deliveryCharges: createResult.sale.deliveryCharges,
+        totalAmount: createResult.sale.totalAmount,
+        notes: createResult.sale.notes,
+        createdAt: createResult.sale.createdAt,
+      }).catch((err) => console.error("[SalesAPI] Email alert error:", err));
+    }
 
     if (createResult.isDuplicate) {
       const respData = {

@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { Sale } from "@/models/Sale";
 import { createSaleInput, completeSale } from "@/lib/salesEngine";
 import { SerialNumber } from "@/models/SerialNumber";
+import { sendOwnerOrderAlert } from "@/lib/emailService";
 
 export async function POST(request: Request) {
   try {
@@ -35,6 +36,26 @@ export async function POST(request: Request) {
     const sale = saleResult.sale;
     sale.status = "DRAFT"; // Received state
     await sale.save();
+
+    // Trigger instant email alert to owner (non-blocking background task)
+    sendOwnerOrderAlert({
+      saleNumber: sale.saleNumber,
+      saleSource: sale.saleSource,
+      customerName: sale.customerName,
+      customerPhone: sale.customerPhone,
+      items: (sale.items || []).map((it: any) => ({
+        productName: it.productName,
+        condition: it.condition,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        lineTotal: it.lineTotal,
+      })),
+      subtotal: sale.subtotal,
+      deliveryCharges: sale.deliveryCharges,
+      totalAmount: sale.totalAmount,
+      notes: sale.notes,
+      createdAt: sale.createdAt,
+    }).catch((err) => console.error("[OnlineOrder] Email notification error:", err));
 
     return NextResponse.json({
       success: true,
