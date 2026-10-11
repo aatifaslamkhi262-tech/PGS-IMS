@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:backup": "node scripts/backup_db.js",
+    "db:restore": "node scripts/restore_db.js"
   },
   "dependencies": {
     "cloudinary": "^2.10.0",
