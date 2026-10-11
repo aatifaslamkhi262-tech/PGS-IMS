@@ -6,6 +6,7 @@ import { Location } from "@/models/Location";
 import { Sale } from "@/models/Sale";
 import { lockIdempotencyKey, completeIdempotencyKey, failIdempotencyKey } from "@/lib/idempotencyEngine";
 import { resolveOrCreateCustomer } from "@/lib/customerResolver";
+import { sendOwnerOrderAlert } from "@/lib/emailService";
 
 export async function POST(req: NextRequest) {
   let idempotencyKeyHeader = "";
@@ -161,6 +162,26 @@ export async function POST(req: NextRequest) {
     });
 
     await sale.save();
+
+    // Trigger instant email alert to owner (non-blocking background task)
+    sendOwnerOrderAlert({
+      saleNumber: sale.saleNumber,
+      saleSource: sale.saleSource,
+      customerName: sale.customerName,
+      customerPhone: sale.customerPhone,
+      items: (sale.items || []).map((it: any) => ({
+        productName: it.productName,
+        condition: it.condition,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        lineTotal: it.lineTotal,
+      })),
+      subtotal: sale.subtotal,
+      deliveryCharges: sale.deliveryCharges,
+      totalAmount: sale.totalAmount,
+      notes: sale.notes,
+      createdAt: sale.createdAt,
+    }).catch((err) => console.error("[WebCheckout] Email notification error:", err));
 
     const responseData = {
       success: true,

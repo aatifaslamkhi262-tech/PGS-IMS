@@ -21,7 +21,7 @@ export interface OrderEmailInput {
 export async function sendOwnerOrderAlert(order: OrderEmailInput): Promise<{ success: boolean; data?: any; error?: string }> {
   try {
     const apiKey = process.env.RESEND_API_KEY;
-    const ownerEmail = process.env.OWNER_EMAIL 
+    const ownerEmail = process.env.OWNER_EMAIL || "aatif.aslamkhi262@gmail.com";
 
     if (!apiKey) {
       console.warn("[EmailService] Missing RESEND_API_KEY. Skipping email notification.");
