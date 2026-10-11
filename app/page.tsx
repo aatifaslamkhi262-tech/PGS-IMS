@@ -1011,7 +1011,7 @@ function DashboardQueueWidget() {
                   Rs. {sale.totalAmount?.toLocaleString()}
                 </span>
                 <Link
-                  href="/warehouse-queue"
+                  href={`/sales?mode=QUEUE&targetSaleId=${sale._id}`}
                   className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded-lg transition"
                 >
                   Process & Bill

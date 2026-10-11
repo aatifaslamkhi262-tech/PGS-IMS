@@ -37,17 +37,26 @@ function SalesWorkspaceContent() {
   const router = useRouter();
 
   const modeParam = (searchParams.get("mode") as SalesMode) || "POS";
+  const targetSaleIdParam = searchParams.get("targetSaleId");
   const [mode, setMode] = useState<SalesMode>(modeParam);
 
   useEffect(() => {
     const urlMode = searchParams.get("mode") as SalesMode;
     if (urlMode && urlMode !== mode) {
       setMode(urlMode);
+      if (urlMode === "QUEUE") {
+        setSelectedLocation("ALL");
+        setSelectedSalesman("ALL");
+      }
     }
   }, [searchParams]);
 
   const handleModeChange = (newMode: SalesMode) => {
     setMode(newMode);
+    if (newMode === "QUEUE") {
+      setSelectedLocation("ALL");
+      setSelectedSalesman("ALL");
+    }
     router.push(`/sales?mode=${newMode}`);
   };
 
@@ -423,26 +432,45 @@ function SalesWorkspaceContent() {
     loadMaster();
   }, []);
 
-  useEffect(() => {
-    if (mode === "QUEUE") {
-      fetchQueue();
-    }
-  }, [mode, selectedLocation, selectedSalesman, queueStatusFilter]);
-
-  const fetchQueue = async () => {
+  const fetchQueue = async (silent = false) => {
     try {
-      setLoadingQueue(true);
-      const res = await fetch(`/api/sales/queue?locationId=${selectedLocation || "ALL"}&salesmanId=${selectedSalesman || "ALL"}&status=${queueStatusFilter}`);
+      if (!silent) setLoadingQueue(true);
+      const res = await fetch(
+        `/api/sales/queue?locationId=${selectedLocation || "ALL"}&salesmanId=${selectedSalesman || "ALL"}&status=${queueStatusFilter}`,
+        { cache: "no-store" }
+      );
       const data = await res.json();
       if (data.success) {
-        setPendingSales(data.data);
+        setPendingSales(data.data || []);
       }
     } catch (err) {
       console.error("Failed to fetch queue", err);
     } finally {
-      setLoadingQueue(false);
+      if (!silent) setLoadingQueue(false);
     }
   };
+
+  useEffect(() => {
+    if (mode === "QUEUE") {
+      fetchQueue(false);
+      const interval = setInterval(() => {
+        fetchQueue(true);
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [mode, selectedLocation, selectedSalesman, queueStatusFilter]);
+
+  // Auto-focus and open verification modal if targetSaleId is specified in URL
+  useEffect(() => {
+    if (targetSaleIdParam && pendingSales.length > 0 && !showVerifyModal) {
+      const found = pendingSales.find((s) => s._id === targetSaleIdParam);
+      if (found && found.status !== "COMPLETED") {
+        setSelectedQueueSale(found);
+        setQueuePaymentMethod((found.paymentMethod as any) || "CASH");
+        setShowVerifyModal(true);
+      }
+    }
+  }, [targetSaleIdParam, pendingSales, showVerifyModal]);
 
   const handleOpenCancelModal = (sale: any) => {
     setCancelSaleTarget(sale);
@@ -1877,10 +1905,29 @@ function SalesWorkspaceContent() {
         {mode === "QUEUE" && (
           <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
-              <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-                <Clock className="w-4 h-4 text-amber-400" />
-                Warehouse Pending Billing Queue
-              </h3>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-400" />
+                  Warehouse Pending Billing Queue
+                </h3>
+                <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-semibold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  Live Sync (5s)
+                </span>
+                {(selectedLocation !== "ALL" || selectedSalesman !== "ALL") && (
+                  <button
+                    onClick={() => {
+                      setSelectedLocation("ALL");
+                      setSelectedSalesman("ALL");
+                    }}
+                    className="bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[11px] px-2.5 py-0.5 rounded-lg flex items-center gap-1.5 transition"
+                    title="Filters active. Click to view all orders across all branches and salesman checkouts"
+                  >
+                    <span>⚠️ Filter Active</span>
+                    <span className="underline font-bold">Show All Orders</span>
+                  </button>
+                )}
+              </div>
 
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs">
@@ -1898,10 +1945,11 @@ function SalesWorkspaceContent() {
                 </div>
 
                 <button
-                  onClick={fetchQueue}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded-lg font-semibold transition"
+                  onClick={() => fetchQueue(false)}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded-lg font-semibold transition flex items-center gap-1.5"
                 >
-                  Refresh Queue 🔄
+                  <span>Refresh Queue</span>
+                  <span>🔄</span>
                 </button>
               </div>
             </div>
@@ -1914,10 +1962,16 @@ function SalesWorkspaceContent() {
               </div>
             ) : (
               <div className="space-y-4">
-                {pendingSales.map((sale) => (
+                {pendingSales.map((sale) => {
+                  const isTarget = targetSaleIdParam === sale._id;
+                  return (
                   <div
                     key={sale._id}
-                    className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3 text-xs"
+                    className={`bg-slate-950 border rounded-xl p-4 space-y-3 text-xs transition-all ${
+                      isTarget
+                        ? "border-amber-500 ring-2 ring-amber-500/40 shadow-lg shadow-amber-500/10"
+                        : "border-slate-800"
+                    }`}
                   >
                     <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
                       <div className="flex items-center gap-2">
@@ -2067,7 +2121,8 @@ function SalesWorkspaceContent() {
                       );
                     })()}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
