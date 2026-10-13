@@ -946,7 +946,7 @@ function DashboardQueueWidget() {
 
   const fetchQueue = async () => {
     try {
-      const res = await fetch("/api/sales/queue");
+      const res = await fetch("/api/sales/queue", { cache: "no-store" });
       const data = await res.json();
       if (data.success) {
         setQueueSales(data.data || []);
@@ -960,8 +960,28 @@ function DashboardQueueWidget() {
 
   useEffect(() => {
     fetchQueue();
-    const interval = setInterval(fetchQueue, 5000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchQueue, 1500);
+
+    const onFocus = () => fetchQueue();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") fetchQueue();
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel("pgs_orders_sync");
+      channel.onmessage = () => fetchQueue();
+    } catch {}
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (channel) channel.close();
+    };
   }, []);
 
   if (queueSales.length === 0) return null;

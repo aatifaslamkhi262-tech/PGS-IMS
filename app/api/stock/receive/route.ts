@@ -62,17 +62,19 @@ export async function POST(req: NextRequest) {
           // Validate serial number uniqueness globally
           const existingSerial = await SerialNumber.findOne({ serialNumber: serialNumberValue });
           if (existingSerial) {
-            results.failed.push({ serialNumber: serialNumberValue, error: "Serial number already exists" });
-            continue;
-          }
-
-          // Validate serial number uniqueness per product
-          const existingProductSerial = await SerialNumber.findOne({
-            product: body.product,
-            serialNumber: serialNumberValue,
-          });
-          if (existingProductSerial) {
-            results.failed.push({ serialNumber: serialNumberValue, error: "Serial number already exists for this product" });
+            if (existingSerial.status === "Sold") {
+              existingSerial.product = body.product;
+              existingSerial.status = "Available";
+              existingSerial.location = body.location || undefined;
+              existingSerial.transactionReference = body.transactionReference || undefined;
+              existingSerial.notes = body.notes || undefined;
+              existingSerial.saleDate = undefined;
+              existingSerial.invoiceId = undefined;
+              await existingSerial.save();
+              results.successful.push(existingSerial);
+              continue;
+            }
+            results.failed.push({ serialNumber: serialNumberValue, error: `Serial number already exists with status "${existingSerial.status}"` });
             continue;
           }
 

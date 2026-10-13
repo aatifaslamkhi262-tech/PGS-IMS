@@ -250,24 +250,7 @@ export async function PUT(
         if (session) invQuery.session(session);
         const activeInventories = await invQuery.exec();
 
-        const totalStock = activeInventories.reduce((sum, inv) => sum + (inv.quantity || 0), 0);
-        if (totalStock <= 0) {
-          if (session) {
-            try {
-              if (session.inTransaction()) await session.abortTransaction();
-              await session.endSession();
-            } catch {}
-          }
-          return NextResponse.json(
-            {
-              success: false,
-              error: `Cannot manually override cost when product stock for condition '${targetCondition}' is 0. Cost is updated automatically when physical receiving is approved.`,
-            },
-            { status: 400 }
-          );
-        }
-
-        // Synchronize Inventory average cost baseline across pools for THIS condition only
+        // Synchronize Inventory average cost baseline across pools for THIS condition (if any exist)
         for (const inv of activeInventories) {
           inv.averageCost = costPrice;
           inv.totalCostValue = Math.round((inv.quantity || 0) * costPrice * 100) / 100;
@@ -310,6 +293,10 @@ export async function PUT(
             reference,
           });
         }
+
+        product.costBaselineAmount = costPrice;
+        product.costBaselineQty = 1;
+        product.costBaselineAt = new Date();
       }
 
       // Apply updates on SAME record ID

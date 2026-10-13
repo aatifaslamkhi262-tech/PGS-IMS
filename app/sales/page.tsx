@@ -206,6 +206,7 @@ function SalesWorkspaceContent() {
         setSelectedQueueSale(null);
         setQueuePriceAdjustment(0);
         fetchQueue();
+        broadcastOrderSync();
       } else {
         alert(data.error || "Failed to complete queue sale.");
       }
@@ -432,6 +433,14 @@ function SalesWorkspaceContent() {
     loadMaster();
   }, []);
 
+  const broadcastOrderSync = () => {
+    try {
+      const channel = new BroadcastChannel("pgs_orders_sync");
+      channel.postMessage({ type: "ORDER_UPDATED", timestamp: Date.now() });
+      channel.close();
+    } catch {}
+  };
+
   const fetchQueue = async (silent = false) => {
     try {
       if (!silent) setLoadingQueue(true);
@@ -455,8 +464,28 @@ function SalesWorkspaceContent() {
       fetchQueue(false);
       const interval = setInterval(() => {
         fetchQueue(true);
-      }, 5000);
-      return () => clearInterval(interval);
+      }, 1500);
+
+      const onFocus = () => fetchQueue(true);
+      const onVisibilityChange = () => {
+        if (document.visibilityState === "visible") fetchQueue(true);
+      };
+
+      window.addEventListener("focus", onFocus);
+      document.addEventListener("visibilitychange", onVisibilityChange);
+
+      let channel: BroadcastChannel | null = null;
+      try {
+        channel = new BroadcastChannel("pgs_orders_sync");
+        channel.onmessage = () => fetchQueue(true);
+      } catch {}
+
+      return () => {
+        clearInterval(interval);
+        window.removeEventListener("focus", onFocus);
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        if (channel) channel.close();
+      };
     }
   }, [mode, selectedLocation, selectedSalesman, queueStatusFilter]);
 
@@ -497,6 +526,7 @@ function SalesWorkspaceContent() {
         setShowCancelModal(false);
         setCancelSaleTarget(null);
         fetchQueue();
+        broadcastOrderSync();
       } else {
         alert(data.error || "Failed to cancel sale.");
       }
@@ -650,6 +680,7 @@ function SalesWorkspaceContent() {
         });
         setShowReceiptModal(true);
         setCartItems([]);
+        broadcastOrderSync();
       } else {
         alert(data.error || "Failed to process sale.");
       }
@@ -698,6 +729,7 @@ function SalesWorkspaceContent() {
       const data = await res.json();
       if (data.success) {
         alert(`Online order ${data.data.saleNumber} created successfully!`);
+        broadcastOrderSync();
       } else {
         alert(data.error || "Failed to create online order.");
       }
@@ -798,6 +830,7 @@ function SalesWorkspaceContent() {
           setCompletedReceiptData(data.data.receiptData);
           setShowReceiptModal(true);
         }
+        broadcastOrderSync();
       } else {
         alert(data.error || "Failed to register advance booking.");
       }
@@ -1912,7 +1945,7 @@ function SalesWorkspaceContent() {
                 </h3>
                 <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Live Sync (5s)
+                  Live Instant Sync (1.5s)
                 </span>
                 {(selectedLocation !== "ALL" || selectedSalesman !== "ALL") && (
                   <button

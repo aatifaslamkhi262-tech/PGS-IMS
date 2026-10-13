@@ -158,7 +158,23 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
             // Already created during partial/previous attempt of this receiving - skip duplicate creation
             continue;
           }
-          throw new Error(`Serial number "${sn}" already exists in the system (Product ID: ${existingSerial.product}). Duplicate serial rejected.`);
+          if (existingSerial.status === "Sold") {
+            // Re-acquire previously sold serial: re-link product, reset to Available, update location and receiving ref
+            existingSerial.product = item.product;
+            existingSerial.status = "Available";
+            existingSerial.location = locationObj.name;
+            existingSerial.transactionReference = receiving.receivingNumber;
+            existingSerial.saleDate = undefined;
+            existingSerial.invoiceId = undefined;
+            existingSerial.notes = `Re-acquired via Receiving ${receiving.receivingNumber}`;
+            if (session) {
+              await existingSerial.save({ session });
+            } else {
+              await existingSerial.save();
+            }
+            continue;
+          }
+          throw new Error(`Serial number "${sn}" already exists in the system with status "${existingSerial.status}" (Product ID: ${existingSerial.product}). Duplicate serial rejected.`);
         }
 
         // Create serial number as Available with location name & transaction reference

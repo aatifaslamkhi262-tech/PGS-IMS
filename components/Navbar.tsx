@@ -26,6 +26,8 @@ import {
   Handshake,
 } from "lucide-react";
 
+import { ThemeToggle } from "@/components/ThemeToggle";
+
 interface NavbarProps {
   onTriggerSeed?: () => void;
 }
@@ -396,6 +398,7 @@ export const Navbar: React.FC<NavbarProps> = () => {
 
             {/* User Info & Actions */}
             <div className="flex items-center gap-2 shrink-0">
+              <ThemeToggle />
               {user ? (
                 <div className="flex items-center gap-3">
                   <div className="hidden lg:block text-right">

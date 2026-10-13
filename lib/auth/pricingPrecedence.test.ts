@@ -298,4 +298,28 @@ describe("Pricing Resolution Engine & Precedence Suite", () => {
     expect(pricingAfterInv3.avgCostPrice).toBeNull();
     expect(pricingAfterInv3.avgSellingPrice).toBe(9000);
   });
+
+  it("Case J: Manual cost override when stock is 0 (unconfigured inventory pool) sets effective cost correctly", () => {
+    const product = {
+      costPrice: 4500,
+      sellingPrice: 6000,
+      minSellingPrice: 5500,
+      manuallyEditedAt: new Date("2026-10-10T10:00:00Z"),
+    };
+
+    const weightedPricing = {
+      priceConfigured: false,
+      avgCostPrice: null,
+      avgSellingPrice: null,
+      avgMinSellingPrice: null,
+      lastInvoiceDate: null,
+    };
+
+    const result = resolveProductEffectivePricing(product, weightedPricing);
+
+    expect(result.source).toBe("MANUAL_OVERRIDE");
+    expect(result.costPrice).toBe(4500);
+    expect(result.sellingPrice).toBe(6000);
+    expect(result.minSellingPrice).toBe(5500);
+  });
 });

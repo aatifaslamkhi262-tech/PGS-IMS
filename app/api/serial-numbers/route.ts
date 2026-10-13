@@ -87,20 +87,26 @@ export async function POST(req: NextRequest) {
     // Validate serial number uniqueness globally
     const existingSerial = await SerialNumber.findOne({ serialNumber: cleanSerialNumber });
     if (existingSerial) {
-      return NextResponse.json(
-        { success: false, error: `Serial Number "${cleanSerialNumber}" already exists.` },
-        { status: 400 }
-      );
-    }
+      if (existingSerial.status === "Sold") {
+        existingSerial.product = body.product;
+        existingSerial.status = body.status || "Available";
+        existingSerial.location = body.location || undefined;
+        existingSerial.transactionReference = body.transactionReference || undefined;
+        existingSerial.invoiceId = body.invoiceId || undefined;
+        existingSerial.notes = body.notes || undefined;
+        existingSerial.saleDate = undefined;
+        await existingSerial.save();
 
-    // Validate serial number uniqueness per product
-    const existingProductSerial = await SerialNumber.findOne({
-      product: body.product,
-      serialNumber: cleanSerialNumber,
-    });
-    if (existingProductSerial) {
+        const populatedSerial = await SerialNumber.findById(existingSerial._id)
+          .populate("product", "name sku barcode");
+
+        return NextResponse.json(
+          { success: true, data: populatedSerial, message: `Re-activated previously sold serial for product "${body.product}".` },
+          { status: 200 }
+        );
+      }
       return NextResponse.json(
-        { success: false, error: `Serial Number "${cleanSerialNumber}" already exists for this product.` },
+        { success: false, error: `Serial Number "${cleanSerialNumber}" is currently active with status "${existingSerial.status}".` },
         { status: 400 }
       );
     }
