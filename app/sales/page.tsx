@@ -150,18 +150,26 @@ function SalesWorkspaceContent() {
     try {
       setCompletingQueueSale(true);
 
+      const adjNum = Number(queuePriceAdjustment || 0);
       const remainingBalance = selectedQueueSale.balanceDue !== undefined && selectedQueueSale.balanceDue > 0
         ? selectedQueueSale.balanceDue
         : Math.max(0, selectedQueueSale.totalAmount - (selectedQueueSale.totalPaid || 0));
       const baseCheckoutAmount = remainingBalance > 0 ? remainingBalance : selectedQueueSale.totalAmount;
-      const finalCheckoutAmount = Math.max(0, baseCheckoutAmount + Number(queuePriceAdjustment || 0));
+      const finalCheckoutAmount = Math.max(0, baseCheckoutAmount + adjNum);
+
+      const noteText = adjNum !== 0
+        ? (adjNum > 0
+            ? `Price Adjustment / Late Fee: +Rs. ${adjNum}`
+            : `Discount Adjustment: -Rs. ${Math.abs(adjNum)}`)
+        : undefined;
 
       const res = await fetch(`/api/sales/${selectedQueueSale._id}/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           paymentAllocations: [{ method: queuePaymentMethod, amount: finalCheckoutAmount }],
-          notes: queuePriceAdjustment !== 0 ? `Price Adjustment / Late Fee: Rs. ${queuePriceAdjustment}` : undefined,
+          priceAdjustment: adjNum,
+          notes: noteText,
         }),
       });
       const data = await res.json();
@@ -174,6 +182,10 @@ function SalesWorkspaceContent() {
         if (data.receiptData) {
           setCompletedReceiptData(data.receiptData);
         } else {
+          const revisedDiscount = (selectedQueueSale.discountAmount || 0) + (adjNum < 0 ? Math.abs(adjNum) : 0);
+          const revisedAdditional = (selectedQueueSale.additionalCharges || 0) + (adjNum > 0 ? adjNum : 0);
+          const revisedTotal = Math.max(0, selectedQueueSale.totalAmount + adjNum);
+
           setCompletedReceiptData({
             invoiceNumber: data.invoice?.invoiceNumber || selectedQueueSale.saleNumber,
             date: new Date().toLocaleString(),
@@ -191,10 +203,11 @@ function SalesWorkspaceContent() {
               serialNumbers: it.serialNumbers || [],
             })),
             subtotal: selectedQueueSale.subtotal || selectedQueueSale.totalAmount,
-            discountAmount: selectedQueueSale.discountAmount || 0,
+            discountAmount: revisedDiscount,
             deliveryCharges: selectedQueueSale.deliveryCharges || 0,
-            totalAmount: selectedQueueSale.totalAmount + Number(queuePriceAdjustment || 0),
-            paidAmount: selectedQueueSale.totalAmount + Number(queuePriceAdjustment || 0),
+            additionalCharges: revisedAdditional,
+            totalAmount: revisedTotal,
+            paidAmount: revisedTotal,
             changeDue: 0,
             balanceDue: 0,
             payments: [{ method: queuePaymentMethod, amount: finalCheckoutAmount }],
@@ -495,6 +508,7 @@ function SalesWorkspaceContent() {
       const found = pendingSales.find((s) => s._id === targetSaleIdParam);
       if (found && found.status !== "COMPLETED") {
         setSelectedQueueSale(found);
+        setQueuePriceAdjustment(0);
         setQueuePaymentMethod((found.paymentMethod as any) || "CASH");
         setShowVerifyModal(true);
       }
@@ -2135,6 +2149,7 @@ function SalesWorkspaceContent() {
                               <button
                                 onClick={() => {
                                   setSelectedQueueSale(sale);
+                                  setQueuePriceAdjustment(0);
                                   setQueuePaymentMethod((sale.paymentMethod as any) || "CASH");
                                   setShowVerifyModal(true);
                                 }}
@@ -3538,7 +3553,7 @@ function SalesWorkspaceContent() {
                       </div>
                       <div className="pt-2 border-t border-slate-800 space-y-1">
                         <div className="flex justify-between text-slate-400 font-mono">
-                          <span>Total Booked Price:</span>
+                          <span>Original Booked Price:</span>
                           <span className="text-slate-200">Rs. {mTotal.toLocaleString()}</span>
                         </div>
                         {mPaid > 0 && (
@@ -3547,15 +3562,23 @@ function SalesWorkspaceContent() {
                             <span>- Rs. {mPaid.toLocaleString()}</span>
                           </div>
                         )}
-                        <div className="flex justify-between text-amber-400 font-mono font-bold text-xs">
-                          <span>Remaining Balance Due:</span>
-                          <span className="font-extrabold">Rs. {mDue.toLocaleString()}</span>
+                        <div className="flex justify-between text-slate-300 font-mono font-bold text-xs">
+                          <span>Base Balance Due:</span>
+                          <span className="font-extrabold text-amber-400">Rs. {mDue.toLocaleString()}</span>
                         </div>
                         {queuePriceAdjustment !== 0 && (
-                          <div className="flex justify-between font-mono font-bold text-xs text-amber-400">
-                            <span>Adjustment / Surcharge:</span>
-                            <span>{queuePriceAdjustment > 0 ? `+ Rs. ${queuePriceAdjustment.toLocaleString()}` : `- Rs. ${Math.abs(queuePriceAdjustment).toLocaleString()}`}</span>
-                          </div>
+                          <>
+                            <div className="flex justify-between font-mono font-bold text-xs">
+                              <span>{queuePriceAdjustment > 0 ? "Additional Charge / Late Fee:" : "Discount Adjustment:"}</span>
+                              <span className={queuePriceAdjustment > 0 ? "text-amber-400" : "text-emerald-400"}>
+                                {queuePriceAdjustment > 0 ? `+ Rs. ${queuePriceAdjustment.toLocaleString()}` : `- Rs. ${Math.abs(queuePriceAdjustment).toLocaleString()}`}
+                              </span>
+                            </div>
+                            <div className="flex justify-between font-mono text-xs text-indigo-300 font-semibold pt-1 border-t border-slate-800/80">
+                              <span>Revised Total Order Amount:</span>
+                              <span className="font-bold">Rs. {Math.max(0, mTotal + queuePriceAdjustment).toLocaleString()}</span>
+                            </div>
+                          </>
                         )}
                       </div>
                       <div className="flex justify-between text-slate-100 font-mono font-bold pt-2 border-t border-slate-800 text-sm">
@@ -3571,8 +3594,8 @@ function SalesWorkspaceContent() {
                 {/* +/- Price Adjustment Input Field */}
                 <div className="space-y-1.5 bg-slate-950 p-3 rounded-xl border border-slate-800">
                   <label className="block text-[11px] font-bold text-amber-400 uppercase tracking-wider flex items-center justify-between">
-                    <span>Price Adjustment / Late Fee (+ / - PKR)</span>
-                    <span className="text-[10px] text-slate-400 font-normal">Enter e.g. 1000 or -500</span>
+                    <span>Discount (-) or Extra Charge (+) PKR</span>
+                    <span className="text-[10px] text-slate-400 font-normal">e.g. -500 for discount, +1000 for fee</span>
                   </label>
                   <div className="flex gap-2 items-center">
                     <input
@@ -3582,11 +3605,36 @@ function SalesWorkspaceContent() {
                       onChange={(e) => setQueuePriceAdjustment(Number(e.target.value))}
                       className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs font-mono text-amber-400 font-bold focus:outline-none focus:border-amber-500"
                     />
-                    <div className="flex gap-1 shrink-0">
+                    <div className="flex flex-wrap gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setQueuePriceAdjustment((prev) => prev - 1000)}
+                        className="px-2 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg text-[10px] font-bold"
+                        title="Give Rs. 1000 Discount"
+                      >
+                        -1,000
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setQueuePriceAdjustment((prev) => prev - 500)}
+                        className="px-2 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg text-[10px] font-bold"
+                        title="Give Rs. 500 Discount"
+                      >
+                        -500
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setQueuePriceAdjustment((prev) => prev + 500)}
+                        className="px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 rounded-lg text-[10px] font-bold"
+                        title="Add Rs. 500 Surcharge"
+                      >
+                        +500
+                      </button>
                       <button
                         type="button"
                         onClick={() => setQueuePriceAdjustment((prev) => prev + 1000)}
                         className="px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 rounded-lg text-[10px] font-bold"
+                        title="Add Rs. 1000 Surcharge"
                       >
                         +1,000
                       </button>

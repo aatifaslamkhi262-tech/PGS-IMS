@@ -329,6 +329,7 @@ export interface CompleteSaleInput {
     referenceNumber?: string;
     notes?: string;
   }>;
+  priceAdjustment?: number;
   notes?: string;
 }
 
@@ -412,6 +413,27 @@ export async function completeSale(input: CompleteSaleInput) {
     const location = await Location.findById(sale.location).session(session);
     if (!location) {
       throw new Error("Sale location not found.");
+    }
+
+    // Apply Price Adjustment (Discount or Additional Surcharge / Late Fee) if specified
+    const adjustment = Number(input.priceAdjustment || 0);
+    if (adjustment !== 0) {
+      if (adjustment < 0) {
+        // Negative adjustment means additional discount
+        const discountDelta = Math.abs(adjustment);
+        sale.discountAmount = (sale.discountAmount || 0) + discountDelta;
+      } else {
+        // Positive adjustment means additional charge / surcharge / late fee
+        sale.additionalCharges = (sale.additionalCharges || 0) + adjustment;
+      }
+      sale.totalAmount = Math.max(
+        0,
+        (sale.subtotal || 0) -
+          (sale.discountAmount || 0) +
+          (sale.taxAmount || 0) +
+          (sale.deliveryCharges || 0) +
+          (sale.additionalCharges || 0)
+      );
     }
 
     // 3. Verify Payment Allocations (including existing paid down-payments for advance bookings)
@@ -551,9 +573,10 @@ export async function completeSale(input: CompleteSaleInput) {
       discountAmount: sale.discountAmount,
       taxAmount: sale.taxAmount,
       deliveryCharges: sale.deliveryCharges,
+      additionalCharges: sale.additionalCharges || 0,
       totalAmount: sale.totalAmount,
-      paidAmount: totalAllocated,
-      balanceDue: 0,
+      paidAmount: grandTotalPaid,
+      balanceDue: Math.max(0, sale.totalAmount - grandTotalPaid),
       billedBy: input.completedBy,
       printedCount: 0,
       status: "ISSUED",
@@ -640,7 +663,9 @@ export async function completeSale(input: CompleteSaleInput) {
     sale.paymentReceivedBy = input.completedBy;
     sale.billedBy = input.completedBy;
     sale.completedAt = new Date();
-    if (input.notes) sale.notes = input.notes;
+    if (input.notes) {
+      sale.notes = sale.notes ? `${sale.notes} | ${input.notes}` : input.notes;
+    }
 
     await sale.save({ session });
 

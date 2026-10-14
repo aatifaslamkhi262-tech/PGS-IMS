@@ -22,9 +22,25 @@ vi.mock("@/lib/pricing", () => ({
   }),
 }));
 
+vi.mock("@/lib/averageCostEngine", () => ({
+  updateAverageCostOnIntake: vi.fn(),
+  getPoolAverageCost: vi.fn().mockResolvedValue(220000),
+  deductInventoryWithAverageCost: vi.fn().mockResolvedValue({
+    remainingQty: 4,
+    unitCost: 6000,
+    totalCost: 6000,
+  }),
+}));
+
+vi.mock("@/lib/customerLedgerEngine", () => ({
+  recordCustomerLedgerEntry: vi.fn().mockResolvedValue({}),
+}));
+
 import { createSaleInput, completeSale } from "./salesEngine";
 import { openCashSession, closeCashSession } from "./cashSessionEngine";
 import { recordPayment } from "./paymentEngine";
+import * as averageCostEngine from "./averageCostEngine";
+import * as customerLedgerEngine from "./customerLedgerEngine";
 import { Location } from "@/models/Location";
 import { Product } from "@/models/Product";
 import { SerialNumber } from "@/models/SerialNumber";
@@ -319,5 +335,245 @@ describe("POS & Sales Engine Acceptance Test Suite (Tests A to Y)", () => {
     expect(closedSession.totalCardSales).toBe(60000);
     expect(closedSession.expectedCash).toBe(50000);
     expect(closedSession.variance).toBe(-200);
+  });
+
+  it("Test W: completeSale applies discount priceAdjustment and recalculates totalAmount & profit", async () => {
+    const saleObjId = new Types.ObjectId("60c72b2f9b1d8b2b8c8b456f");
+    const mockSale = {
+      _id: saleObjId,
+      saleNumber: "SALE-20260915-002",
+      location: new Types.ObjectId(locationId),
+      locationName: "Warehouse",
+      customerName: "Ali",
+      status: "CHECKOUT",
+      subtotal: 10000,
+      discountAmount: 0,
+      taxAmount: 0,
+      deliveryCharges: 0,
+      additionalCharges: 0,
+      totalAmount: 10000,
+      items: [
+        {
+          product: new Types.ObjectId(productId),
+          productName: "Controller",
+          sku: "CTRL-01",
+          barcode: "PGS-CTRL",
+          condition: "New",
+          quantity: 1,
+          unitCost: 6000,
+          unitPrice: 10000,
+          lineTotal: 10000,
+        },
+      ],
+      save: vi.fn().mockResolvedValue(true),
+    };
+
+    const findQuery = {
+      session: vi.fn().mockResolvedValue(mockSale),
+      then: (resolve: any) => Promise.resolve(mockSale).then(resolve),
+    };
+    vi.spyOn(Sale, "findById").mockReturnValue(findQuery as any);
+
+    vi.spyOn(Sale, "findOneAndUpdate").mockResolvedValue({
+      _id: saleObjId,
+      status: "PROCESSING",
+    } as any);
+
+    const mockSession = {
+      startTransaction: vi.fn(),
+      commitTransaction: vi.fn(),
+      abortTransaction: vi.fn(),
+      endSession: vi.fn(),
+    };
+    vi.spyOn(mongoose, "startSession").mockResolvedValue(mockSession as any);
+
+    const locQuery = {
+      session: vi.fn().mockResolvedValue({
+        _id: new Types.ObjectId(locationId),
+        name: "Warehouse",
+      }),
+      then: (resolve: any) =>
+        Promise.resolve({
+          _id: new Types.ObjectId(locationId),
+          name: "Warehouse",
+        }).then(resolve),
+    };
+    vi.spyOn(Location, "findById").mockReturnValue(locQuery as any);
+
+    const payQuery = {
+      session: vi.fn().mockResolvedValue([]),
+      then: (resolve: any) => Promise.resolve([]).then(resolve),
+    };
+    vi.spyOn(Payment, "find").mockReturnValue(payQuery as any);
+
+    const invQuery = {
+      session: vi.fn().mockResolvedValue({
+        quantity: 5,
+      }),
+      then: (resolve: any) =>
+        Promise.resolve({
+          quantity: 5,
+        }).then(resolve),
+    };
+    vi.spyOn(Inventory, "findOne").mockReturnValue(invQuery as any);
+
+    vi.spyOn(Invoice.prototype, "save").mockImplementation(function (this: any) {
+      this._id = new Types.ObjectId();
+      return Promise.resolve(this);
+    });
+
+    vi.spyOn(Payment.prototype, "save").mockImplementation(function (this: any) {
+      this._id = new Types.ObjectId();
+      return Promise.resolve(this);
+    });
+
+    const cashQuery = {
+      session: vi.fn().mockResolvedValue(null),
+      then: (resolve: any) => Promise.resolve(null).then(resolve),
+    };
+    vi.spyOn(CashSession, "findOne").mockReturnValue(cashQuery as any);
+    vi.spyOn(InventoryMovement.prototype, "save").mockResolvedValue({} as any);
+
+    vi.spyOn(averageCostEngine, "deductInventoryWithAverageCost").mockResolvedValue({
+      remainingQty: 4,
+      unitCost: 6000,
+      totalCost: 6000,
+    } as any);
+    vi.spyOn(customerLedgerEngine, "recordCustomerLedgerEntry").mockResolvedValue({} as any);
+
+    const result = await completeSale({
+      saleId: saleObjId.toString(),
+      completedBy: "cashier1",
+      paymentAllocations: [{ method: "CASH", amount: 9500 }],
+      priceAdjustment: -500, // 500 Rs discount
+    });
+
+    expect(result.sale.discountAmount).toBe(500);
+    expect(result.sale.totalAmount).toBe(9500);
+    expect(result.sale.totalPaid).toBe(9500);
+    expect(result.sale.status).toBe("COMPLETED");
+    expect(result.invoice.discountAmount).toBe(500);
+    expect(result.invoice.totalAmount).toBe(9500);
+    expect(mockSession.commitTransaction).toHaveBeenCalled();
+  });
+
+  it("Test X: completeSale applies additional surcharge and updates totalAmount & invoice", async () => {
+    const saleObjId = new Types.ObjectId("60c72b2f9b1d8b2b8c8b4570");
+    const mockSale = {
+      _id: saleObjId,
+      saleNumber: "SALE-20260915-003",
+      location: new Types.ObjectId(locationId),
+      locationName: "Warehouse",
+      customerName: "Ali",
+      status: "CHECKOUT",
+      subtotal: 10000,
+      discountAmount: 0,
+      taxAmount: 0,
+      deliveryCharges: 0,
+      additionalCharges: 0,
+      totalAmount: 10000,
+      items: [
+        {
+          product: new Types.ObjectId(productId),
+          productName: "Controller",
+          sku: "CTRL-01",
+          barcode: "PGS-CTRL",
+          condition: "New",
+          quantity: 1,
+          unitCost: 6000,
+          unitPrice: 10000,
+          lineTotal: 10000,
+        },
+      ],
+      save: vi.fn().mockResolvedValue(true),
+    };
+
+    const findQuery = {
+      session: vi.fn().mockResolvedValue(mockSale),
+      then: (resolve: any) => Promise.resolve(mockSale).then(resolve),
+    };
+    vi.spyOn(Sale, "findById").mockReturnValue(findQuery as any);
+
+    vi.spyOn(Sale, "findOneAndUpdate").mockResolvedValue({
+      _id: saleObjId,
+      status: "PROCESSING",
+    } as any);
+
+    const mockSession = {
+      startTransaction: vi.fn(),
+      commitTransaction: vi.fn(),
+      abortTransaction: vi.fn(),
+      endSession: vi.fn(),
+    };
+    vi.spyOn(mongoose, "startSession").mockResolvedValue(mockSession as any);
+
+    const locQuery = {
+      session: vi.fn().mockResolvedValue({
+        _id: new Types.ObjectId(locationId),
+        name: "Warehouse",
+      }),
+      then: (resolve: any) =>
+        Promise.resolve({
+          _id: new Types.ObjectId(locationId),
+          name: "Warehouse",
+        }).then(resolve),
+    };
+    vi.spyOn(Location, "findById").mockReturnValue(locQuery as any);
+
+    const payQuery = {
+      session: vi.fn().mockResolvedValue([]),
+      then: (resolve: any) => Promise.resolve([]).then(resolve),
+    };
+    vi.spyOn(Payment, "find").mockReturnValue(payQuery as any);
+
+    const invQuery = {
+      session: vi.fn().mockResolvedValue({
+        quantity: 5,
+      }),
+      then: (resolve: any) =>
+        Promise.resolve({
+          quantity: 5,
+        }).then(resolve),
+    };
+    vi.spyOn(Inventory, "findOne").mockReturnValue(invQuery as any);
+
+    vi.spyOn(Invoice.prototype, "save").mockImplementation(function (this: any) {
+      this._id = new Types.ObjectId();
+      return Promise.resolve(this);
+    });
+
+    vi.spyOn(Payment.prototype, "save").mockImplementation(function (this: any) {
+      this._id = new Types.ObjectId();
+      return Promise.resolve(this);
+    });
+
+    const cashQuery = {
+      session: vi.fn().mockResolvedValue(null),
+      then: (resolve: any) => Promise.resolve(null).then(resolve),
+    };
+    vi.spyOn(CashSession, "findOne").mockReturnValue(cashQuery as any);
+    vi.spyOn(InventoryMovement.prototype, "save").mockResolvedValue({} as any);
+
+    vi.spyOn(averageCostEngine, "deductInventoryWithAverageCost").mockResolvedValue({
+      remainingQty: 4,
+      unitCost: 6000,
+      totalCost: 6000,
+    } as any);
+    vi.spyOn(customerLedgerEngine, "recordCustomerLedgerEntry").mockResolvedValue({} as any);
+
+    const result = await completeSale({
+      saleId: saleObjId.toString(),
+      completedBy: "cashier1",
+      paymentAllocations: [{ method: "CASH", amount: 11000 }],
+      priceAdjustment: 1000, // 1000 Rs additional charge
+    });
+
+    expect(result.sale.additionalCharges).toBe(1000);
+    expect(result.sale.totalAmount).toBe(11000);
+    expect(result.sale.totalPaid).toBe(11000);
+    expect(result.sale.status).toBe("COMPLETED");
+    expect(result.invoice.additionalCharges).toBe(1000);
+    expect(result.invoice.totalAmount).toBe(11000);
+    expect(mockSession.commitTransaction).toHaveBeenCalled();
   });
 });

@@ -27,6 +27,7 @@ export interface IInvoice {
   discountAmount: number;
   taxAmount: number;
   deliveryCharges: number;
+  additionalCharges?: number;
   totalAmount: number;
   paidAmount: number;
   balanceDue: number;
@@ -85,6 +86,7 @@ const InvoiceSchema: Schema = new Schema(
     discountAmount: { type: Number, default: 0, min: 0 },
     taxAmount: { type: Number, default: 0, min: 0 },
     deliveryCharges: { type: Number, default: 0, min: 0 },
+    additionalCharges: { type: Number, default: 0, min: 0 },
     totalAmount: { type: Number, required: true, min: 0 },
     paidAmount: { type: Number, default: 0, min: 0 },
     balanceDue: { type: Number, default: 0, min: 0 },

@@ -16,7 +16,7 @@ export async function POST(
 
     const { id } = await params;
     const body = await req.json();
-    const { paymentAllocations, notes } = body;
+    const { paymentAllocations, priceAdjustment, notes } = body;
 
     if (!paymentAllocations || !Array.isArray(paymentAllocations) || paymentAllocations.length === 0) {
       return NextResponse.json({ success: false, error: "Payment allocations are required." }, { status: 400 });
@@ -26,6 +26,7 @@ export async function POST(
       saleId: id,
       completedBy: auth.user.username,
       paymentAllocations,
+      priceAdjustment: priceAdjustment !== undefined ? Number(priceAdjustment) : undefined,
       notes,
     });
 
@@ -56,10 +57,11 @@ export async function POST(
       subtotal: completedSaleDoc.subtotal,
       discountAmount: completedSaleDoc.discountAmount || 0,
       deliveryCharges: completedSaleDoc.deliveryCharges || 0,
+      additionalCharges: completedSaleDoc.additionalCharges || 0,
       totalAmount: completedSaleDoc.totalAmount,
       paidAmount: totalPaidSum,
       changeDue: 0,
-      balanceDue: 0,
+      balanceDue: completedSaleDoc.balanceDue || 0,
       status: "COMPLETED",
       payments: allPayments.map((p: any) => ({
         method: p.paymentMethod,

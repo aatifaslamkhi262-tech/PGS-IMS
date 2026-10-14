@@ -56,6 +56,7 @@ export interface ISale {
   discountAmount: number;
   taxAmount: number;
   deliveryCharges: number;
+  additionalCharges?: number;
   totalAmount: number;
   totalPaid: number;
   balanceDue: number;
@@ -161,6 +162,7 @@ const SaleSchema: Schema = new Schema(
     discountAmount: { type: Number, default: 0, min: 0 },
     taxAmount: { type: Number, default: 0, min: 0 },
     deliveryCharges: { type: Number, default: 0, min: 0 },
+    additionalCharges: { type: Number, default: 0, min: 0 },
     totalAmount: { type: Number, required: true, min: 0 },
     totalPaid: { type: Number, default: 0, min: 0 },
     balanceDue: { type: Number, default: 0, min: 0 },
