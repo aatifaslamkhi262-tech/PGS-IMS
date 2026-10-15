@@ -299,9 +299,17 @@ export default function PurchaseReceivingPage() {
       const res = await fetch(`/api/barcodes/verify-serial?serialNumber=${encodeURIComponent(serial)}`);
       const data = await res.json();
       if (data.success && data.exists) {
-        addToast("error", `Serial "${serial}" already exists in the system database.`);
-        setSerialInput("");
-        return;
+        if (data.status === "Available") {
+          addToast("error", `Serial "${serial}" is already Available in current stock. Duplicate serial not allowed.`);
+          setSerialInput("");
+          return;
+        } else if (data.status === "Sold") {
+          addToast("info", `Serial "${serial}" was previously sold (${data.productName || "Past Product"}). Re-linking to "${activeItem.name}" as Available.`);
+        } else {
+          addToast("error", `Serial "${serial}" is currently active in system with status "${data.status}".`);
+          setSerialInput("");
+          return;
+        }
       }
     } catch {
       console.warn("Failed to check database uniqueness in real-time, relying on final submission transaction.");

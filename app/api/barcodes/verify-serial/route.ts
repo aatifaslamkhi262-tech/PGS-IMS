@@ -20,12 +20,25 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Serial number parameter is required." }, { status: 400 });
     }
 
-    const existing = await SerialNumber.findOne({ serialNumber: serialNumber.trim() }).lean();
+    const existing = await SerialNumber.findOne({ serialNumber: serialNumber.trim() })
+      .populate("product", "name sku condition")
+      .lean();
+
+    const isAvailable = existing?.status === "Available";
+    const isSold = existing?.status === "Sold";
 
     return NextResponse.json({
       success: true,
       exists: !!existing,
-      message: existing ? "Serial number already exists in system." : "Serial number is unique.",
+      status: existing?.status || null,
+      isAvailable,
+      isSold,
+      productName: (existing?.product as any)?.name || null,
+      message: existing
+        ? isSold
+          ? `Serial previously sold on "${(existing?.product as any)?.name || "product"}". Can be re-acquired into inventory.`
+          : `Serial number already exists with status "${existing.status}".`
+        : "Serial number is unique.",
     });
   } catch (error: any) {
     return NextResponse.json(

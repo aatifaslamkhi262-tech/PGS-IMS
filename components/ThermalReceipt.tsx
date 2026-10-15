@@ -239,10 +239,10 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptProps> = ({ receiptData
                 <span>+ Rs. {receiptData.deliveryCharges.toLocaleString()}</span>
               </div>
             )}
-            {Boolean(receiptData.additionalCharges && receiptData.additionalCharges > 0) && (
+            {(receiptData.additionalCharges ?? 0) > 0 && (
               <div className="flex justify-between text-black font-bold">
                 <span>Additional Charges:</span>
-                <span>+ Rs. {receiptData.additionalCharges.toLocaleString()}</span>
+                <span>+ Rs. {(receiptData.additionalCharges ?? 0).toLocaleString()}</span>
               </div>
             )}
             <div className="flex justify-between text-sm text-black font-black border-t-2 border-b-2 border-black py-1.5 uppercase">

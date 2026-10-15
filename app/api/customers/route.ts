@@ -30,6 +30,8 @@ export async function GET(req: NextRequest) {
   }
 }
 
+import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
+
 export async function POST(req: NextRequest) {
   try {
     await dbConnect();
@@ -39,7 +41,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { name, phone, email, address, notes } = body;
+    const { name, phone, email, address, notes, openingBalance, openingBalanceType } = body;
 
     if (!name || !name.trim()) {
       return NextResponse.json({ success: false, error: "Customer Name is required." }, { status: 400 });
@@ -54,16 +56,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, message: "Customer already exists.", data: existing });
     }
 
+    const rawOpeningBal = Number(openingBalance || 0);
+    const openingBal = isNaN(rawOpeningBal) ? 0 : Math.max(0, rawOpeningBal);
+    const balType = openingBalanceType === "ADVANCE" ? "ADVANCE" : "DUE";
+
     const customer = new Customer({
       name: name.trim(),
       phone: phone.trim(),
       email: email?.trim(),
       address: address?.trim(),
       notes: notes?.trim(),
+      outstandingBalance: 0,
+      advanceBalance: 0,
     });
 
     await customer.save();
-    return NextResponse.json({ success: true, message: "Customer created successfully.", data: customer });
+
+    if (openingBal > 0) {
+      try {
+        await recordCustomerLedgerEntry({
+          customerId: customer._id.toString(),
+          type: balType === "DUE" ? "DEBT_ADJUSTMENT" : "ADVANCE_DEPOSIT",
+          amount: openingBal,
+          referenceType: balType === "DUE" ? "DebtAdjustment" : "AdvanceBooking",
+          referenceId: "OPENING-BAL",
+          notes: `Opening Balance (${balType === "DUE" ? "Customer Baqaya / Udhar Due" : "Advance Deposit"})`,
+          createdBy: auth.user?.username || "system",
+        });
+      } catch (ledgerErr) {
+        console.error("Failed to record opening balance ledger entry:", ledgerErr);
+      }
+    }
+
+    const finalCustomer = openingBal > 0 ? await Customer.findById(customer._id) : customer;
+    return NextResponse.json({ success: true, message: "Customer created successfully.", data: finalCustomer });
   } catch (error: any) {
     return NextResponse.json(
       { success: false, error: error.message || "Failed to create customer." },

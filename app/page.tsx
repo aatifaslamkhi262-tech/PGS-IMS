@@ -18,6 +18,9 @@ import {
   RefreshCw,
   AlertCircle,
   PackageX,
+  Package,
+  ChevronDown,
+  Building2,
   Lock,
   Camera,
   Truck,
@@ -29,6 +32,7 @@ import { ConfirmModal } from "@/components/ConfirmModal";
 import { ToastContainer, ToastMessage } from "@/components/Toast";
 import { CameraBarcodeScannerModal } from "@/components/CameraBarcodeScannerModal";
 import { CostAuditHistoryModal } from "@/components/CostAuditHistoryModal";
+import { StockBreakdownModal, type StockBreakdownItem } from "@/components/StockBreakdownModal";
 import { Pagination } from "@/components/Pagination";
 import { TableSkeleton } from "@/components/TableSkeleton";
 import {
@@ -58,6 +62,8 @@ interface ProductItem {
   category?: { _id: string; name: string };
   productGroup?: { _id: string; name: string };
   createdAt: string;
+  totalStock?: number;
+  stockBreakdown?: StockBreakdownItem[];
 }
 
 export default function ProductListPage() {
@@ -96,6 +102,7 @@ export default function ProductListPage() {
   const [deleteProduct, setDeleteProduct] = useState<ProductItem | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [cameraScannerOpen, setCameraScannerOpen] = useState(false);
+  const [stockModalProduct, setStockModalProduct] = useState<ProductItem | null>(null);
   const [auditModal, setAuditModal] = useState<{
     isOpen: boolean;
     productId: string;
@@ -341,6 +348,13 @@ export default function ProductListPage() {
         onClose={() => setAuditModal({ isOpen: false, productId: "", productName: "" })}
         productId={auditModal.productId}
         productName={auditModal.productName}
+      />
+
+      {/* Branch Stock Breakdown Modal (Solid slate dark style, responsive, no glassmorphism) */}
+      <StockBreakdownModal
+        isOpen={Boolean(stockModalProduct)}
+        onClose={() => setStockModalProduct(null)}
+        product={stockModalProduct}
       />
 
       {/* Header Section */}
@@ -685,6 +699,33 @@ export default function ProductListPage() {
                   </div>
                 )}
 
+                {/* Stock Quantity */}
+                <div className="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
+                  <div>
+                    <span className="text-slate-500 block text-[10px] uppercase font-semibold">
+                      Stock
+                    </span>
+                    <span
+                      className={`font-mono font-bold text-xs ${
+                        (p.totalStock ?? 0) > 0 ? "text-emerald-400" : "text-rose-400"
+                      }`}
+                    >
+                      {(p.totalStock ?? 0) > 0
+                        ? `${p.totalStock?.toLocaleString("en-PK")} in Stock`
+                        : "0 Out of Stock"}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setStockModalProduct(p)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer"
+                  >
+                    <Building2 className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Branches</span>
+                    <ChevronDown className="w-3 h-3 text-slate-400" />
+                  </button>
+                </div>
+
                 {/* Price Display */}
                 <div className="flex items-center justify-between pt-1 border-t border-slate-800/60">
                   <div>
@@ -748,6 +789,7 @@ export default function ProductListPage() {
                     <th className="px-4 py-4">Condition</th>
                     <th className="px-4 py-4">Group</th>
                     <th className="px-4 py-4">SKU / Barcode</th>
+                    <th className="px-4 py-4">Stock</th>
                     <th className="px-4 py-4">Selling Price</th>
                     <th className="px-4 py-4">Internal Cost</th>
                     <th className="px-4 py-4">Status</th>
@@ -836,6 +878,33 @@ export default function ProductListPage() {
                             )}
                           </div>
                         </div>
+                      </td>
+
+                      {/* Stock Quantity */}
+                      <td className="px-4 py-4">
+                        <button
+                          type="button"
+                          onClick={() => setStockModalProduct(p)}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer group ${
+                            (p.totalStock ?? 0) > 0
+                              ? "bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-400 border-emerald-800/60"
+                              : "bg-slate-950 hover:bg-slate-800 text-rose-400 border-rose-900/40"
+                          }`}
+                          title="Click to view branch-wise stock breakdown"
+                        >
+                          {(p.totalStock ?? 0) > 0 ? (
+                            <Package className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          ) : (
+                            <PackageX className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          )}
+                          <span className="font-mono font-bold">
+                            {(p.totalStock ?? 0).toLocaleString("en-PK")}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-normal">
+                            {(p.totalStock ?? 0) > 0 ? "in stock" : "out"}
+                          </span>
+                          <ChevronDown className="w-3 h-3 text-slate-500 group-hover:text-slate-300 transition-transform" />
+                        </button>
                       </td>
 
                       {/* Selling Price */}

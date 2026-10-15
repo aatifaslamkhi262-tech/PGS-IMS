@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { Product } from "@/models/Product";
+import { Inventory } from "@/models/Inventory";
+import { Location } from "@/models/Location";
 import {
   DEFAULT_PRODUCT_CONDITION,
   validateProductCondition,
@@ -120,7 +122,26 @@ export async function GET(req: NextRequest) {
 
     const { batchCalculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
     const productIds = products.map((p) => p._id.toString());
-    const batchPricing = await batchCalculateProductWeightedPricing(productIds);
+
+    // Batch query pricing, active locations, and inventory docs in parallel
+    const [batchPricing, allLocations, inventoryDocs] = await Promise.all([
+      batchCalculateProductWeightedPricing(productIds),
+      Location.find({}).sort({ name: 1 }).select("_id name code type active").lean(),
+      productIds.length > 0
+        ? Inventory.find({ product: { $in: productIds } }).lean()
+        : [],
+    ]);
+
+    // Group inventory records by product ID
+    const productInventoryMap = new Map<string, Array<any>>();
+    for (const inv of inventoryDocs) {
+      const pId = inv.product?.toString();
+      if (!pId) continue;
+      if (!productInventoryMap.has(pId)) {
+        productInventoryMap.set(pId, []);
+      }
+      productInventoryMap.get(pId)!.push(inv);
+    }
 
     const productsWithPricing = products.map((p) => {
       const pStr = p._id.toString();
@@ -133,6 +154,34 @@ export async function GET(req: NextRequest) {
       };
       const effective = resolveProductEffectivePricing(p as any, pricing);
 
+      const invLines = productInventoryMap.get(pStr) || [];
+      const stockByLoc = new Map<string, number>();
+      let totalStock = 0;
+
+      for (const inv of invLines) {
+        const locId = inv.location ? inv.location.toString() : "";
+        const qty = Number(inv.quantity) || 0;
+        if (locId) {
+          stockByLoc.set(locId, (stockByLoc.get(locId) || 0) + qty);
+        }
+        totalStock += qty;
+      }
+
+      // Filter active locations, plus any inactive location that holds non-zero stock
+      const stockBreakdown = allLocations
+        .filter((loc: any) => loc.active || (stockByLoc.get(loc._id.toString()) || 0) > 0)
+        .map((loc: any) => {
+          const locId = loc._id.toString();
+          const qty = stockByLoc.get(locId) || 0;
+          return {
+            locationId: locId,
+            locationName: loc.name + (loc.active ? "" : " (Inactive)"),
+            locationCode: loc.code,
+            locationType: loc.type,
+            quantity: qty,
+          };
+        });
+
       return {
         ...p,
         color: (p as any).color || "Unspecified",
@@ -144,6 +193,8 @@ export async function GET(req: NextRequest) {
         minSellingPrice: effective.minSellingPrice,
         pricingSource: effective.source,
         weightedPricing: pricing,
+        totalStock,
+        stockBreakdown,
       };
     });
 

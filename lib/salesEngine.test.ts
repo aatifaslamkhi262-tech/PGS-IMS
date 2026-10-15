@@ -452,8 +452,8 @@ describe("POS & Sales Engine Acceptance Test Suite (Tests A to Y)", () => {
     expect(result.sale.totalAmount).toBe(9500);
     expect(result.sale.totalPaid).toBe(9500);
     expect(result.sale.status).toBe("COMPLETED");
-    expect(result.invoice.discountAmount).toBe(500);
-    expect(result.invoice.totalAmount).toBe(9500);
+    expect(result.invoice!.discountAmount).toBe(500);
+    expect(result.invoice!.totalAmount).toBe(9500);
     expect(mockSession.commitTransaction).toHaveBeenCalled();
   });
 
@@ -572,8 +572,8 @@ describe("POS & Sales Engine Acceptance Test Suite (Tests A to Y)", () => {
     expect(result.sale.totalAmount).toBe(11000);
     expect(result.sale.totalPaid).toBe(11000);
     expect(result.sale.status).toBe("COMPLETED");
-    expect(result.invoice.additionalCharges).toBe(1000);
-    expect(result.invoice.totalAmount).toBe(11000);
+    expect(result.invoice!.additionalCharges).toBe(1000);
+    expect(result.invoice!.totalAmount).toBe(11000);
     expect(mockSession.commitTransaction).toHaveBeenCalled();
   });
 });

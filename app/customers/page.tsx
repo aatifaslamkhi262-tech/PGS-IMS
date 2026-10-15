@@ -18,6 +18,12 @@ import {
   ChevronUp,
   Printer,
   UserCheck,
+  PlusCircle,
+  MinusCircle,
+  BookOpen,
+  Receipt,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from "lucide-react";
 import { ThermalReceiptModal } from "@/components/ThermalReceipt";
 
@@ -28,6 +34,8 @@ export default function CustomersPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
   const [customerSales, setCustomerSales] = useState<any[]>([]);
   const [customerRentals, setCustomerRentals] = useState<any[]>([]);
+  const [customerLedger, setCustomerLedger] = useState<any[]>([]);
+  const [activeHistoryTab, setActiveHistoryTab] = useState<"LEDGER" | "SALES">("LEDGER");
   const [salesmen, setSalesmen] = useState<any[]>([]);
   const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -44,14 +52,17 @@ export default function CustomersPage() {
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [printReceiptData, setPrintReceiptData] = useState<any | null>(null);
 
-  // Create Customer Form State
+  // Create Customer Form State (with Opening Balance)
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newCustName, setNewCustName] = useState("");
   const [newCustPhone, setNewCustPhone] = useState("");
   const [newCustAddress, setNewCustAddress] = useState("");
+  const [newCustOpeningBal, setNewCustOpeningBal] = useState<number | "">("");
+  const [newCustBalType, setNewCustBalType] = useState<"DUE" | "ADVANCE">("DUE");
 
-  // Ledger Payment Modal State
+  // Khata (+ / -) Modal State (Unified Modal for Udhar Diya (+) or Payment Wasool (-))
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [khataAction, setKhataAction] = useState<"PAYMENT" | "ADD_DEBT">("PAYMENT");
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<"CASH" | "CARD" | "BANK_TRANSFER">("CASH");
   const [paymentNotes, setPaymentNotes] = useState("");
@@ -65,6 +76,7 @@ export default function CustomersPage() {
   useEffect(() => {
     if (selectedCustomer) {
       fetchCustomerHistory(selectedCustomer);
+      fetchCustomerLedger(selectedCustomer._id);
     }
   }, [selectedCustomer]);
 
@@ -130,6 +142,18 @@ export default function CustomersPage() {
     }
   };
 
+  const fetchCustomerLedger = async (customerId: string) => {
+    try {
+      const res = await fetch(`/api/customers/ledger?customerId=${customerId}`);
+      const data = await res.json();
+      if (data.success) {
+        setCustomerLedger(data.data || []);
+      }
+    } catch {
+      // Silent error for ledger
+    }
+  };
+
   const handleReassignSalesman = async () => {
     if (!reassignSale) return;
     try {
@@ -167,6 +191,8 @@ export default function CustomersPage() {
           name: newCustName,
           phone: newCustPhone,
           address: newCustAddress,
+          openingBalance: Number(newCustOpeningBal || 0),
+          openingBalanceType: newCustBalType,
         }),
       });
       const data = await res.json();
@@ -180,6 +206,8 @@ export default function CustomersPage() {
       setNewCustName("");
       setNewCustPhone("");
       setNewCustAddress("");
+      setNewCustOpeningBal("");
+      setNewCustBalType("DUE");
       fetchCustomers();
     } catch (err: any) {
       setError(err.message || "Network error.");
@@ -204,23 +232,33 @@ export default function CustomersPage() {
           customerId: selectedCustomer._id,
           locationId: selectedLocation,
           amount: Number(paymentAmount),
-          paymentMethod,
+          paymentMethod: khataAction === "PAYMENT" ? paymentMethod : undefined,
           notes: paymentNotes,
+          actionType: khataAction,
         }),
       });
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        setError(data.error || "Failed to process ledger payment.");
+        setError(data.error || "Failed to process khata entry.");
         setLoading(false);
         return;
       }
 
       setShowPaymentModal(false);
-      setSuccessMsg(`Payment of Rs. ${paymentAmount.toLocaleString()} recorded cleanly for ${selectedCustomer.name}!`);
+      setSuccessMsg(
+        khataAction === "ADD_DEBT"
+          ? `Udhar (+Rs. ${paymentAmount.toLocaleString()}) added for ${selectedCustomer.name}!`
+          : `Payment (-Rs. ${paymentAmount.toLocaleString()}) recorded cleanly for ${selectedCustomer.name}!`
+      );
       setPaymentAmount(0);
+      setPaymentNotes("");
+      if (data.data?.customer) {
+        setSelectedCustomer(data.data.customer);
+      }
       fetchCustomers();
-      fetchCustomerHistory(selectedCustomer._id);
+      fetchCustomerHistory(selectedCustomer);
+      fetchCustomerLedger(selectedCustomer._id);
     } catch (err: any) {
       setError(err.message || "Network error.");
     } finally {
@@ -359,16 +397,35 @@ export default function CustomersPage() {
                   </p>
                 </div>
 
-                <button
-                  onClick={() => {
-                    setPaymentAmount(selectedCustomer.outstandingBalance || 0);
-                    setShowPaymentModal(true);
-                  }}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/20 transition flex items-center gap-1.5"
-                >
-                  <DollarSign className="w-4 h-4" />
-                  Collect Khata Payment
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setKhataAction("ADD_DEBT");
+                      setPaymentAmount(0);
+                      setPaymentNotes("");
+                      setShowPaymentModal(true);
+                    }}
+                    className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-600/20 transition flex items-center gap-1.5"
+                    title="Customer ne udhar liya (+)"
+                  >
+                    <PlusCircle className="w-4 h-4" />
+                    <span>+ Udhar Diya</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setKhataAction("PAYMENT");
+                      setPaymentAmount(selectedCustomer.outstandingBalance || 0);
+                      setPaymentNotes("");
+                      setShowPaymentModal(true);
+                    }}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/20 transition flex items-center gap-1.5"
+                    title="Customer se payment wasool ki (-)"
+                  >
+                    <MinusCircle className="w-4 h-4" />
+                    <span>- Wasool Kiya</span>
+                  </button>
+                </div>
               </div>
 
               {/* Ledger Summary Cards */}
@@ -402,12 +459,113 @@ export default function CustomersPage() {
                 </div>
               </div>
 
-              {/* Customer Transaction History Table */}
-              <div className="space-y-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                  Customer Purchase & Payment History ({customerSales.length})
-                </span>
+              {/* Customer Transaction History & Ledger Tabs */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveHistoryTab("LEDGER")}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                        activeHistoryTab === "LEDGER"
+                          ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20"
+                          : "bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800"
+                      }`}
+                    >
+                      <BookOpen className="w-3.5 h-3.5" />
+                      <span>Khata Ledger Entries ({customerLedger.length})</span>
+                    </button>
 
+                    <button
+                      type="button"
+                      onClick={() => setActiveHistoryTab("SALES")}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                        activeHistoryTab === "SALES"
+                          ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20"
+                          : "bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800"
+                      }`}
+                    >
+                      <Receipt className="w-3.5 h-3.5" />
+                      <span>POS Sales Invoices ({customerSales.length})</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 📒 Khata Ledger Tab Table */}
+                {activeHistoryTab === "LEDGER" && (
+                  <div className="overflow-x-auto bg-slate-950 border border-slate-800 rounded-xl">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-slate-900 border-b border-slate-800 text-slate-400">
+                        <tr>
+                          <th className="p-3">Date</th>
+                          <th className="p-3">Entry #</th>
+                          <th className="p-3">Type / Description</th>
+                          <th className="p-3 text-right">Debit (+ Udhar)</th>
+                          <th className="p-3 text-right">Credit (- Wasool)</th>
+                          <th className="p-3 text-right">Running Due</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 font-mono">
+                        {customerLedger.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="p-6 text-center text-slate-500 font-sans">
+                              Koi manual khata entry nahi hai. Upar "+ Udhar Diya" ya "- Wasool Kiya" se entry karein.
+                            </td>
+                          </tr>
+                        ) : (
+                          customerLedger.map((entry) => (
+                            <tr key={entry._id} className="hover:bg-slate-900/60 transition">
+                              <td className="p-3 font-sans text-slate-300">
+                                {new Date(entry.createdAt).toLocaleDateString()}
+                              </td>
+                              <td className="p-3 font-bold text-slate-400 text-[11px]">
+                                {entry.entryNumber}
+                              </td>
+                              <td className="p-3 font-sans">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {entry.type === "DEBT_ADJUSTMENT" ? (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800/50">
+                                      + Udhar Added
+                                    </span>
+                                  ) : entry.type === "PAYMENT" ? (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800/50">
+                                      - Wasool Payment
+                                    </span>
+                                  ) : entry.type === "ADVANCE_DEPOSIT" ? (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-950 text-purple-400 border border-purple-800/50">
+                                      Advance Deposit
+                                    </span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300">
+                                      {entry.type}
+                                    </span>
+                                  )}
+                                  {entry.notes && (
+                                    <span className="text-[11px] text-slate-300">
+                                      {entry.notes}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="p-3 text-right font-bold text-rose-400">
+                                {entry.debit > 0 ? `Rs. ${entry.debit.toLocaleString()}` : "-"}
+                              </td>
+                              <td className="p-3 text-right font-bold text-emerald-400">
+                                {entry.credit > 0 ? `Rs. ${entry.credit.toLocaleString()}` : "-"}
+                              </td>
+                              <td className="p-3 text-right font-bold text-slate-200">
+                                Rs. {entry.runningOutstanding?.toLocaleString() || 0}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* 🛒 POS Sales Tab Table */}
+                {activeHistoryTab === "SALES" && (
                 <div className="overflow-x-auto bg-slate-950 border border-slate-800 rounded-xl">
                   <table className="w-full text-xs text-left">
                     <thead className="bg-slate-900 border-b border-slate-800 text-slate-400">
@@ -566,7 +724,8 @@ export default function CustomersPage() {
                     </tbody>
                   </table>
                 </div>
-              </div>
+              )}
+            </div>
             </div>
           ) : (
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-500 text-xs">
@@ -576,58 +735,143 @@ export default function CustomersPage() {
         </div>
       </div>
 
-      {/* Collect Ledger Payment Modal */}
+      {/* Khata Entry (+ / -) Modal */}
       {showPaymentModal && selectedCustomer && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                <DollarSign className="w-4 h-4 text-emerald-400" />
-                Collect Khata Payment ({selectedCustomer.name})
-              </h3>
+              <div>
+                <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                  {khataAction === "ADD_DEBT" ? (
+                    <PlusCircle className="w-4 h-4 text-rose-400" />
+                  ) : (
+                    <MinusCircle className="w-4 h-4 text-emerald-400" />
+                  )}
+                  <span>
+                    Khata Entry: {khataAction === "ADD_DEBT" ? "+ Udhar Diya" : "- Wasool Kiya"}
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400 font-sans">
+                  Customer: <span className="text-slate-200 font-bold">{selectedCustomer.name}</span> ({selectedCustomer.phone})
+                </p>
+              </div>
               <button onClick={() => setShowPaymentModal(false)} className="text-slate-400 hover:text-slate-200">
                 ✖
               </button>
             </div>
 
+            {/* Segmented Toggle: - Wasool Kiya vs + Udhar Diya */}
+            <div className="grid grid-cols-2 p-1 bg-slate-950 border border-slate-800 rounded-xl gap-1">
+              <button
+                type="button"
+                onClick={() => setKhataAction("PAYMENT")}
+                className={`py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                  khataAction === "PAYMENT"
+                    ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/30"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <MinusCircle className="w-3.5 h-3.5" />
+                <span>- Wasool Kiya (Payment)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setKhataAction("ADD_DEBT")}
+                className={`py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                  khataAction === "ADD_DEBT"
+                    ? "bg-rose-600 text-white shadow-md shadow-rose-600/30"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <PlusCircle className="w-3.5 h-3.5" />
+                <span>+ Udhar Diya (Add Debt)</span>
+              </button>
+            </div>
+
             <form onSubmit={handleLedgerPayment} className="space-y-4 text-xs">
-              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 flex justify-between items-center">
-                <span className="text-slate-400 font-bold">Current Balance Due:</span>
-                <span className="font-mono text-base font-extrabold text-rose-400">
-                  Rs. {selectedCustomer.outstandingBalance.toLocaleString()}
-                </span>
+              {/* Balance Summary & Projection */}
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-400 font-semibold">Current Balance Due:</span>
+                  <span className="font-mono text-base font-extrabold text-slate-200">
+                    Rs. {selectedCustomer.outstandingBalance.toLocaleString()}
+                  </span>
+                </div>
+                {selectedCustomer.advanceBalance > 0 && (
+                  <div className="flex justify-between items-center text-[11px] text-purple-400">
+                    <span>Customer Advance Deposit:</span>
+                    <span className="font-mono font-bold">
+                      Rs. {selectedCustomer.advanceBalance.toLocaleString()}
+                    </span>
+                  </div>
+                )}
+                {paymentAmount > 0 && (
+                  <div className="flex justify-between items-center text-xs pt-1 border-t border-slate-800/80">
+                    <span className="text-slate-400 font-semibold">
+                      {khataAction === "ADD_DEBT" ? "Projected New Due (+):" : "Projected Remaining Due (-):"}
+                    </span>
+                    <span
+                      className={`font-mono font-bold ${
+                        khataAction === "ADD_DEBT" ? "text-rose-400" : "text-emerald-400"
+                      }`}
+                    >
+                      Rs.{" "}
+                      {khataAction === "ADD_DEBT"
+                        ? (selectedCustomer.outstandingBalance + Number(paymentAmount)).toLocaleString()
+                        : Math.max(0, selectedCustomer.outstandingBalance - Number(paymentAmount)).toLocaleString()}
+                    </span>
+                  </div>
+                )}
               </div>
 
+              {/* Amount Input */}
               <div className="space-y-1">
-                <label className="text-slate-300 font-semibold">Payment Amount (PKR):</label>
+                <label className="text-slate-300 font-semibold">
+                  {khataAction === "ADD_DEBT" ? "Udhar Amount (PKR) / رقم:" : "Payment Received (PKR) / وصول رقم:"}
+                </label>
                 <input
                   type="number"
                   min="1"
                   value={paymentAmount || ""}
                   onChange={(e) => setPaymentAmount(Number(e.target.value))}
-                  className="w-full bg-slate-950 border border-emerald-500/40 text-emerald-400 font-mono text-base font-bold rounded-xl px-3 py-2"
+                  placeholder="0"
+                  className={`w-full bg-slate-950 border text-base font-mono font-bold rounded-xl px-3 py-2 ${
+                    khataAction === "ADD_DEBT"
+                      ? "border-rose-500/40 text-rose-400 focus:border-rose-500"
+                      : "border-emerald-500/40 text-emerald-400 focus:border-emerald-500"
+                  }`}
                   required
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-slate-300 font-semibold">Payment Method:</label>
-                <select
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value as any)}
-                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-2"
-                >
-                  <option value="CASH">Cash 💵</option>
-                  <option value="CARD">Credit/Debit Card 💳</option>
-                  <option value="BANK_TRANSFER">Bank Transfer / Raast 🏦</option>
-                </select>
-              </div>
+              {/* Payment Method (Only for Wasool Kiya / Payment) */}
+              {khataAction === "PAYMENT" && (
+                <div className="space-y-1">
+                  <label className="text-slate-300 font-semibold">Payment Method:</label>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-2"
+                  >
+                    <option value="CASH">Cash 💵</option>
+                    <option value="CARD">Credit/Debit Card 💳</option>
+                    <option value="BANK_TRANSFER">Bank Transfer / Raast 🏦</option>
+                  </select>
+                </div>
+              )}
 
+              {/* Notes / Reference */}
               <div className="space-y-1">
-                <label className="text-slate-300 font-semibold">Payment Notes / Reference:</label>
+                <label className="text-slate-300 font-semibold">
+                  {khataAction === "ADD_DEBT" ? "Reason / Notes (تفصیل):" : "Payment Reference / Notes:"}
+                </label>
                 <input
                   type="text"
-                  placeholder="e.g. Received via Raast Ref #8849"
+                  placeholder={
+                    khataAction === "ADD_DEBT"
+                      ? "e.g. Samaan udhar liya / Purana hisab add kiya"
+                      : "e.g. Received via Cash / Raast Ref #1234"
+                  }
                   value={paymentNotes}
                   onChange={(e) => setPaymentNotes(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3 py-2"
@@ -644,10 +888,20 @@ export default function CustomersPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={loading}
-                  className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/20 transition flex items-center justify-center gap-2"
+                  disabled={loading || paymentAmount <= 0}
+                  className={`flex-1 py-2.5 rounded-xl text-white font-bold text-xs shadow-lg transition flex items-center justify-center gap-2 ${
+                    khataAction === "ADD_DEBT"
+                      ? "bg-rose-600 hover:bg-rose-500 shadow-rose-600/20"
+                      : "bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20"
+                  }`}
                 >
-                  {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Record Payment & Clear Balance"}
+                  {loading ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : khataAction === "ADD_DEBT" ? (
+                    `+ Record Rs. ${paymentAmount ? paymentAmount.toLocaleString() : "0"} Udhar`
+                  ) : (
+                    `- Record Rs. ${paymentAmount ? paymentAmount.toLocaleString() : "0"} Payment`
+                  )}
                 </button>
               </div>
             </form>
@@ -703,6 +957,44 @@ export default function CustomersPage() {
                   onChange={(e) => setNewCustAddress(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3 py-2"
                 />
+              </div>
+
+              {/* Opening Balance Field (Optional) */}
+              <div className="p-3 bg-slate-950/70 rounded-xl border border-slate-800 space-y-2">
+                <div className="flex justify-between items-center">
+                  <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Wallet className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Opening Balance / ابتدائی کھاتہ</span>
+                  </label>
+                  <span className="text-[10px] text-slate-500">(Optional)</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <span className="text-[10px] text-slate-400">Raqam (PKR):</span>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      value={newCustOpeningBal}
+                      onChange={(e) => setNewCustOpeningBal(e.target.value === "" ? "" : Number(e.target.value))}
+                      className="w-full bg-slate-900 border border-slate-800 text-slate-100 font-mono font-bold rounded-lg px-2.5 py-1.5 text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[10px] text-slate-400">Balance Type:</span>
+                    <select
+                      value={newCustBalType}
+                      onChange={(e) => setNewCustBalType(e.target.value as any)}
+                      className="w-full bg-slate-900 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 text-xs"
+                    >
+                      <option value="DUE">Baqaya / Udhar (+ Due)</option>
+                      <option value="ADVANCE">Advance Jama (- Deposit)</option>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-500">
+                  Agar customer pehle se udhar par chal raha hai toh yahan initial balance darj karein. Agar koi hisab nahi hai to 0 chhor dein.
+                </p>
               </div>
 
               <div className="flex gap-3 pt-2">

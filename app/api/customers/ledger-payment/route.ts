@@ -4,27 +4,23 @@ import { dbConnect } from "@/lib/db";
 import { Customer } from "@/models/Customer";
 import { Payment } from "@/models/Payment";
 import { Location } from "@/models/Location";
+import { CustomerLedger } from "@/models/CustomerLedger";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 
 export async function POST(request: Request) {
   try {
     await dbConnect();
     const body = await request.json();
-    const { customerId, locationId, amount, paymentMethod, receivedBy, notes } = body;
+    const { customerId, locationId, amount, paymentMethod, receivedBy, notes, actionType } = body;
 
     const customer = await Customer.findById(customerId);
     if (!customer) {
       return NextResponse.json({ success: false, error: "Customer not found." }, { status: 404 });
     }
 
-    const location = await Location.findById(locationId);
-    if (!location) {
-      return NextResponse.json({ success: false, error: "Location not found." }, { status: 400 });
-    }
-
     const paymentAmount = Number(amount);
     if (!paymentAmount || paymentAmount <= 0) {
-      return NextResponse.json({ success: false, error: "Payment amount must be greater than 0." }, { status: 400 });
+      return NextResponse.json({ success: false, error: "Amount must be greater than 0." }, { status: 400 });
     }
 
     const session = await mongoose.startSession();
@@ -35,15 +31,53 @@ export async function POST(request: Request) {
     }
     const isTxActive = session.inTransaction();
 
-    // Generate Payment Transaction document
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+
+    // 🔴 Action: ADD_DEBT (+) [Customer took more on credit / manual debt addition]
+    if (actionType === "ADD_DEBT") {
+      const count = await CustomerLedger.countDocuments();
+      const adjustmentNumber = `ADJ-${dateStr}-${String(count + 1).padStart(3, "0")}`;
+
+      const ledgerEntry = await recordCustomerLedgerEntry(
+        {
+          customerId: customer._id.toString(),
+          type: "DEBT_ADJUSTMENT",
+          amount: paymentAmount,
+          referenceType: "DebtAdjustment",
+          referenceId: adjustmentNumber,
+          notes: notes || `Udhar / Balance adjustment added for ${customer.name}`,
+          createdBy: receivedBy || "system",
+        },
+        isTxActive ? session : undefined
+      );
+
+      if (isTxActive) {
+        await session.commitTransaction();
+        session.endSession();
+      }
+
+      const updatedCustomer = await Customer.findById(customer._id);
+
+      return NextResponse.json({
+        success: true,
+        message: `Udhar of Rs. ${paymentAmount.toLocaleString()} added for ${customer.name}.`,
+        data: {
+          customer: updatedCustomer || customer,
+          ledgerEntry,
+        },
+      });
+    }
+
+    // 🟢 Action: PAYMENT (-) [Customer made a payment / khata collection]
+    const location = locationId ? await Location.findById(locationId) : await Location.findOne();
+
     const count = await Payment.countDocuments();
     const paymentNumber = `PAY-${dateStr}-${String(count + 1).padStart(3, "0")}`;
 
     const payment = new Payment({
       paymentNumber,
-      location: location._id,
-      locationName: location.name,
+      location: location?._id,
+      locationName: location?.name || "Counter",
       customer: customer._id,
       customerName: customer.name,
       paymentMethod: paymentMethod || "CASH",
@@ -82,6 +116,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
+      message: `Payment of Rs. ${paymentAmount.toLocaleString()} recorded for ${customer.name}.`,
       data: {
         payment,
         customer: updatedCustomer || customer,

@@ -92,7 +92,18 @@ export async function POST(req: NextRequest) {
 
           const existingSerial = await SerialNumber.findOne({ serialNumber: cleanSn }).session(session);
           if (existingSerial) {
-            throw new Error(`Serial number "${cleanSn}" already exists in the system (Product: ${existingSerial.product}).`);
+            if (existingSerial.status === "Sold") {
+              existingSerial.product = productObj._id;
+              existingSerial.status = "Available";
+              existingSerial.location = locationId;
+              existingSerial.saleDate = undefined;
+              existingSerial.invoiceId = undefined;
+              existingSerial.notes = `Re-acquired via Opening Stock for ${productObj.name}`;
+              await existingSerial.save({ session });
+              cleanSerials.push(cleanSn);
+              continue;
+            }
+            throw new Error(`Serial number "${cleanSn}" already exists in the system with status "${existingSerial.status}".`);
           }
           cleanSerials.push(cleanSn);
         }
