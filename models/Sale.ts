@@ -51,6 +51,7 @@ export interface ISale {
   customer?: Types.ObjectId;
   customerName?: string;
   customerPhone?: string;
+  customerEmail?: string;
   items: ISaleItem[];
   subtotal: number;
   discountAmount: number;
@@ -154,6 +155,7 @@ const SaleSchema: Schema = new Schema(
     },
     customerName: { type: String, trim: true },
     customerPhone: { type: String, trim: true },
+    customerEmail: { type: String, trim: true, default: "" },
     items: {
       type: [SaleItemSchema],
       validate: [(val: any[]) => val.length > 0, "Sale must have at least 1 item"],

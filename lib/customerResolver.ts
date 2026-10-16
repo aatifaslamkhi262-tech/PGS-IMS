@@ -5,6 +5,7 @@ export interface ResolveCustomerInput {
   customerId?: string | Types.ObjectId;
   customerName?: string;
   customerPhone?: string;
+  customerEmail?: string;
 }
 
 /**
@@ -27,6 +28,7 @@ export async function resolveOrCreateCustomer(
 
   const cleanPhone = input.customerPhone ? input.customerPhone.trim() : "";
   const cleanName = input.customerName ? input.customerName.trim() : "";
+  const cleanEmail = input.customerEmail ? input.customerEmail.trim().toLowerCase() : "";
 
   // 2. If valid phone is provided, lookup by phone
   if (cleanPhone && cleanPhone !== "N/A" && cleanPhone !== "0000000000") {
@@ -35,9 +37,18 @@ export async function resolveOrCreateCustomer(
     let cust = await query.exec();
 
     if (cust) {
+      let isUpdated = false;
       // Update name if a real customer name was provided and doesn't match default
       if (cleanName && cleanName !== "Walk-in Customer" && cust.name !== cleanName) {
         cust.name = cleanName;
+        isUpdated = true;
+      }
+      // Update email if provided and not previously recorded
+      if (cleanEmail && cust.email !== cleanEmail) {
+        cust.email = cleanEmail;
+        isUpdated = true;
+      }
+      if (isUpdated) {
         if (session) await cust.save({ session });
         else await cust.save();
       }
@@ -48,6 +59,7 @@ export async function resolveOrCreateCustomer(
     const newCust = new Customer({
       name: cleanName && cleanName !== "Walk-in Customer" ? cleanName : `Customer (${cleanPhone})`,
       phone: cleanPhone,
+      email: cleanEmail || undefined,
       advanceBalance: 0,
       outstandingBalance: 0,
       storeCredit: 0,

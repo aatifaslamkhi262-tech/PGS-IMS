@@ -6,7 +6,7 @@ import { Location } from "@/models/Location";
 import { Sale } from "@/models/Sale";
 import { lockIdempotencyKey, completeIdempotencyKey, failIdempotencyKey } from "@/lib/idempotencyEngine";
 import { resolveOrCreateCustomer } from "@/lib/customerResolver";
-import { sendOwnerOrderAlert } from "@/lib/emailService";
+import { sendOwnerOrderAlert, sendCustomerOrderConfirmation } from "@/lib/emailService";
 
 export async function POST(req: NextRequest) {
   let idempotencyKeyHeader = "";
@@ -36,7 +36,9 @@ export async function POST(req: NextRequest) {
     const {
       customerName,
       customerPhone,
+      customerEmail,
       shippingAddress,
+      city,
       paymentMethod,
       deliveryCharges,
       notes,
@@ -75,6 +77,7 @@ export async function POST(req: NextRequest) {
     const customerObjId = await resolveOrCreateCustomer({
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),
+      customerEmail: customerEmail ? customerEmail.trim() : undefined,
     });
 
     // 6. Validate and Process Order Line Items
@@ -133,7 +136,10 @@ export async function POST(req: NextRequest) {
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     const saleNumber = `WEB-${dateStr}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    const fullNotes = `Shipping Address: ${shippingAddress.trim()}${notes ? ` | Notes: ${notes.trim()}` : ""}`;
+    const fullAddress = city && !shippingAddress.toLowerCase().includes(city.toLowerCase())
+      ? `${shippingAddress.trim()}, ${city.trim()}`
+      : shippingAddress.trim();
+    const fullNotes = `Shipping Address: ${fullAddress}${notes ? ` | Notes: ${notes.trim()}` : ""}`;
 
     // 8. Create Sale Invoice Document in MongoDB
     const sale = new Sale({
@@ -145,6 +151,7 @@ export async function POST(req: NextRequest) {
       customer: customerObjId,
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),
+      customerEmail: customerEmail ? customerEmail.trim() : "",
       items: validatedItems,
       subtotal,
       discountAmount: 0,
@@ -163,12 +170,13 @@ export async function POST(req: NextRequest) {
 
     await sale.save();
 
-    // Trigger instant email alert to owner (non-blocking background task)
+    // 1. Trigger instant email alert to owner (non-blocking background task)
     sendOwnerOrderAlert({
       saleNumber: sale.saleNumber,
       saleSource: sale.saleSource,
       customerName: sale.customerName,
       customerPhone: sale.customerPhone,
+      customerEmail: sale.customerEmail,
       items: (sale.items || []).map((it: any) => ({
         productName: it.productName,
         condition: it.condition,
@@ -181,7 +189,33 @@ export async function POST(req: NextRequest) {
       totalAmount: sale.totalAmount,
       notes: sale.notes,
       createdAt: sale.createdAt,
-    }).catch((err) => console.error("[WebCheckout] Email notification error:", err));
+    }).catch((err) => console.error("[WebCheckout] Owner email notification error:", err));
+
+    // 2. Trigger instant order confirmation email to customer (non-blocking background task)
+    if (sale.customerEmail) {
+      sendCustomerOrderConfirmation({
+        saleNumber: sale.saleNumber,
+        saleSource: sale.saleSource,
+        customerName: sale.customerName,
+        customerPhone: sale.customerPhone,
+        customerEmail: sale.customerEmail,
+        shippingAddress: fullAddress,
+        city: city ? city.trim() : "",
+        paymentMethod: paymentMethod || "CASH",
+        items: (sale.items || []).map((it: any) => ({
+          productName: it.productName,
+          condition: it.condition,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          lineTotal: it.lineTotal,
+        })),
+        subtotal: sale.subtotal,
+        deliveryCharges: sale.deliveryCharges,
+        totalAmount: sale.totalAmount,
+        notes: sale.notes,
+        createdAt: sale.createdAt,
+      }).catch((err) => console.error("[WebCheckout] Customer confirmation email error:", err));
+    }
 
     const responseData = {
       success: true,
