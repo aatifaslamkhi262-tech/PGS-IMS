@@ -271,7 +271,8 @@ export async function createSaleInput(input: CreateSaleInput) {
   const headerDiscount = input.discountAmount || 0;
   const deliveryCharges = input.deliveryCharges || 0;
   const totalAmount = Math.max(0, subtotal - headerDiscount + deliveryCharges);
-  const netProfit = totalAmount - totalCost;
+  const netProductSales = Math.max(0, subtotal - headerDiscount);
+  const netProfit = netProductSales - totalCost;
   const saleNumber = await generateSaleNumber();
 
   let salesmanObjId: Types.ObjectId | undefined;
@@ -546,7 +547,8 @@ export async function completeSale(input: CompleteSaleInput) {
     }
 
     sale.totalCost = recalculatedTotalCost;
-    sale.netProfit = sale.totalAmount - recalculatedTotalCost;
+    const netProductSales = Math.max(0, (sale.subtotal || 0) - (sale.discountAmount || 0));
+    sale.netProfit = netProductSales - recalculatedTotalCost;
 
     // 7. Create Invoice Document
     const invoice = new Invoice({

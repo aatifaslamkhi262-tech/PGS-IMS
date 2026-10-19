@@ -116,6 +116,12 @@ export const PurchaseReceiptModal: React.FC<PurchaseReceiptModalProps> = ({
             page-break-inside: avoid !important;
             break-inside: avoid !important;
           }
+          #printable-purchase-receipt img {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            filter: grayscale(100%) contrast(120%) !important;
+            image-rendering: -webkit-optimize-contrast !important;
+          }
         }
       `}</style>
 
@@ -141,6 +147,14 @@ export const PurchaseReceiptModal: React.FC<PurchaseReceiptModalProps> = ({
         >
           {/* Header */}
           <div className="text-center space-y-1 border-b-2 border-dashed border-black pb-3">
+            <div className="flex justify-center pb-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/logo.png"
+                alt="PGS Game Shop"
+                className="h-20 w-auto max-w-[190px] object-contain mx-auto"
+              />
+            </div>
             <h2 className="text-lg font-black uppercase tracking-wider text-black">PGS GAME SHOP</h2>
             <p className="text-xs font-bold text-black">{voucherTitle}</p>
             <p className="text-[10px] font-semibold text-black">Inventory Receiving & Accounts Ledger</p>

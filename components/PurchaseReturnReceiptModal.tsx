@@ -102,6 +102,12 @@ export const PurchaseReturnReceiptModal: React.FC<PurchaseReturnReceiptModalProp
             background: #ffffff !important;
             color: #000000 !important;
           }
+          #printable-return-receipt img {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            filter: grayscale(100%) contrast(120%) !important;
+            image-rendering: -webkit-optimize-contrast !important;
+          }
         }
       `}</style>
 
@@ -127,6 +133,14 @@ export const PurchaseReturnReceiptModal: React.FC<PurchaseReturnReceiptModalProp
           >
             {/* Store Header */}
             <div className="text-center border-b border-black/30 pb-2">
+              <div className="flex justify-center pb-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/logo.png"
+                  alt="PGS Game Shop"
+                  className="h-18 w-auto max-w-[170px] object-contain mx-auto"
+                />
+              </div>
               <h2 className="text-sm font-extrabold uppercase tracking-wide">PGS GAMING STORE</h2>
               <p className="text-[10px] font-bold text-gray-700 uppercase mt-0.5">
                 SUPPLIER DEBIT / RETURN SLIP

@@ -576,4 +576,50 @@ describe("POS & Sales Engine Acceptance Test Suite (Tests A to Y)", () => {
     expect(result.invoice!.totalAmount).toBe(11000);
     expect(mockSession.commitTransaction).toHaveBeenCalled();
   });
+
+  it("Test H: Excludes deliveryCharges from netProfit so delivery fees do not inflate profit", async () => {
+    vi.spyOn(Location, "findById").mockResolvedValue({
+      _id: new Types.ObjectId(locationId),
+      name: "Warehouse",
+      active: true,
+    } as any);
+
+    vi.spyOn(Product, "findById").mockResolvedValue({
+      _id: new Types.ObjectId(productId),
+      name: "Game Disc",
+      sku: "GAME-01",
+      barcode: "PGS-999",
+      condition: "Used",
+      effectivePricing: {
+        Used: {
+          costPrice: 11000,
+          sellingPrice: 11500,
+          minSellingPrice: 10000,
+        },
+      },
+      serialTracking: false,
+    } as any);
+
+    vi.spyOn(averageCostEngine, "getPoolAverageCost").mockResolvedValue(11000);
+    vi.spyOn(Sale, "countDocuments").mockResolvedValue(0 as any);
+    vi.spyOn(Sale, "findOne").mockResolvedValue(null);
+    vi.spyOn(Sale.prototype, "save").mockImplementation(function (this: any) {
+      this._id = new Types.ObjectId("60c72b2f9b1d8b2b8c8b456c");
+      return Promise.resolve(this);
+    });
+
+    const result = await createSaleInput({
+      creationMode: "DIRECT_COUNTER",
+      saleSource: "WEBSITE",
+      locationId,
+      items: [{ productId, quantity: 1, unitPrice: 11500 }],
+      deliveryCharges: 500,
+      createdBy: "ecommerce-web",
+    });
+
+    // Total Amount collected from customer includes delivery (11,500 + 500 = 12,000)
+    expect(result.sale.totalAmount).toBe(12000);
+    // Net profit MUST only be (11,500 - 11,000 = 500), NOT 1,000!
+    expect(result.sale.netProfit).toBe(500);
+  });
 });

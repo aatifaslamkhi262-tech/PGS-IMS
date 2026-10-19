@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
 
     const delFee = Math.max(0, Number(deliveryCharges || 0));
     const totalAmount = subtotal + delFee;
-    const netProfit = totalAmount - totalCost;
+    const netProfit = subtotal - totalCost;
 
     // 7. Generate Unique Web Sale Number
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");

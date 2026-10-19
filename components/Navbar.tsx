@@ -24,6 +24,7 @@ import {
   AlertTriangle,
   Users,
   Handshake,
+  Wrench,
 } from "lucide-react";
 
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -97,7 +98,8 @@ export const Navbar: React.FC<NavbarProps> = () => {
   const isSalesActive =
     pathname.startsWith("/sales") ||
     pathname === "/pos" ||
-    pathname === "/warehouse-queue";
+    pathname === "/warehouse-queue" ||
+    pathname.startsWith("/repairs");
 
   const isInventoryActive =
     pathname === "/" ||
@@ -184,6 +186,14 @@ export const Navbar: React.FC<NavbarProps> = () => {
                       >
                         <ShoppingCart className="w-4 h-4 text-emerald-400" />
                         <span>New POS Terminal</span>
+                      </Link>
+
+                      <Link
+                        href="/repairs"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-amber-400 font-bold transition"
+                      >
+                        <Wrench className="w-4 h-4 text-amber-400" />
+                        <span>Repair Terminal</span>
                       </Link>
 
                       {(isAdmin || isWarehouse) && (

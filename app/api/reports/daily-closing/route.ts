@@ -8,6 +8,7 @@ import { InventoryMovement } from "@/models/InventoryMovement";
 import { Expense } from "@/models/Expense";
 import { Customer } from "@/models/Customer";
 import { RentalBooking } from "@/models/RentalBooking";
+import { Repair } from "@/models/Repair";
 import { verifyRole } from "@/lib/auth/rbac";
 
 export async function GET(req: NextRequest) {
@@ -81,8 +82,15 @@ export async function GET(req: NextRequest) {
       rentalBookingQuery.location = locationId;
     }
 
+    const repairQuery: any = {
+      createdAt: { $gte: startDate, $lte: endDate },
+    };
+    if (locationId !== "ALL") {
+      repairQuery.location = locationId;
+    }
+
     // 2. Parallel Database Execution for All Independent Queries
-    const [sales, payments, movements, expensesDocs, customerAgg, rentalBookings] = await Promise.all([
+    const [sales, payments, movements, expensesDocs, customerAgg, rentalBookings, repairsDocs] = await Promise.all([
       Sale.find(saleQuery).lean(),
       Payment.find(paymentQuery).lean(),
       InventoryMovement.find(movementQuery).lean(),
@@ -98,14 +106,16 @@ export async function GET(req: NextRequest) {
         },
       ]),
       RentalBooking.find(rentalBookingQuery).lean(),
+      Repair.find(repairQuery).lean(),
     ]);
 
-    // 3. Process Sales & Profit Metrics
+    // 3. Process Sales & Profit Metrics (Pure Product Sales, excluding delivery charges from profit)
     let totalSales = 0;
     let accruedSales = 0;
     let accruedProfit = 0;
     let cogs = 0;
     let stockOutValue = 0;
+    let deliveryCollected = 0;
 
     for (const s of sales) {
       // Filter staff if specified
@@ -114,13 +124,20 @@ export async function GET(req: NextRequest) {
         if (staffId !== "DIRECT" && s.salesman?.toString() !== staffId) continue;
       }
 
-      const saleProfit = (s.totalAmount || 0) - (s.totalCost || 0);
+      const delivery = Number(s.deliveryCharges || 0);
+      deliveryCollected += delivery;
+
+      // Net product sales without pass-through delivery fee
+      const productSales = s.subtotal !== undefined
+        ? Math.max(0, Number(s.subtotal || 0) - Number(s.discountAmount || 0))
+        : Math.max(0, Number(s.totalAmount || 0) - delivery);
+      const saleProfit = productSales - (s.totalCost || 0);
 
       if (s.isAccrued) {
-        accruedSales += s.totalAmount || 0;
+        accruedSales += productSales;
         accruedProfit += saleProfit;
       } else {
-        totalSales += s.totalAmount || 0;
+        totalSales += productSales;
         cogs += s.totalCost || 0;
       }
 
@@ -211,11 +228,54 @@ export async function GET(req: NextRequest) {
     // 6. Process Expenses
     const expenses = expensesDocs.reduce((sum, e) => sum + Number(e.amount || 0), 0);
 
-    // 7. Profit Metrics
-    const grossProfit = totalSales - cogs;
+    // 7. Process Repairs & Technician Breakdown
+    let repairCount = 0;
+    let repairTotalRevenue = 0;
+    let repairLaborCharges = 0;
+    let repairPartsCost = 0; // Total cost (partsCostTotal + direct repairCost)
+    let repairDirectCost = 0;
+    let repairPartsSelling = 0;
+    const technicianMap = new Map<string, { technician: string; count: number; totalRevenue: number; totalCost: number; profit: number; laborRevenue: number }>();
+
+    for (const r of (repairsDocs as any[])) {
+      if (staffId !== "ALL") {
+        if (staffId !== "DIRECT" && r.technicianId?.toString() !== staffId && r.repairedBy !== staffId) {
+          continue;
+        }
+      }
+
+      const rev = Number(r.totalAmount || 0);
+      const directKharcha = Number(r.repairCost || 0);
+      const inventoryPartCost = Number(r.partsCostTotal || 0);
+      const totalCostOfJob = directKharcha + inventoryPartCost;
+      const jobProfit = rev - totalCostOfJob;
+
+      repairCount++;
+      repairTotalRevenue += rev;
+      repairDirectCost += directKharcha;
+      repairPartsCost += totalCostOfJob;
+      repairPartsSelling += r.partsTotal || 0;
+      repairLaborCharges += Number(r.laborCost || 0);
+
+      const tech = r.repairedBy || "In-House Technician";
+      const existing = technicianMap.get(tech) || { technician: tech, count: 0, totalRevenue: 0, totalCost: 0, profit: 0, laborRevenue: 0 };
+      existing.count += 1;
+      existing.totalRevenue += rev;
+      existing.totalCost += totalCostOfJob;
+      existing.profit += jobProfit;
+      existing.laborRevenue += jobProfit;
+      technicianMap.set(tech, existing);
+    }
+    const technicianBreakdown = Array.from(technicianMap.values());
+    const repairProfit = repairTotalRevenue - repairPartsCost;
+
+    // 8. Profit Metrics (incorporating repair revenue and parts cost)
+    const combinedTotalSales = totalSales + repairTotalRevenue;
+    const combinedCogs = cogs + repairPartsCost;
+    const grossProfit = combinedTotalSales - combinedCogs;
     const netProfit = grossProfit - expenses;
 
-    // 8. Outstanding & Customer Advances via MongoDB Aggregate Result
+    // 9. Outstanding & Customer Advances via MongoDB Aggregate Result
     const customerTotals = customerAgg[0] || { outstanding: 0, customerAdvances: 0 };
     const outstanding = Number(customerTotals.outstanding || 0);
     let customerAdvances = Number(customerTotals.customerAdvances || 0) + rentalDepositsToday;
@@ -226,7 +286,15 @@ export async function GET(req: NextRequest) {
         date: dateStr,
         locationId,
         cards: {
-          totalSales,
+          totalSales: combinedTotalSales,
+          retailSalesOnly: totalSales,
+          repairRevenue: repairTotalRevenue,
+          repairLaborCharges,
+          repairPartsCost,
+          repairDirectCost,
+          repairCount,
+          repairProfit,
+          technicianBreakdown,
           accruedSales,
           accruedProfit,
           cashReceived,
@@ -235,16 +303,18 @@ export async function GET(req: NextRequest) {
           customerSettlementReceived,
           stockInAcquisitionValue,
           stockOutValue,
-          cogs,
+          cogs: combinedCogs,
           cashRefunds,
           customerSettlementPaid,
           grossProfit,
+          deliveryCollected,
           expenses,
           netProfit,
           outstanding,
           customerAdvances,
         },
         rawSales: sales,
+        repairs: repairsDocs,
       },
     });
   } catch (error: any) {

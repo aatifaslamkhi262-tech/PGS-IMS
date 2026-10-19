@@ -75,6 +75,12 @@ export const ThermalStaffHandoverModal: React.FC<ThermalStaffHandoverModalProps>
             color: #000000 !important;
             font-family: 'Courier New', Courier, monospace !important;
           }
+          #printable-staff-handover img {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            filter: grayscale(100%) contrast(120%) !important;
+            image-rendering: -webkit-optimize-contrast !important;
+          }
           .no-print {
             display: none !important;
           }
@@ -107,6 +113,14 @@ export const ThermalStaffHandoverModal: React.FC<ThermalStaffHandoverModalProps>
         >
           {/* Slip Header */}
           <div className="text-center space-y-1 pb-2 border-b border-dashed border-black">
+            <div className="flex justify-center pb-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/logo.png"
+                alt="PGS Game Shop"
+                className="h-18 w-auto max-w-[170px] object-contain mx-auto"
+              />
+            </div>
             <h1 className="text-sm font-black tracking-widest uppercase">PGS GAMESHOP</h1>
             <p className="text-[10px] font-bold uppercase">STAFF DAILY HANDOVER SLIP</p>
             <p className="text-[9px]">Location: {handoverData.locationName}</p>

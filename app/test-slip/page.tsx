@@ -210,6 +210,14 @@ export default function TestSlipPage() {
               className="bg-white text-black p-4 font-mono text-xs shadow-2xl rounded space-y-3 transition-all duration-300 border border-gray-300"
             >
               <div className="text-center border-b border-dashed border-gray-400 pb-2">
+                <div className="flex justify-center pb-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src="/logo.png"
+                    alt="PGS Game Shop"
+                    className="h-20 w-auto max-w-[190px] object-contain mx-auto"
+                  />
+                </div>
                 <h2 className="text-sm font-black uppercase tracking-wider">{storeName}</h2>
                 <p className="text-[9px] text-gray-600">Multi-Branch Retail & Wholesale Gaming Hub</p>
                 <p className="text-[9px] text-gray-600">Location: {sampleReceiptData.locationName}</p>

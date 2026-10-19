@@ -23,6 +23,7 @@ import {
   CreditCard,
   Building2,
   Wallet,
+  Wrench,
 } from "lucide-react";
 import { ThermalReceiptModal } from "@/components/ThermalReceipt";
 import { ThermalStaffHandoverModal, StaffHandoverData } from "@/components/ThermalStaffHandoverModal";
@@ -124,13 +125,17 @@ export default function DailyClosingReportPage() {
             smMap[smName] = { name: smName, salesCount: 0, revenue: 0, cogs: 0, profit: 0, accruedSales: 0, accruedProfit: 0 };
           }
           smMap[smName].salesCount += 1;
-          const saleProfit = (s.totalAmount || 0) - (s.totalCost || 0);
+          const delivery = Number(s.deliveryCharges || 0);
+          const productSales = s.subtotal !== undefined
+            ? Math.max(0, Number(s.subtotal || 0) - Number(s.discountAmount || 0))
+            : Math.max(0, Number(s.totalAmount || 0) - delivery);
+          const saleProfit = productSales - (s.totalCost || 0);
 
           if (s.isAccrued) {
-            smMap[smName].accruedSales += s.totalAmount || 0;
+            smMap[smName].accruedSales += productSales;
             smMap[smName].accruedProfit += saleProfit;
           } else {
-            smMap[smName].revenue += s.totalAmount || 0;
+            smMap[smName].revenue += productSales;
             smMap[smName].cogs += s.totalCost || 0;
             smMap[smName].profit += saleProfit;
           }
@@ -371,7 +376,14 @@ export default function DailyClosingReportPage() {
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
               <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase">1. Total Sales</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase">1. Total Sales</span>
+                  {cards.deliveryCollected > 0 && (
+                    <span className="text-[9px] font-bold text-cyan-400 bg-cyan-950/60 border border-cyan-800/60 px-1.5 py-0.5 rounded" title="Pass-through Delivery Fees Collected">
+                      +Rs. {cards.deliveryCollected.toLocaleString()} Deliv.
+                    </span>
+                  )}
+                </div>
                 <p className="text-xl font-mono font-bold text-indigo-400">
                   Rs. {cards.totalSales.toLocaleString()}
                 </p>
@@ -593,6 +605,87 @@ export default function DailyClosingReportPage() {
             </div>
           </div>
 
+          {/* Repair Services & Technician Attribution */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Wrench className="w-4 h-4 text-amber-400" />
+                <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                  Repair Services & Technician Attribution
+                </h3>
+              </div>
+              <span className="text-[10px] text-amber-400 font-semibold bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded">
+                {cards?.repairCount || 0} Total Repairs
+              </span>
+            </div>
+
+            {/* Quick Repair Metric Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Repair Revenue</p>
+                <p className="text-sm font-mono font-bold text-indigo-400 mt-1">
+                  Rs. {(cards?.repairRevenue || 0).toLocaleString()}
+                </p>
+              </div>
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                <p className="text-[10px] text-slate-400 font-semibold uppercase">Repair Cost (Kharcha)</p>
+                <p className="text-sm font-mono font-bold text-slate-400 mt-1">
+                  Rs. {(cards?.repairPartsCost || 0).toLocaleString()}
+                </p>
+              </div>
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                <p className="text-[10px] text-emerald-400 font-semibold uppercase">Repair Net Profit</p>
+                <p className="text-sm font-mono font-bold text-emerald-400 mt-1">
+                  Rs. {(cards?.repairProfit || 0).toLocaleString()}
+                </p>
+              </div>
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                <p className="text-[10px] text-amber-400 font-semibold uppercase">Completed Jobs</p>
+                <p className="text-sm font-mono font-bold text-amber-400 mt-1">
+                  {cards?.repairCount || 0}
+                </p>
+              </div>
+            </div>
+
+            {/* Technician Breakdown Table */}
+            {(!cards?.technicianBreakdown || cards.technicianBreakdown.length === 0) ? (
+              <div className="text-center py-6 text-slate-500 text-xs">
+                No repair jobs recorded for the selected date and filters.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-[10px] text-slate-400 uppercase tracking-wider bg-slate-950/80">
+                      <th className="p-3">Technician / Repaired By</th>
+                      <th className="p-3 text-center">Jobs Completed</th>
+                      <th className="p-3 text-right">Revenue (Billed)</th>
+                      <th className="p-3 text-right">Cost (Kharcha)</th>
+                      <th className="p-3 text-right text-emerald-400">Net Profit Earned</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 font-mono">
+                    {cards.technicianBreakdown.map((tech: any, idx: number) => (
+                      <tr key={idx} className="hover:bg-slate-950/50">
+                        <td className="p-3 font-sans font-bold text-slate-200">{tech.technician}</td>
+                        <td className="p-3 text-center text-slate-300 font-bold">{tech.count}</td>
+                        <td className="p-3 text-right text-indigo-400 font-bold">
+                          Rs. {tech.totalRevenue.toLocaleString()}
+                        </td>
+                        <td className="p-3 text-right text-slate-400">
+                          Rs. {(tech.totalCost || 0).toLocaleString()}
+                        </td>
+                        <td className="p-3 text-right text-emerald-400 font-bold">
+                          Rs. {(tech.profit !== undefined ? tech.profit : tech.laborRevenue).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
           {/* Sales Audit Log */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
             <div className="flex items-center justify-between">
@@ -616,19 +709,23 @@ export default function DailyClosingReportPage() {
                 {rawSales.map((sale) => {
                   const isExpanded = expandedSaleId === sale._id;
                   const salesmanDisplay = sale.salesmanName || "Direct Counter";
-                  const profit = (sale.totalAmount || 0) - (sale.totalCost || 0);
+                  const delivery = Number(sale.deliveryCharges || 0);
+                  const productSales = sale.subtotal !== undefined
+                    ? Math.max(0, Number(sale.subtotal || 0) - Number(sale.discountAmount || 0))
+                    : Math.max(0, Number(sale.totalAmount || 0) - delivery);
+                  const profit = productSales - (sale.totalCost || 0);
 
                   return (
                     <div
                       key={sale._id}
-                      className="border border-slate-800 rounded-xl bg-slate-950/70 overflow-hidden transition"
+                      className="border border-slate-800 rounded-xl bg-slate-950/70 overflow-hidden transition shadow-sm"
                     >
                       <div
                         onClick={() => setExpandedSaleId(isExpanded ? null : sale._id)}
                         className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 cursor-pointer hover:bg-slate-800/40 transition"
                       >
                         <div className="flex items-center gap-3">
-                          <div className="p-1.5 rounded-lg bg-slate-800 text-slate-400">
+                          <div className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-slate-200 transition">
                             {isExpanded ? (
                               <ChevronUp className="w-4 h-4 text-emerald-400" />
                             ) : (
@@ -701,6 +798,176 @@ export default function DailyClosingReportPage() {
                           </div>
                         </div>
                       </div>
+
+                      {/* Expanded Accordion: Items, Cost, Sale Price, Discounts & Totals */}
+                      {isExpanded && (
+                        <div className="border-t border-slate-800 bg-slate-900/60 p-4 space-y-4">
+                          {/* Items Table */}
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs text-left">
+                              <thead className="bg-slate-950/80 text-slate-400 font-semibold border-b border-slate-800 text-[11px] uppercase tracking-wider">
+                                <tr>
+                                  <th className="py-2.5 px-3">Item / Product</th>
+                                  <th className="py-2.5 px-3 text-center">Qty</th>
+                                  <th className="py-2.5 px-3 text-right">Cost Price (COGS)</th>
+                                  <th className="py-2.5 px-3 text-right">Sale Price</th>
+                                  <th className="py-2.5 px-3 text-right">Discount</th>
+                                  <th className="py-2.5 px-3 text-right">Line Total</th>
+                                  <th className="py-2.5 px-3 text-right text-emerald-400">Item Profit</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-800/60 font-mono text-xs">
+                                {(sale.items || []).map((item: any, idx: number) => {
+                                  const qty = item.quantity || 1;
+                                  const unitCost = Number(item.unitCost || 0);
+                                  const totalItemCost = unitCost * qty;
+                                  const unitPrice = Number(item.unitPrice || 0);
+                                  const itemDiscount = Number(item.discountAmount || 0);
+                                  const lineTotal = Number(
+                                    item.lineTotal !== undefined
+                                      ? item.lineTotal
+                                      : unitPrice * qty - itemDiscount
+                                  );
+                                  const itemProfit = lineTotal - totalItemCost;
+
+                                  return (
+                                    <tr key={idx} className="hover:bg-slate-950/40">
+                                      <td className="py-2.5 px-3 font-sans">
+                                        <div className="font-semibold text-slate-200">
+                                          {item.productName || item.title || "Product Item"}
+                                          {item.condition && (
+                                            <span className="text-[10px] text-slate-400 ml-1.5 font-normal">
+                                              ({item.condition})
+                                            </span>
+                                          )}
+                                        </div>
+                                        {item.serialNumbers && item.serialNumbers.length > 0 && (
+                                          <div className="text-[10px] font-mono text-indigo-400 mt-0.5">
+                                            S/N: {item.serialNumbers.join(", ")}
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-center text-slate-300 font-bold">
+                                        {qty}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right text-slate-400">
+                                        Rs. {totalItemCost.toLocaleString()}
+                                        {qty > 1 && (
+                                          <span className="text-[10px] text-slate-500 block font-sans">
+                                            (@ Rs. {unitCost.toLocaleString()})
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right text-slate-200 font-medium">
+                                        Rs. {(unitPrice * qty).toLocaleString()}
+                                        {qty > 1 && (
+                                          <span className="text-[10px] text-slate-500 block font-sans">
+                                            (@ Rs. {unitPrice.toLocaleString()})
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right text-amber-400 font-medium">
+                                        {itemDiscount > 0
+                                          ? `- Rs. ${itemDiscount.toLocaleString()}`
+                                          : "—"}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right text-indigo-300 font-bold">
+                                        Rs. {lineTotal.toLocaleString()}
+                                      </td>
+                                      <td
+                                        className={`py-2.5 px-3 text-right font-bold ${
+                                          itemProfit >= 0 ? "text-emerald-400" : "text-red-400"
+                                        }`}
+                                      >
+                                        Rs. {itemProfit.toLocaleString()}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* Financial Summary Breakdown Pill / Footer */}
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-2 border-t border-slate-800 text-xs">
+                            <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/80">
+                              <span className="text-[10px] text-slate-400 uppercase font-semibold block">
+                                Subtotal
+                              </span>
+                              <span className="font-mono font-bold text-slate-200">
+                                Rs. {Number(
+                                  sale.subtotal !== undefined
+                                    ? sale.subtotal
+                                    : (sale.totalAmount || 0) - delivery + Number(sale.discountAmount || 0)
+                                ).toLocaleString()}
+                              </span>
+                            </div>
+
+                            <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/80">
+                              <span className="text-[10px] text-slate-400 uppercase font-semibold block">
+                                Overall Discount
+                              </span>
+                              <span className="font-mono font-bold text-amber-400">
+                                {Number(sale.discountAmount || 0) > 0
+                                  ? `- Rs. ${Number(sale.discountAmount || 0).toLocaleString()}`
+                                  : "Rs. 0"}
+                              </span>
+                            </div>
+
+                            <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/80">
+                              <span className="text-[10px] text-slate-400 uppercase font-semibold block">
+                                Delivery Fee
+                              </span>
+                              <span className="font-mono font-bold text-slate-300">
+                                + Rs. {delivery.toLocaleString()}
+                              </span>
+                            </div>
+
+                            <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/80">
+                              <span className="text-[10px] text-slate-400 uppercase font-semibold block">
+                                Total Cost (COGS)
+                              </span>
+                              <span className="font-mono font-bold text-slate-400">
+                                Rs. {Number(sale.totalCost || 0).toLocaleString()}
+                              </span>
+                            </div>
+
+                            <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/80">
+                              <span className="text-[10px] text-emerald-400 uppercase font-semibold block">
+                                Net Realized Profit
+                              </span>
+                              <span
+                                className={`font-mono font-bold ${
+                                  profit >= 0 ? "text-emerald-400" : "text-red-400"
+                                }`}
+                              >
+                                Rs. {profit.toLocaleString()}
+                              </span>
+                            </div>
+
+                            <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/80">
+                              <span className="text-[10px] text-indigo-400 uppercase font-semibold block">
+                                Payment Method
+                              </span>
+                              <span className="font-mono font-bold text-indigo-300 uppercase">
+                                {sale.payments && sale.payments.length > 0
+                                  ? sale.payments
+                                      .map((p: any) => p.paymentMethod || p.method)
+                                      .join(", ")
+                                  : sale.paymentMethod || "CASH"}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Notes (if any) */}
+                          {sale.notes && (
+                            <div className="text-xs text-slate-400 bg-slate-950/50 p-2 rounded-lg border border-slate-800/60 font-sans">
+                              <span className="font-semibold text-slate-300">Notes / Remarks: </span>
+                              <span>{sale.notes}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

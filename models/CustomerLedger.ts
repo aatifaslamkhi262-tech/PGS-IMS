@@ -17,6 +17,7 @@ export type CustomerLedgerReferenceType =
   | "Exchange"
   | "TradeIn"
   | "AdvanceBooking"
+  | "Repair"
   | "Refund"
   | "StoreCredit"
   | "DebtAdjustment";
@@ -101,6 +102,7 @@ const CustomerLedgerSchema: Schema = new Schema(
         "Exchange",
         "TradeIn",
         "AdvanceBooking",
+        "Repair",
         "Refund",
         "StoreCredit",
         "DebtAdjustment",
