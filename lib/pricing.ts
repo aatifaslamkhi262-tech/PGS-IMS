@@ -36,12 +36,38 @@ export async function getInventoryCostMap(productIds: string[]): Promise<Record<
     }
 
     const rows = await Inventory.aggregate([
-      { $match: { product: { $in: ids }, quantity: { $gt: 0 }, averageCost: { $gt: 1 } } },
+      { $match: { product: { $in: ids }, quantity: { $gt: 0 } } },
+      {
+        $lookup: {
+          from: "products",
+          localField: "product",
+          foreignField: "_id",
+          as: "prod",
+        },
+      },
+      {
+        $addFields: {
+          effectiveCost: {
+            $cond: [
+              { $gt: ["$averageCost", 1] },
+              "$averageCost",
+              {
+                $cond: [
+                  { $gt: [{ $arrayElemAt: ["$prod.costPrice", 0] }, 1] },
+                  { $arrayElemAt: ["$prod.costPrice", 0] },
+                  0,
+                ],
+              },
+            ],
+          },
+        },
+      },
+      { $match: { effectiveCost: { $gt: 1 } } },
       {
         $group: {
           _id: { product: "$product", condition: "$condition" },
           qty: { $sum: "$quantity" },
-          value: { $sum: { $multiply: ["$quantity", "$averageCost"] } },
+          value: { $sum: { $multiply: ["$quantity", "$effectiveCost"] } },
         },
       },
     ]);

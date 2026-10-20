@@ -5,6 +5,8 @@ import { Customer } from "@/models/Customer";
 import { Payment } from "@/models/Payment";
 import { Location } from "@/models/Location";
 import { CustomerLedger } from "@/models/CustomerLedger";
+import { CashSession } from "@/models/CashSession";
+import { recordCashMovement } from "@/lib/cashSessionEngine";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 
 export async function POST(request: Request) {
@@ -106,6 +108,30 @@ export async function POST(request: Request) {
       },
       isTxActive ? session : undefined
     );
+
+    // If CASH payment, record cash movement in active cash drawer
+    if ((!paymentMethod || paymentMethod === "CASH") && location) {
+      const activeCashSession = await CashSession.findOne({
+        location: location._id,
+        status: "OPEN",
+      });
+      if (activeCashSession) {
+        await recordCashMovement(
+          {
+            sessionId: activeCashSession._id.toString(),
+            locationId: location._id.toString(),
+            cashier: receivedBy || "system",
+            type: "CASH_SALE",
+            amount: paymentAmount,
+            direction: "IN",
+            referenceType: "Payment",
+            referenceId: payment.paymentNumber,
+            notes: `Khata payment recovery from ${customer.name}`,
+          },
+          isTxActive ? session : undefined
+        );
+      }
+    }
 
     if (isTxActive) {
       await session.commitTransaction();

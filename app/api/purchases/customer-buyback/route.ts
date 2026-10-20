@@ -164,18 +164,48 @@ export async function POST(req: NextRequest) {
 
     // Ledger record if customer exists
     if (customerObj) {
-      await recordCustomerLedgerEntry(
-        {
-          customerId: customerObj._id.toString(),
-          type: "PAYMENT",
-          amount: totalAcquisitionValue,
-          referenceType: "TradeIn",
-          referenceId: buybackRefNumber,
-          notes: `Customer inventory acquisition payout`,
-          createdBy: auth.user?.username || "system",
-        },
-        isTxActive ? session : undefined
-      );
+      const chosenMethod = paymentMethod || "CASH";
+      if (chosenMethod === "CASH") {
+        // Customer sold item to store and received cash payout: balances out cleanly
+        await recordCustomerLedgerEntry(
+          {
+            customerId: customerObj._id.toString(),
+            type: "RETURN_CREDIT",
+            amount: totalAcquisitionValue,
+            referenceType: "TradeIn",
+            referenceId: buybackRefNumber,
+            notes: `Trade-In: Customer sold item to store (${buybackRefNumber})`,
+            createdBy: auth.user?.username || "system",
+          },
+          isTxActive ? session : undefined
+        );
+        await recordCustomerLedgerEntry(
+          {
+            customerId: customerObj._id.toString(),
+            type: "ADVANCE_REFUND",
+            amount: totalAcquisitionValue,
+            referenceType: "TradeIn",
+            referenceId: buybackRefNumber,
+            notes: `Trade-In: Cash payout given to customer (${buybackRefNumber})`,
+            createdBy: auth.user?.username || "system",
+          },
+          isTxActive ? session : undefined
+        );
+      } else {
+        // Customer leaves value as store credit
+        await recordCustomerLedgerEntry(
+          {
+            customerId: customerObj._id.toString(),
+            type: "RETURN_CREDIT",
+            amount: totalAcquisitionValue,
+            referenceType: "TradeIn",
+            referenceId: buybackRefNumber,
+            notes: `Trade-In: Store credit issued for item (${buybackRefNumber})`,
+            createdBy: auth.user?.username || "system",
+          },
+          isTxActive ? session : undefined
+        );
+      }
     }
 
     // Cash movement if paid in Cash

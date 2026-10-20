@@ -630,31 +630,35 @@ export async function completeSale(input: CompleteSaleInput) {
 
     // 9. Record Customer Ledger Entries
     if (sale.customer) {
-      await recordCustomerLedgerEntry(
-        {
-          customerId: sale.customer.toString(),
-          type: "INVOICE",
-          amount: sale.totalAmount,
-          referenceType: "Sale",
-          referenceId: invoiceNumber,
-          notes: `Invoice issued: ${invoiceNumber}`,
-          createdBy: input.completedBy,
-        },
-        session
-      );
+      if (sale.totalAmount > 0) {
+        await recordCustomerLedgerEntry(
+          {
+            customerId: sale.customer.toString(),
+            type: "INVOICE",
+            amount: sale.totalAmount,
+            referenceType: "Sale",
+            referenceId: invoiceNumber,
+            notes: `Invoice issued: ${invoiceNumber}`,
+            createdBy: input.completedBy,
+          },
+          session
+        );
+      }
 
-      await recordCustomerLedgerEntry(
-        {
-          customerId: sale.customer.toString(),
-          type: "PAYMENT",
-          amount: totalAllocated,
-          referenceType: "Payment",
-          referenceId: invoiceNumber,
-          notes: `Payment for Invoice ${invoiceNumber}`,
-          createdBy: input.completedBy,
-        },
-        session
-      );
+      if (totalAllocated > 0) {
+        await recordCustomerLedgerEntry(
+          {
+            customerId: sale.customer.toString(),
+            type: "PAYMENT",
+            amount: totalAllocated,
+            referenceType: "Payment",
+            referenceId: invoiceNumber,
+            notes: `Payment for Invoice ${invoiceNumber}`,
+            createdBy: input.completedBy,
+          },
+          session
+        );
+      }
     }
 
     // 10. Mark Sale COMPLETED

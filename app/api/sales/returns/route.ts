@@ -54,6 +54,11 @@ export async function POST(request: Request) {
       targetLocationId = originalSale.location;
     }
 
+    if (!targetLocationId || targetLocationId === "ALL" || !mongoose.Types.ObjectId.isValid(targetLocationId)) {
+      const defaultLoc = await Location.findOne({});
+      targetLocationId = defaultLoc?._id;
+    }
+
     const location = await Location.findById(targetLocationId);
     if (!location) {
       if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
@@ -123,7 +128,9 @@ export async function POST(request: Request) {
       
       const returnValuation = rItem.agreedReturnValuation !== undefined && Number(rItem.agreedReturnValuation) >= 0
         ? Number(rItem.agreedReturnValuation)
-        : (action === "RENTAL_SWAP" && netDepositCredit > 0 ? netDepositCredit : Number(rItem.unitPrice || product.costPrice || 0));
+        : (action === "RENTAL_SWAP"
+            ? (rItem.securityDeposit ? Math.max(0, Number(rItem.securityDeposit) - Number(rItem.feeDeducted || 0)) : (product.costPrice || 0))
+            : Number(rItem.unitPrice || product.costPrice || 0));
 
       const lineTotal = returnValuation * returnQty;
       returnTotalValue += lineTotal;
@@ -133,7 +140,12 @@ export async function POST(request: Request) {
       let beforeQty = 0;
       let afterQty = 0;
 
-      if (isValidCost(returnValuation)) {
+      // In RENTAL_SWAP, intake inventory at the product's actual costPrice so rental deposits/fees never skew moving average inventory cost
+      const intakeUnitCost = action === "RENTAL_SWAP"
+        ? (Number(product.costPrice) > 0 ? Number(product.costPrice) : returnValuation)
+        : returnValuation;
+
+      if (isValidCost(intakeUnitCost)) {
         const currentInv = await Inventory.findOne({
           product: product._id,
           location: targetLocationId,
@@ -146,14 +158,14 @@ export async function POST(request: Request) {
             locationId: targetLocationId,
             condition,
             quantity: returnQty,
-            unitCost: returnValuation,
+            unitCost: intakeUnitCost,
           },
           isTxActive ? session : undefined
         );
         afterQty = intakeRes.newQuantity;
       } else {
         console.warn(
-          `[Sales Return Warning] Agreed return valuation <= 1 (${returnValuation}) for product '${product.name}' (${condition}). Increasing quantity by ${returnQty} without modifying pool averageCost.`
+          `[Sales Return Warning] Agreed return valuation <= 1 (${intakeUnitCost}) for product '${product.name}' (${condition}). Increasing quantity by ${returnQty} without modifying pool averageCost.`
         );
         let inv = await Inventory.findOne({
           product: product._id,
@@ -194,8 +206,8 @@ export async function POST(request: Request) {
         type: "RETURN_IN",
         quantity: returnQty,
         serialNumbers: rItem.serialNumbers || (rItem.serialNumber ? [rItem.serialNumber] : []),
-        unitCost: returnValuation,
-        totalCost: lineTotal,
+        unitCost: intakeUnitCost,
+        totalCost: intakeUnitCost * returnQty,
         referenceType: action === "RENTAL_SWAP" ? "RENTAL_SWAP" : "RETURN_EXCHANGE",
         referenceId: returnTxNumber,
         reason: action === "RENTAL_SWAP"
@@ -255,7 +267,7 @@ export async function POST(request: Request) {
       }
     }
 
-    if (action === "RENTAL_SWAP" && netDepositCredit > 0) {
+    if (action === "RENTAL_SWAP") {
       returnTotalValue = netDepositCredit;
     }
 
@@ -362,9 +374,10 @@ export async function POST(request: Request) {
 
       if (exchangeSaleItems.length === 0 && action === "RENTAL_SWAP") {
         const rentFeeVal = Number(rentDeducted || 0);
+        const firstReturnedProdId = rawReturnedList[0]?.productId;
         exchangeSaleItems = [
           {
-            product: targetLocationId,
+            product: firstReturnedProdId || targetLocationId,
             productName: `[RENTAL REALIZED SERVICE] Rent Usage Cut: Rs. ${rentFeeVal.toLocaleString()}`,
             sku: "RENT-SERVICE",
             barcode: "RENT-SERVICE",
@@ -464,6 +477,29 @@ export async function POST(request: Request) {
               referenceType: "Exchange",
               referenceId: returnTxNumber,
               notes: `Exchange net top-up payment for ${returnTxNumber}`,
+              createdBy: processedBy || auth.user?.username || "system",
+            },
+            isTxActive ? session : undefined
+          );
+        }
+      } else if (netDifference < 0) {
+        const refundAmount = Math.abs(netDifference);
+        const chosenPaymentMethod = paymentMethod || "CASH";
+        const actualCashRefund = chosenPaymentMethod === "CASH"
+          ? refundAmount
+          : Number(cashAmount || 0);
+
+        if (actualCashRefund > 0) {
+          await recordCustomerLedgerEntry(
+            {
+              customerId: targetCustId.toString(),
+              type: "ADVANCE_REFUND",
+              amount: actualCashRefund,
+              referenceType: "Return",
+              referenceId: returnTxNumber,
+              notes: action === "RENTAL_SWAP"
+                ? `Rental Security Deposit Refund Paid in Cash (${returnTxNumber})`
+                : `Sales Return Net Cash Refund Paid (${returnTxNumber})`,
               createdBy: processedBy || auth.user?.username || "system",
             },
             isTxActive ? session : undefined

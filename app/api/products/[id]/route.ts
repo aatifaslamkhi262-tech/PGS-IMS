@@ -212,13 +212,12 @@ export async function PUT(
     // Track if cost price was explicitly requested to be overridden by user
     const hasExplicitReason = Boolean((body.costReason || body.reason || "").trim());
     const isCostPriceChanged = body.costPrice !== undefined && 
-      Number(body.costPrice) !== product.costPrice &&
-      (body.isCostOverride === true || hasExplicitReason || body.costType === "HISTORICAL_CORRECTION");
+      (body.isCostOverride === true || hasExplicitReason || body.costType === "HISTORICAL_CORRECTION" || Number(body.costPrice) !== product.costPrice);
 
-    const isSellingPriceChanged = body.sellingPrice !== undefined && Number(body.sellingPrice) !== product.sellingPrice;
-    const isMinSellingPriceChanged = body.minSellingPrice !== undefined && Number(body.minSellingPrice) !== product.minSellingPrice;
+    const isSellingPriceProvided = body.sellingPrice !== undefined;
+    const isMinSellingPriceProvided = body.minSellingPrice !== undefined;
 
-    if (isCostPriceChanged || isSellingPriceChanged || isMinSellingPriceChanged) {
+    if (isCostPriceChanged || isSellingPriceProvided || isMinSellingPriceProvided) {
       product.manuallyEditedAt = new Date();
     }
 

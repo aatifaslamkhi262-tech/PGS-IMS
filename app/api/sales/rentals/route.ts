@@ -11,6 +11,7 @@ import { CashSession } from "@/models/CashSession";
 import { recordCashMovement } from "@/lib/cashSessionEngine";
 import { deductInventoryWithAverageCost } from "@/lib/averageCostEngine";
 import { resolveOrCreateCustomer } from "@/lib/customerResolver";
+import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 import { verifyRole } from "@/lib/auth/rbac";
 
 export async function GET(request: Request) {
@@ -220,6 +221,22 @@ export async function POST(request: Request) {
           referenceType: "Payment",
           referenceId: bookingNumber,
           notes: `Rental Security Deposit Received for ${bookingNumber}`,
+        },
+        isTxActive ? session : undefined
+      );
+    }
+
+    // Customer Ledger: Record Security Deposit Held as liability (Customer Advance)
+    if (customerId && totalDeposit > 0) {
+      await recordCustomerLedgerEntry(
+        {
+          customerId: customerId.toString(),
+          type: "ADVANCE_DEPOSIT",
+          amount: totalDeposit,
+          referenceType: "Payment",
+          referenceId: bookingNumber,
+          notes: `Rental Security Deposit Held for Booking #${bookingNumber} (${processedItems.length} item(s))`,
+          createdBy: processedBy || auth.user?.username || "system",
         },
         isTxActive ? session : undefined
       );

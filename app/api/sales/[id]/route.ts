@@ -184,6 +184,18 @@ export async function DELETE(
           notes: `Credit reversal for cancelled sale ${sale.saleNumber}`,
           createdBy: auth.user.username,
         });
+
+        if (totalCashPaid > 0) {
+          await recordCustomerLedgerEntry({
+            customerId: sale.customer.toString(),
+            type: "ADVANCE_REFUND",
+            amount: totalCashPaid,
+            referenceType: "Refund",
+            referenceId: refTx,
+            notes: `Cash refund payout for cancelled sale ${sale.saleNumber}`,
+            createdBy: auth.user.username,
+          });
+        }
       }
     } else {
       // For non-COMPLETED sales (e.g. PAYMENT_PENDING / CHECKOUT / DRAFT advance bookings)

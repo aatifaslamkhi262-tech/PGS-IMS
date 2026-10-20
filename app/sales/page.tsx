@@ -266,12 +266,85 @@ function SalesWorkspaceContent() {
   const [returnSuccessMsg, setReturnSuccessMsg] = useState("");
 
   // Rental Return & Game Swap specific state
+  interface RentalReturnItemEntry {
+    productId: string;
+    productName: string;
+    condition: string;
+    serialNumber?: string;
+    securityDeposit: number;
+    feeDeducted: number;
+    netCredit: number;
+  }
+  const [rentalReturnItems, setRentalReturnItems] = useState<RentalReturnItemEntry[]>([]);
   const [rentalReturnProdId, setRentalReturnProdId] = useState("");
   const [rentalReturnCondition, setRentalReturnCondition] = useState("Used");
   const [rentalReturnSerial, setRentalReturnSerial] = useState("");
   const [rentalSecurityDeposit, setRentalSecurityDeposit] = useState(0);
   const [rentalFeeDeducted, setRentalFeeDeducted] = useState(0);
   const [rentalTopUpCash, setRentalTopUpCash] = useState(0);
+
+  const handleAddReturnedRentalItem = () => {
+    if (!rentalReturnProdId) {
+      alert("Please select a returned CD game first.");
+      return;
+    }
+    if (rentalSecurityDeposit <= 0) {
+      alert("Security deposit amount must be greater than 0.");
+      return;
+    }
+    const selectedProd = products.find((p) => p._id === rentalReturnProdId);
+    const deposit = Number(rentalSecurityDeposit || 0);
+    const fee = Number(rentalFeeDeducted || 0);
+    const netCredit = Math.max(0, deposit - fee);
+
+    const newItem: RentalReturnItemEntry = {
+      productId: rentalReturnProdId,
+      productName: selectedProd?.name || "Returned CD Game",
+      condition: rentalReturnCondition,
+      serialNumber: rentalReturnSerial.trim() || undefined,
+      securityDeposit: deposit,
+      feeDeducted: fee,
+      netCredit,
+    };
+
+    setRentalReturnItems((prev) => [...prev, newItem]);
+    setRentalReturnProdId("");
+    setRentalReturnSerial("");
+    setRentalSecurityDeposit(0);
+    setRentalFeeDeducted(0);
+  };
+
+  const handleRemoveReturnedRentalItem = (index: number) => {
+    setRentalReturnItems((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleUpdateReturnItemFee = (index: number, newFee: number) => {
+    setRentalReturnItems((prev) =>
+      prev.map((it, idx) => {
+        if (idx !== index) return it;
+        const validFee = Math.max(0, Number(newFee || 0));
+        return {
+          ...it,
+          feeDeducted: validFee,
+          netCredit: Math.max(0, it.securityDeposit - validFee),
+        };
+      })
+    );
+  };
+
+  const handleUpdateReturnItemDeposit = (index: number, newDeposit: number) => {
+    setRentalReturnItems((prev) =>
+      prev.map((it, idx) => {
+        if (idx !== index) return it;
+        const validDep = Math.max(0, Number(newDeposit || 0));
+        return {
+          ...it,
+          securityDeposit: validDep,
+          netCredit: Math.max(0, validDep - it.feeDeducted),
+        };
+      })
+    );
+  };
 
   // Mode: Direct Trade-In State
   const [tradeInProductId, setTradeInProductId] = useState("");
@@ -303,41 +376,58 @@ function SalesWorkspaceContent() {
           const booking = rentData.data[0];
           setSelectedRentalBooking(booking);
 
-          const activeItem = booking.items?.find((it: any) => it.status === "ON_RENT") || booking.items?.[0];
-          if (activeItem) {
-            const matchedProdId = (activeItem.product?._id || activeItem.product).toString();
-            setRentalReturnProdId(matchedProdId);
+          const activeRentedItems = (booking.items || []).filter(
+            (it: any) => it.status === "ON_RENT" || !it.status
+          );
 
-            // Ensure scanned product exists in dropdown options
-            const prodObj = products.find((p) => p._id?.toString() === matchedProdId);
-            if (!prodObj && activeItem.productName) {
-              setProducts((prev) => [
-                {
-                  _id: matchedProdId,
-                  name: activeItem.productName,
-                  sku: activeItem.sku,
-                  sellingPrice: activeItem.depositPaid,
-                },
-                ...prev,
-              ]);
-            }
-
-            // Auto-fill Security Deposit Paid
-            setRentalSecurityDeposit(activeItem.depositPaid || booking.totalDepositHeld || 0);
-
-            // Auto-calculate Rent Cut based on days rented & perDayRate
-            const rentedDate = new Date(activeItem.rentedAt || booking.createdAt);
+          if (activeRentedItems.length > 0) {
             const now = new Date();
-            const diffDays = Math.max(1, Math.ceil((now.getTime() - rentedDate.getTime()) / (1000 * 3600 * 24)));
-            const calculatedRentCut = activeItem.perDayRate > 0 ? diffDays * activeItem.perDayRate : 0;
-            setRentalFeeDeducted(calculatedRentCut);
 
-            if (activeItem.serialNumber) {
-              setRentalReturnSerial(activeItem.serialNumber);
-            }
-            if (activeItem.condition) {
-              setRentalReturnCondition(activeItem.condition);
-            }
+            // Ensure all scanned products exist in dropdown options
+            activeRentedItems.forEach((it: any) => {
+              const matchedProdId = (it.product?._id || it.product).toString();
+              const prodObj = products.find((p) => p._id?.toString() === matchedProdId);
+              if (!prodObj && it.productName) {
+                setProducts((prev) => [
+                  {
+                    _id: matchedProdId,
+                    name: it.productName,
+                    sku: it.sku || "RENTAL-ITEM",
+                    sellingPrice: it.depositPaid,
+                  },
+                  ...prev,
+                ]);
+              }
+            });
+
+            // Map all active rented CDs from this booking into loadedReturnEntries
+            const loadedReturnEntries: RentalReturnItemEntry[] = activeRentedItems.map((it: any) => {
+              const matchedProdId = (it.product?._id || it.product).toString();
+              const rentedDate = new Date(it.rentedAt || booking.createdAt);
+              const diffDays = Math.max(1, Math.ceil((now.getTime() - rentedDate.getTime()) / (1000 * 3600 * 24)));
+              const rentCut = it.perDayRate > 0 ? diffDays * it.perDayRate : 0;
+              const dep = Number(it.depositPaid || 0);
+              const netCred = Math.max(0, dep - rentCut);
+
+              return {
+                productId: matchedProdId,
+                productName: it.productName || "Rented DVD Game",
+                condition: it.condition || "Used",
+                serialNumber: it.serialNumber || undefined,
+                securityDeposit: dep,
+                feeDeducted: rentCut,
+                netCredit: netCred,
+              };
+            });
+
+            // Populate all rented CDs into the return list
+            setRentalReturnItems(loadedReturnEntries);
+
+            // Reset single-input fields
+            setRentalReturnProdId("");
+            setRentalReturnSerial("");
+            setRentalSecurityDeposit(0);
+            setRentalFeeDeducted(0);
 
             if (booking.customerName) setCustomerName(booking.customerName);
             if (booking.customerPhone) setCustomerPhone(booking.customerPhone);
@@ -1275,38 +1365,71 @@ function SalesWorkspaceContent() {
   };
 
   const handleProcessRentalSwap = async () => {
-    if (!rentalReturnProdId) {
-      alert("Please select the returned rental product.");
-      return;
-    }
-    if (rentalSecurityDeposit <= 0) {
-      alert("Security deposit amount must be greater than 0.");
+    // Collect all returned items (from rentalReturnItems table + any active input if filled)
+    const activeCurrentItem: RentalReturnItemEntry | null =
+      rentalReturnProdId && rentalSecurityDeposit > 0
+        ? {
+            productId: rentalReturnProdId,
+            productName: products.find((p) => p._id === rentalReturnProdId)?.name || "Returned CD Game",
+            condition: rentalReturnCondition,
+            serialNumber: rentalReturnSerial.trim() || undefined,
+            securityDeposit: Number(rentalSecurityDeposit || 0),
+            feeDeducted: Number(rentalFeeDeducted || 0),
+            netCredit: Math.max(0, Number(rentalSecurityDeposit || 0) - Number(rentalFeeDeducted || 0)),
+          }
+        : null;
+
+    const allReturnItems: RentalReturnItemEntry[] = [
+      ...rentalReturnItems,
+      ...(activeCurrentItem ? [activeCurrentItem] : []),
+    ];
+
+    if (allReturnItems.length === 0) {
+      alert("Please select at least one returned rental product with a valid security deposit.");
       return;
     }
 
-    const netCredit = Math.max(0, rentalSecurityDeposit - rentalFeeDeducted) + rentalTopUpCash;
+    const totalSecDeposit = allReturnItems.reduce((acc, it) => acc + (it.securityDeposit || 0), 0);
+    const totalFeeCut = allReturnItems.reduce((acc, it) => acc + (it.feeDeducted || 0), 0);
+    const totalNetCredit = Math.max(0, totalSecDeposit - totalFeeCut) + Number(rentalTopUpCash || 0);
+
+    const repTotal = returnReplacementItems.reduce((acc, it) => acc + (it.unitPrice || 0) * (it.quantity || 1), 0);
+    const netDiff = repTotal - totalNetCredit;
+    const netCashPayable = netDiff > 0 ? netDiff : 0;
+    const netCashRefund = netDiff < 0 ? Math.abs(netDiff) : 0;
 
     setSubmittingReturn(true);
     setReturnError("");
 
     try {
-      const selectedProd = products.find((p) => p._id === rentalReturnProdId);
+      const validLoc = locations.find((l) => l._id && l._id !== "ALL");
+      const targetLocationId = (selectedLocation && selectedLocation !== "ALL")
+        ? selectedLocation
+        : (currentUser?.locationId && currentUser.locationId !== "ALL" ? currentUser.locationId : (validLoc?._id || ""));
+
       const payload = {
         action: "RENTAL_SWAP",
-        locationId: selectedLocation,
-        salesman: selectedSalesman || undefined,
+        locationId: targetLocationId,
+        salesman: (selectedSalesman && selectedSalesman !== "ALL" && selectedSalesman !== "DIRECT") ? selectedSalesman : undefined,
         customerName: customerName || "Rental Customer",
         customerPhone: customerPhone || undefined,
-        securityDepositPaid: rentalSecurityDeposit,
-        rentalFeeDeducted: rentalFeeDeducted,
-        additionalTopUpCash: rentalTopUpCash,
-        returnedItem: {
-          productId: rentalReturnProdId,
+        securityDepositPaid: totalSecDeposit,
+        rentalFeeDeducted: totalFeeCut,
+        additionalTopUpCash: Number(rentalTopUpCash || 0),
+        returnedItems: allReturnItems.map((it) => ({
+          productId: it.productId,
           quantity: 1,
-          condition: rentalReturnCondition,
-          serialNumber: rentalReturnSerial.trim() || undefined,
-          agreedReturnValuation: netCredit,
-        },
+          condition: it.condition,
+          serialNumber: it.serialNumber || undefined,
+          agreedReturnValuation: it.netCredit,
+        })),
+        returnedItem: allReturnItems.length === 1 ? {
+          productId: allReturnItems[0].productId,
+          quantity: 1,
+          condition: allReturnItems[0].condition,
+          serialNumber: allReturnItems[0].serialNumber || undefined,
+          agreedReturnValuation: allReturnItems[0].netCredit,
+        } : undefined,
         replacementItems: returnReplacementItems.map((it) => ({
           productId: it.productId,
           quantity: it.quantity,
@@ -1315,7 +1438,7 @@ function SalesWorkspaceContent() {
           serialNumbers: it.serialNumbers,
         })),
         processedBy: currentUser?.username || currentUser?.name || "system",
-        notes: returnNotes || `Rental Return & Game Swap (Deposit: Rs. ${rentalSecurityDeposit}, Rent Fee: Rs. ${rentalFeeDeducted}, Top-up Cash: Rs. ${rentalTopUpCash})`,
+        notes: returnNotes || `Rental Return & Swap (${allReturnItems.length} returned CD(s), Deposit: Rs. ${totalSecDeposit}, Rent Fee: Rs. ${totalFeeCut}, Top-up Cash: Rs. ${rentalTopUpCash})`,
       };
 
       const res = await fetch("/api/sales/returns", {
@@ -1326,30 +1449,34 @@ function SalesWorkspaceContent() {
 
       const data = await res.json();
       if (data.success) {
-        setReturnSuccessMsg("Rental Return & Game Swap processed successfully!");
+        setReturnSuccessMsg("Rental Return & Settlement processed successfully!");
 
-        const repTotal = returnReplacementItems.reduce((acc, it) => acc + it.unitPrice * it.quantity, 0);
-        const netDiff = repTotal - netCredit;
-        const netCashPayable = netDiff > 0 ? netDiff : 0;
-        const netCashRefund = netDiff < 0 ? Math.abs(netDiff) : 0;
         const matchedSalesmanName = salesmen.find((s) => s._id === selectedSalesman)?.name || "Direct Counter";
 
         setCompletedReceiptData({
           invoiceNumber: data.data?.returnTxNumber || "RNT-1001",
           date: new Date(),
-          locationName: locations.find((l) => l._id === selectedLocation)?.name || "Main Shop",
+          locationName: locations.find((l) => l._id === targetLocationId)?.name || "Main Shop",
           cashierName: currentUser?.username || currentUser?.name || "Counter Staff",
           salesmanName: matchedSalesmanName,
           customerName: customerName || "Rental Customer",
           customerPhone: customerPhone || "N/A",
           items: [
-            {
-              productName: `[RENTAL DVD RETURNED] ${selectedProd?.name || "DVD Game"} (Deposit: Rs. ${rentalSecurityDeposit.toLocaleString()} - Rent: Rs. ${rentalFeeDeducted.toLocaleString()} + Top-up Cash: Rs. ${rentalTopUpCash.toLocaleString()})`,
-              condition: rentalReturnCondition,
+            ...allReturnItems.map((it) => ({
+              productName: `[RENTAL CD RETURNED] ${it.productName} (${it.condition}) (Deposit: Rs. ${it.securityDeposit.toLocaleString()} - Rent: Rs. ${it.feeDeducted.toLocaleString()})`,
+              condition: it.condition,
               quantity: 1,
-              unitPrice: netCredit,
-              lineTotal: netCredit,
-            },
+              unitPrice: it.netCredit,
+              lineTotal: it.netCredit,
+              serialNumbers: it.serialNumber ? [it.serialNumber] : undefined,
+            })),
+            ...(rentalTopUpCash > 0 ? [{
+              productName: `[ADDITIONAL CASH TOP-UP]`,
+              condition: "Cash",
+              quantity: 1,
+              unitPrice: Number(rentalTopUpCash),
+              lineTotal: Number(rentalTopUpCash),
+            }] : []),
             ...returnReplacementItems.map((it: any) => ({
               productName: `[ISSUED REPLACEMENT] ${it.productName}`,
               condition: it.condition,
@@ -1365,7 +1492,10 @@ function SalesWorkspaceContent() {
           totalAmount: netCashPayable,
           paidAmount: netCashPayable,
           changeDue: netCashRefund,
-          payments: [{ method: netDiff < 0 ? "SHOP_REFUND_CASH" : "RENTAL_CREDIT_SETTLEMENT", amount: Math.abs(netDiff) }],
+          payments: [{
+            method: netDiff < 0 ? "SHOP_REFUND_CASH" : (netDiff > 0 ? "CUSTOMER_TOPUP_CASH" : "RENTAL_CREDIT_SETTLEMENT"),
+            amount: Math.abs(netDiff),
+          }],
         });
 
         setShowReceiptModal(true);
@@ -1374,14 +1504,15 @@ function SalesWorkspaceContent() {
         setRentalSecurityDeposit(0);
         setRentalFeeDeducted(0);
         setRentalTopUpCash(0);
+        setRentalReturnItems([]);
         setReturnReplacementItems([]);
         setReturnNotes("");
         setTimeout(() => setReturnSuccessMsg(""), 4000);
       } else {
-        setReturnError(data.error || "Failed to process rental swap.");
+        setReturnError(data.error || "Failed to process rental settlement.");
       }
     } catch {
-      setReturnError("Failed to process rental swap.");
+      setReturnError("Failed to process rental settlement.");
     } finally {
       setSubmittingReturn(false);
     }
@@ -2647,183 +2778,84 @@ function SalesWorkspaceContent() {
               </div>
             )}
 
-            {returnSubMode === "RENTAL_SWAP" && (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                {/* Left Column: Returned DVD & Deposit Inputs */}
-                <div className="lg:col-span-7 bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-4">
-                  <h4 className="text-xs font-bold text-purple-400 uppercase tracking-wider">
-                    RETURNED RENTAL DVD & DEPOSIT CALCULATION
-                  </h4>
+            {returnSubMode === "RENTAL_SWAP" && (() => {
+              const activeCurrentItem: RentalReturnItemEntry | null =
+                rentalReturnProdId && rentalSecurityDeposit > 0
+                  ? {
+                      productId: rentalReturnProdId,
+                      productName: products.find((p) => p._id === rentalReturnProdId)?.name || "Returned CD Game",
+                      condition: rentalReturnCondition,
+                      serialNumber: rentalReturnSerial.trim() || undefined,
+                      securityDeposit: Number(rentalSecurityDeposit || 0),
+                      feeDeducted: Number(rentalFeeDeducted || 0),
+                      netCredit: Math.max(0, Number(rentalSecurityDeposit || 0) - Number(rentalFeeDeducted || 0)),
+                    }
+                  : null;
 
-                  {/* Barcode & Mobile Camera Scanner Box for Returned DVD */}
-                  <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl space-y-1.5">
+              const effectiveReturnItems: RentalReturnItemEntry[] =
+                rentalReturnItems.length > 0
+                  ? rentalReturnItems
+                  : (activeCurrentItem ? [activeCurrentItem] : []);
+
+              const calcTotalReturnDeposit = effectiveReturnItems.reduce((acc, it) => acc + (it.securityDeposit || 0), 0);
+              const calcTotalFeeDeducted = effectiveReturnItems.reduce((acc, it) => acc + (it.feeDeducted || 0), 0);
+              const calcTotalAvailableCredit = Math.max(0, calcTotalReturnDeposit - calcTotalFeeDeducted) + Number(rentalTopUpCash || 0);
+              const calcReplacementTotal = returnReplacementItems.reduce((acc, it) => acc + (it.unitPrice || 0) * (it.quantity || 1), 0);
+              const calcNetDiff = calcReplacementTotal - calcTotalAvailableCredit;
+
+              return (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  {/* Left Column: Returned DVD & Deposit Inputs */}
+                  <div className="lg:col-span-7 bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-4">
                     <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-bold text-purple-400 uppercase tracking-wider flex items-center gap-1.5">
-                        <Barcode className="w-3.5 h-3.5 text-purple-400" />
-                        QUICK BARCODE / MOBILE CAMERA SCANNER (RETURNED ITEM)
-                      </label>
+                      <h4 className="text-xs font-bold text-purple-400 uppercase tracking-wider flex items-center gap-2">
+                        <ArrowRightLeft className="w-4 h-4 text-purple-400" />
+                        RETURNED RENTAL DVD(s) & DEPOSIT CALCULATION
+                      </h4>
+                      {rentalReturnItems.length > 0 && (
+                        <span className="text-[10px] bg-purple-900/60 text-purple-300 px-2 py-0.5 rounded-full border border-purple-500/30 font-bold">
+                          {rentalReturnItems.length} CD(s) in Return List
+                        </span>
+                      )}
                     </div>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Scan returned DVD barcode or SKU..."
-                        value={scanBarcodeInput}
-                        onChange={(e) => setScanBarcodeInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            handleResolveBarcode(scanBarcodeInput, "RENTAL_IN");
-                          }
-                        }}
-                        className="flex-1 bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleResolveBarcode(scanBarcodeInput, "RENTAL_IN")}
-                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-purple-400 font-bold rounded-lg text-xs border border-slate-700"
-                      >
-                        Scan
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveScanTarget("RENTAL_IN");
-                          setShowCameraModal(true);
-                        }}
-                        className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shrink-0"
-                        title="Scan returned DVD via Phone Camera"
-                      >
-                        <Camera className="w-3.5 h-3.5 shrink-0" />
-                        <span>Mobile</span>
-                      </button>
-                    </div>
-                  </div>
 
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Select Returned Rental Product *</label>
-                    <select
-                      value={rentalReturnProdId}
-                      onChange={(e) => setRentalReturnProdId(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
-                    >
-                      <option value="">-- Choose Returned DVD Game --</option>
-                      {products.map((p) => (
-                        <option key={p._id} value={p._id}>
-                          {p.name} ({p.condition || "Used"})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">Return Stock Condition</label>
-                      <select
-                        value={rentalReturnCondition}
-                        onChange={(e) => setRentalReturnCondition(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
-                      >
-                        <option value="New">New / Unopened</option>
-                        <option value="Used">Used / Rent Pool</option>
-                        <option value="Like New">Like New</option>
-                        <option value="Defective">Defective / Damaged</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">Serial Number (Optional)</label>
-                      <input
-                        type="text"
-                        placeholder="S/N"
-                        value={rentalReturnSerial}
-                        onChange={(e) => setRentalReturnSerial(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
-                    <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">Security Deposit Paid (PKR) *</label>
-                      <input
-                        type="number"
-                        placeholder="e.g. 12500"
-                        value={rentalSecurityDeposit || ""}
-                        onChange={(e) => setRentalSecurityDeposit(Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-emerald-400 font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">Rental Usage Fee Cut (PKR) *</label>
-                      <input
-                        type="number"
-                        placeholder="e.g. 5000"
-                        value={rentalFeeDeducted || ""}
-                        onChange={(e) => setRentalFeeDeducted(Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-rose-400 font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-400 mb-1">Additional Cash Top-Up (PKR)</label>
-                      <input
-                        type="number"
-                        placeholder="e.g. 5500"
-                        value={rentalTopUpCash || ""}
-                        onChange={(e) => setRentalTopUpCash(Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-cyan-400 font-bold"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl flex items-center justify-between text-xs">
-                    <span className="text-purple-300 font-semibold">Total Available Credit for Swap:</span>
-                    <span className="text-purple-400 font-extrabold text-sm font-mono">
-                      Rs. {(Math.max(0, rentalSecurityDeposit - rentalFeeDeducted) + rentalTopUpCash).toLocaleString()}
-                    </span>
-                  </div>
-
-                  {/* Issued Game CD Replacement Input */}
-                  <div className="border-t border-slate-800 pt-4 space-y-3">
-                    <h5 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                      ADD ISSUED REPLACEMENT GAME CD (ITEM OUT)
-                    </h5>
-
-                    {/* Barcode & Mobile Camera Scanner Box for Replacement Game */}
+                    {/* Barcode & Mobile Camera Scanner Box for Returned DVD */}
                     <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <label className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
-                          <Barcode className="w-3.5 h-3.5 text-cyan-400" />
-                          QUICK BARCODE / MOBILE CAMERA SCANNER (REPLACEMENT GAME)
+                        <label className="text-[10px] font-bold text-purple-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <Barcode className="w-3.5 h-3.5 text-purple-400" />
+                          QUICK BARCODE / MOBILE CAMERA SCANNER (RETURNED ITEM)
                         </label>
                       </div>
                       <div className="flex gap-2">
                         <input
                           type="text"
-                          placeholder="Scan replacement game barcode or SKU..."
+                          placeholder="Scan returned DVD barcode, SKU or Rental Invoice..."
                           value={scanBarcodeInput}
                           onChange={(e) => setScanBarcodeInput(e.target.value)}
                           onKeyDown={(e) => {
                             if (e.key === "Enter") {
                               e.preventDefault();
-                              handleResolveBarcode(scanBarcodeInput, "RENTAL_OUT");
+                              handleResolveBarcode(scanBarcodeInput, "RENTAL_IN");
                             }
                           }}
-                          className="flex-1 bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-cyan-500"
+                          className="flex-1 bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-500"
                         />
                         <button
                           type="button"
-                          onClick={() => handleResolveBarcode(scanBarcodeInput, "RENTAL_OUT")}
-                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-400 font-bold rounded-lg text-xs border border-slate-700"
+                          onClick={() => handleResolveBarcode(scanBarcodeInput, "RENTAL_IN")}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-purple-400 font-bold rounded-lg text-xs border border-slate-700"
                         >
                           Scan
                         </button>
                         <button
                           type="button"
                           onClick={() => {
-                            setActiveScanTarget("RENTAL_OUT");
+                            setActiveScanTarget("RENTAL_IN");
                             setShowCameraModal(true);
                           }}
                           className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shrink-0"
-                          title="Scan replacement game via Phone Camera"
+                          title="Scan returned DVD via Phone Camera"
                         >
                           <Camera className="w-3.5 h-3.5 shrink-0" />
                           <span>Mobile</span>
@@ -2831,71 +2863,159 @@ function SalesWorkspaceContent() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                      <div className="sm:col-span-5">
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Select Returned Rental Product *</label>
+                      <select
+                        value={rentalReturnProdId}
+                        onChange={(e) => setRentalReturnProdId(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
+                      >
+                        <option value="">-- Choose Returned DVD Game --</option>
+                        {products.map((p) => (
+                          <option key={p._id} value={p._id}>
+                            {p.name} ({p.condition || "Used"})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Return Stock Condition</label>
                         <select
-                          value={newReplacementProdId}
-                          onChange={(e) => {
-                            setNewReplacementProdId(e.target.value);
-                            const p = products.find((prod) => prod._id === e.target.value);
-                            if (p) setNewReplacementPrice(p.sellingPrice || 0);
-                          }}
+                          value={rentalReturnCondition}
+                          onChange={(e) => setRentalReturnCondition(e.target.value)}
                           className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
                         >
-                          <option value="">-- Select Game CD --</option>
-                          {products.map((p) => (
-                            <option key={p._id} value={p._id}>
-                              {p.name} - Rs. {p.sellingPrice?.toLocaleString()}
-                            </option>
-                          ))}
+                          <option value="New">New / Unopened</option>
+                          <option value="Used">Used / Rent Pool</option>
+                          <option value="Like New">Like New</option>
+                          <option value="Defective">Defective / Damaged</option>
                         </select>
                       </div>
-
-                      <div className="sm:col-span-3">
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Serial Number (Optional)</label>
                         <input
-                          type="number"
-                          placeholder="Agreed Price"
-                          value={newReplacementPrice || ""}
-                          onChange={(e) => setNewReplacementPrice(Number(e.target.value))}
-                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-bold text-emerald-400"
+                          type="text"
+                          placeholder="S/N"
+                          value={rentalReturnSerial}
+                          onChange={(e) => setRentalReturnSerial(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono"
                         />
                       </div>
+                    </div>
 
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 bg-slate-900/60 p-3 rounded-xl border border-slate-800 items-end">
+                      <div className="sm:col-span-5">
+                        <label className="block text-[11px] text-slate-400 mb-1">Security Deposit Paid (PKR) *</label>
+                        <input
+                          type="number"
+                          placeholder="e.g. 8000"
+                          value={rentalSecurityDeposit || ""}
+                          onChange={(e) => setRentalSecurityDeposit(Number(e.target.value))}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-emerald-400 font-bold"
+                        />
+                      </div>
                       <div className="sm:col-span-4">
+                        <label className="block text-[11px] text-slate-400 mb-1">Rental Usage Fee Cut (PKR)</label>
+                        <input
+                          type="number"
+                          placeholder="e.g. 1000"
+                          value={rentalFeeDeducted || ""}
+                          onChange={(e) => setRentalFeeDeducted(Number(e.target.value))}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-rose-400 font-bold"
+                        />
+                      </div>
+                      <div className="sm:col-span-3">
                         <button
                           type="button"
-                          onClick={handleAddReplacementItem}
-                          disabled={!newReplacementProdId}
-                          className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1"
+                          onClick={handleAddReturnedRentalItem}
+                          disabled={!rentalReturnProdId || rentalSecurityDeposit <= 0}
+                          className="w-full bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 shadow-md shadow-purple-600/20"
+                          title="Add this returned CD to multi-return list"
                         >
-                          <Plus className="w-3.5 h-3.5" /> Add to Swap
+                          <Plus className="w-3.5 h-3.5" /> Add CD
                         </button>
                       </div>
                     </div>
 
-                    {/* Replacement Table */}
-                    {returnReplacementItems.length > 0 && (
-                      <div className="border border-slate-800 rounded-xl overflow-hidden">
+                    {/* Multi-CD Return Table */}
+                    {rentalReturnItems.length > 0 && (
+                      <div className="border border-purple-500/30 rounded-xl overflow-hidden bg-purple-950/20">
+                        <div className="bg-purple-900/30 px-3 py-1.5 border-b border-purple-500/20 flex justify-between items-center">
+                          <span className="text-[11px] font-bold text-purple-300 uppercase tracking-wider flex items-center gap-2">
+                            <span>RETURNED GAME CDs ({rentalReturnItems.length})</span>
+                            <span className="text-[10px] text-purple-400 font-normal normal-case">(editable fee & deposit)</span>
+                          </span>
+                          <span className="text-[11px] font-mono text-purple-200">
+                            Net Credit: Rs. {rentalReturnItems.reduce((acc, it) => acc + it.netCredit, 0).toLocaleString()}
+                          </span>
+                        </div>
                         <table className="w-full text-left text-xs text-slate-300">
-                          <thead className="bg-slate-900 text-slate-400 uppercase text-[10px]">
+                          <thead className="bg-slate-900/80 text-slate-400 uppercase text-[10px]">
                             <tr>
-                              <th className="p-2">Issued Game</th>
-                              <th className="p-2 text-right">Agreed Price</th>
-                              <th className="p-2 text-center">Action</th>
+                              <th className="p-2">Returned Game</th>
+                              <th className="p-2 text-right w-32">Deposit (PKR)</th>
+                              <th className="p-2 text-right w-32">Rental Fee Cut (PKR)</th>
+                              <th className="p-2 text-right w-28">Net Credit</th>
+                              <th className="p-2 text-center w-12">Action</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-slate-800 bg-slate-950">
-                            {returnReplacementItems.map((rep, idx) => (
-                              <tr key={idx}>
-                                <td className="p-2 font-semibold text-slate-200">{rep.productName}</td>
-                                <td className="p-2 text-right font-bold text-emerald-400">
-                                  Rs. {rep.unitPrice?.toLocaleString()}
+                          <tbody className="divide-y divide-slate-800 bg-slate-950/60">
+                            {rentalReturnItems.map((item, idx) => (
+                              <tr key={idx} className="hover:bg-slate-900/40">
+                                <td className="p-2 font-medium text-slate-200">
+                                  <div className="font-semibold text-slate-100">{item.productName}</div>
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.2 rounded border border-slate-700">
+                                      {item.condition}
+                                    </span>
+                                    {item.serialNumber && (
+                                      <span className="text-[10px] text-slate-400 font-mono">S/N: {item.serialNumber}</span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="p-2 text-right">
+                                  <div className="flex items-center justify-end gap-1">
+                                    <span className="text-[10px] text-emerald-500 font-bold">Rs.</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={item.securityDeposit}
+                                      onChange={(e) => {
+                                        const val = e.target.value === "" ? 0 : Number(e.target.value);
+                                        handleUpdateReturnItemDeposit(idx, val);
+                                      }}
+                                      className="w-24 bg-slate-900 border border-slate-700 hover:border-emerald-500/60 focus:border-emerald-500 rounded px-1.5 py-1 text-right text-xs font-bold text-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                                      title="Edit Security Deposit for this CD"
+                                    />
+                                  </div>
+                                </td>
+                                <td className="p-2 text-right">
+                                  <div className="flex items-center justify-end gap-1">
+                                    <span className="text-[10px] text-rose-500 font-bold">- Rs.</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={item.feeDeducted}
+                                      onChange={(e) => {
+                                        const val = e.target.value === "" ? 0 : Number(e.target.value);
+                                        handleUpdateReturnItemFee(idx, val);
+                                      }}
+                                      className="w-24 bg-slate-900 border border-slate-700 hover:border-rose-500/60 focus:border-rose-500 rounded px-1.5 py-1 text-right text-xs font-bold text-rose-400 focus:outline-none focus:ring-1 focus:ring-rose-500/50"
+                                      title="Edit Rental Fee Cut for this CD"
+                                    />
+                                  </div>
+                                </td>
+                                <td className="p-2 text-right font-bold text-purple-300">
+                                  Rs. {item.netCredit.toLocaleString()}
                                 </td>
                                 <td className="p-2 text-center">
                                   <button
                                     type="button"
-                                    onClick={() => handleRemoveReplacementItem(idx)}
-                                    className="text-rose-400 hover:text-rose-300 p-1"
+                                    onClick={() => handleRemoveReturnedRentalItem(idx)}
+                                    className="text-rose-400 hover:text-rose-300 p-1.5 rounded hover:bg-rose-950/40 transition"
+                                    title="Remove this returned CD"
                                   >
                                     <Trash2 className="w-3.5 h-3.5" />
                                   </button>
@@ -2906,82 +3026,249 @@ function SalesWorkspaceContent() {
                         </table>
                       </div>
                     )}
-                  </div>
-                </div>
 
-                {/* Right Column: Settlement Financial Summary */}
-                <div className="lg:col-span-5 bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-4 flex flex-col justify-between">
-                  <div className="space-y-4">
-                    <h4 className="text-xs font-bold text-purple-400 uppercase tracking-wider">
-                      NET SETTLEMENT SUMMARY
-                    </h4>
-
-                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-xs space-y-2.5">
-                      <div className="flex justify-between text-slate-400">
-                        <span>Security Deposit Received</span>
-                        <span className="font-bold text-emerald-400">+ Rs. {rentalSecurityDeposit.toLocaleString()}</span>
+                    <div className="bg-slate-900/40 p-3 rounded-xl border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+                      <div className="flex-1 w-full sm:w-auto">
+                        <label className="block text-[11px] text-slate-400 mb-1">
+                          Additional Customer Cash Top-Up (PKR) <span className="text-slate-500">(if customer pays extra cash for upgrade)</span>
+                        </label>
+                        <input
+                          type="number"
+                          placeholder="e.g. 5000"
+                          value={rentalTopUpCash || ""}
+                          onChange={(e) => setRentalTopUpCash(Number(e.target.value))}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-cyan-400 font-bold"
+                        />
                       </div>
-                      <div className="flex justify-between text-slate-400">
-                        <span>Less Rental Fee Cut</span>
-                        <span className="font-bold text-rose-400">- Rs. {rentalFeeDeducted.toLocaleString()}</span>
-                      </div>
-                      {rentalTopUpCash > 0 && (
-                        <div className="flex justify-between text-cyan-400">
-                          <span>Additional Cash Top-Up Deposit</span>
-                          <span className="font-bold">+ Rs. {rentalTopUpCash.toLocaleString()}</span>
+                      <div className="p-2.5 bg-purple-500/10 border border-purple-500/20 rounded-xl text-right shrink-0 w-full sm:w-auto">
+                        <div className="text-[10px] text-purple-300 font-semibold uppercase">Total Available Swap Credit</div>
+                        <div className="text-purple-400 font-extrabold text-sm font-mono">
+                          Rs. {calcTotalAvailableCredit.toLocaleString()}
                         </div>
-                      )}
-                      <div className="border-t border-slate-800 pt-2 flex justify-between font-semibold text-purple-300">
-                        <span>Total Available Credit for Swap</span>
-                        <span>Rs. {(Math.max(0, rentalSecurityDeposit - rentalFeeDeducted) + rentalTopUpCash).toLocaleString()}</span>
                       </div>
-                      <div className="flex justify-between text-slate-400">
-                        <span>Issued Game Replacement Total</span>
-                        <span className="font-bold text-slate-200">
-                          - Rs. {returnReplacementItems.reduce((acc, it) => acc + it.unitPrice * it.quantity, 0).toLocaleString()}
+                    </div>
+
+                    {/* Issued Game CD Replacement Input */}
+                    <div className="border-t border-slate-800 pt-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h5 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+                          ADD ISSUED REPLACEMENT GAME CD (ITEM OUT)
+                        </h5>
+                        <span className="text-[10px] text-slate-400">
+                          (Leave empty if customer is only returning CDs for cash refund)
                         </span>
                       </div>
-                      {(() => {
-                        const avail = Math.max(0, rentalSecurityDeposit - rentalFeeDeducted) + rentalTopUpCash;
-                        const repTot = returnReplacementItems.reduce((acc, it) => acc + it.unitPrice * it.quantity, 0);
-                        const diff = repTot - avail;
-                        if (diff > 0) {
-                          return (
-                            <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-cyan-400">
-                              <span>Net Cash Amount Payable</span>
-                              <span>+ Rs. {diff.toLocaleString()}</span>
-                            </div>
-                          );
-                        } else if (diff < 0) {
-                          return (
-                            <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-emerald-400">
-                              <span>Net Cash Refund to Customer</span>
-                              <span>- Rs. {Math.abs(diff).toLocaleString()}</span>
-                            </div>
-                          );
-                        } else {
-                          return (
-                            <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-purple-300">
-                              <span>Net Cash Amount Payable</span>
-                              <span>Rs. 0</span>
-                            </div>
-                          );
-                        }
-                      })()}
+
+                      {/* Barcode & Mobile Camera Scanner Box for Replacement Game */}
+                      <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <Barcode className="w-3.5 h-3.5 text-cyan-400" />
+                            QUICK BARCODE / MOBILE CAMERA SCANNER (REPLACEMENT GAME)
+                          </label>
+                        </div>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            placeholder="Scan replacement game barcode or SKU..."
+                            value={scanBarcodeInput}
+                            onChange={(e) => setScanBarcodeInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                handleResolveBarcode(scanBarcodeInput, "RENTAL_OUT");
+                              }
+                            }}
+                            className="flex-1 bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-cyan-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleResolveBarcode(scanBarcodeInput, "RENTAL_OUT")}
+                            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-400 font-bold rounded-lg text-xs border border-slate-700"
+                          >
+                            Scan
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveScanTarget("RENTAL_OUT");
+                              setShowCameraModal(true);
+                            }}
+                            className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shrink-0"
+                            title="Scan replacement game via Phone Camera"
+                          >
+                            <Camera className="w-3.5 h-3.5 shrink-0" />
+                            <span>Mobile</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                        <div className="sm:col-span-5">
+                          <select
+                            value={newReplacementProdId}
+                            onChange={(e) => {
+                              setNewReplacementProdId(e.target.value);
+                              const p = products.find((prod) => prod._id === e.target.value);
+                              if (p) setNewReplacementPrice(p.sellingPrice || 0);
+                            }}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
+                          >
+                            <option value="">-- Select Game CD --</option>
+                            {products.map((p) => (
+                              <option key={p._id} value={p._id}>
+                                {p.name} - Rs. {p.sellingPrice?.toLocaleString()}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="sm:col-span-3">
+                          <input
+                            type="number"
+                            placeholder="Agreed Price"
+                            value={newReplacementPrice || ""}
+                            onChange={(e) => setNewReplacementPrice(Number(e.target.value))}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-bold text-emerald-400"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-4">
+                          <button
+                            type="button"
+                            onClick={handleAddReplacementItem}
+                            disabled={!newReplacementProdId}
+                            className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1"
+                          >
+                            <Plus className="w-3.5 h-3.5" /> Add to Swap
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Replacement Table */}
+                      {returnReplacementItems.length > 0 && (
+                        <div className="border border-slate-800 rounded-xl overflow-hidden">
+                          <table className="w-full text-left text-xs text-slate-300">
+                            <thead className="bg-slate-900 text-slate-400 uppercase text-[10px]">
+                              <tr>
+                                <th className="p-2">Issued Game</th>
+                                <th className="p-2 text-right">Agreed Price</th>
+                                <th className="p-2 text-center">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800 bg-slate-950">
+                              {returnReplacementItems.map((rep, idx) => (
+                                <tr key={idx}>
+                                  <td className="p-2 font-semibold text-slate-200">{rep.productName}</td>
+                                  <td className="p-2 text-right font-bold text-emerald-400">
+                                    Rs. {rep.unitPrice?.toLocaleString()}
+                                  </td>
+                                  <td className="p-2 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveReplacementItem(idx)}
+                                      className="text-rose-400 hover:text-rose-300 p-1"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <button
-                    onClick={handleProcessRentalSwap}
-                    disabled={submittingReturn || !rentalReturnProdId || rentalSecurityDeposit <= 0}
-                    className="w-full bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white py-3 rounded-xl font-bold transition shadow-lg shadow-purple-600/30 text-xs uppercase tracking-wider flex items-center justify-center gap-2 mt-4"
-                  >
-                    <ArrowRightLeft className="w-4 h-4" />
-                    {submittingReturn ? "Processing Rental Settlement..." : "🎮 COMPLETE RENTAL SWAP & PRINT SLIP"}
-                  </button>
+                  {/* Right Column: Settlement Financial Summary */}
+                  <div className="lg:col-span-5 bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-4 flex flex-col justify-between">
+                    <div className="space-y-4">
+                      <h4 className="text-xs font-bold text-purple-400 uppercase tracking-wider flex items-center justify-between">
+                        <span>NET SETTLEMENT SUMMARY</span>
+                        <span className="text-[10px] text-slate-400 font-normal">
+                          ({effectiveReturnItems.length} Returned CD{effectiveReturnItems.length !== 1 ? "s" : ""})
+                        </span>
+                      </h4>
+
+                      <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-xs space-y-2.5">
+                        <div className="flex justify-between text-slate-400">
+                          <span>Total Security Deposits Held</span>
+                          <span className="font-bold text-emerald-400">+ Rs. {calcTotalReturnDeposit.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400">
+                          <span>Less Total Rental Fee Cut</span>
+                          <span className="font-bold text-rose-400">- Rs. {calcTotalFeeDeducted.toLocaleString()}</span>
+                        </div>
+                        {rentalTopUpCash > 0 && (
+                          <div className="flex justify-between text-cyan-400">
+                            <span>Additional Customer Cash Top-Up</span>
+                            <span className="font-bold">+ Rs. {Number(rentalTopUpCash).toLocaleString()}</span>
+                          </div>
+                        )}
+                        <div className="border-t border-slate-800 pt-2 flex justify-between font-semibold text-purple-300">
+                          <span>Total Available Credit for Settlement</span>
+                          <span>Rs. {calcTotalAvailableCredit.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400">
+                          <span>Issued Replacement Game(s) Total ({returnReplacementItems.length})</span>
+                          <span className="font-bold text-slate-200">
+                            - Rs. {calcReplacementTotal.toLocaleString()}
+                          </span>
+                        </div>
+                        {(() => {
+                          if (calcNetDiff > 0) {
+                            return (
+                              <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-cyan-400">
+                                <span>Net Cash Amount Payable (Customer Pays)</span>
+                                <span>+ Rs. {calcNetDiff.toLocaleString()}</span>
+                              </div>
+                            );
+                          } else if (calcNetDiff < 0) {
+                            return (
+                              <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-emerald-400">
+                                <span>Net Cash Refund to Customer (Shop Pays)</span>
+                                <span>- Rs. {Math.abs(calcNetDiff).toLocaleString()}</span>
+                              </div>
+                            );
+                          } else {
+                            return (
+                              <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-purple-300">
+                                <span>Net Settlement Difference</span>
+                                <span>Rs. 0 (Even Swap)</span>
+                              </div>
+                            );
+                          }
+                        })()}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleProcessRentalSwap}
+                      disabled={submittingReturn || effectiveReturnItems.length === 0 || calcTotalReturnDeposit <= 0}
+                      className={`w-full py-3 rounded-xl font-bold transition shadow-lg text-xs uppercase tracking-wider flex items-center justify-center gap-2 mt-4 text-white disabled:opacity-40 ${
+                        calcNetDiff < 0
+                          ? "bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30"
+                          : calcNetDiff > 0
+                          ? "bg-cyan-600 hover:bg-cyan-500 shadow-cyan-600/30"
+                          : "bg-purple-600 hover:bg-purple-500 shadow-purple-600/30"
+                      }`}
+                    >
+                      <ArrowRightLeft className="w-4 h-4" />
+                      {submittingReturn
+                        ? "Processing Settlement..."
+                        : calcNetDiff < 0
+                        ? (calcReplacementTotal === 0
+                            ? `💸 COMPLETE RETURN & REFUND RS. ${Math.abs(calcNetDiff).toLocaleString()}`
+                            : `🎮 COMPLETE SWAP & REFUND RS. ${Math.abs(calcNetDiff).toLocaleString()}`)
+                        : calcNetDiff > 0
+                        ? `🎮 COMPLETE SWAP & COLLECT RS. ${calcNetDiff.toLocaleString()}`
+                        : "🎮 COMPLETE EVEN RENTAL SWAP"}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Found Invoice Metadata & Items Form */}
             {foundSale && (
