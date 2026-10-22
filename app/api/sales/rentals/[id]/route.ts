@@ -73,61 +73,56 @@ export async function PATCH(
         totalAccruedRentRealized += rentFee;
         totalNetRefundToCustomer += netRefund;
 
-        // Return stock to location using Option A behavior (non-blocking for rental return)
+        // Return stock to location preserving true asset cost (never treat rental fee as purchase intake cost)
         const { isValidCost } = await import("@/lib/costing");
         const returnCondition = item.condition || "Used";
         let beforeQuantity = 0;
         let afterQuantity = 0;
 
-        if (isValidCost(rentFee)) {
-          const currentInv = await Inventory.findOne({
-            product: item.product,
-            location: booking.location,
-            condition: returnCondition,
-          });
-          beforeQuantity = currentInv ? currentInv.quantity : 0;
-          const intakeRes = await updateAverageCostOnIntake(
-            {
-              productId: item.product,
-              locationId: booking.location,
-              condition: returnCondition,
-              quantity: 1,
-              unitCost: rentFee,
-            },
-            isTxActive ? session : undefined
-          );
-          afterQuantity = intakeRes.newQuantity;
+        let inv = await Inventory.findOne({
+          product: item.product,
+          location: booking.location,
+          condition: returnCondition,
+        });
+
+        beforeQuantity = inv ? (inv.quantity || 0) : 0;
+
+        // Resolve return cost: preserve existing pool averageCost if valid, else fallback to Product master costPrice
+        let returnCost = 0;
+        if (inv && isValidCost(inv.averageCost)) {
+          returnCost = inv.averageCost;
         } else {
-          console.warn(
-            `[Rental Return Warning] Rental return cost <= 1 (rentFee: ${rentFee}) for product '${item.productName}' (${returnCondition}). Restoring stock quantity (+1) without modifying averageCost.`
-          );
-          let inv = await Inventory.findOne({
+          const prodDoc = await Product.findById(item.product);
+          if (prodDoc && isValidCost(prodDoc.costPrice)) {
+            returnCost = prodDoc.costPrice;
+          }
+        }
+
+        if (!inv) {
+          inv = new Inventory({
             product: item.product,
             location: booking.location,
             condition: returnCondition,
+            quantity: 1,
+            averageCost: returnCost,
+            totalCostValue: returnCost,
+            status: "In Stock",
           });
-          beforeQuantity = inv ? inv.quantity : 0;
-          if (!inv) {
-            inv = new Inventory({
-              product: item.product,
-              location: booking.location,
-              condition: returnCondition,
-              quantity: 1,
-              averageCost: 0,
-              totalCostValue: 0,
-              status: "In Stock",
-            });
-          } else {
-            inv.quantity += 1;
-            inv.totalCostValue = Math.round(inv.quantity * (inv.averageCost || 0) * 100) / 100;
-            inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
+        } else {
+          inv.quantity += 1;
+          if (!isValidCost(inv.averageCost) && returnCost > 0) {
+            inv.averageCost = returnCost;
           }
-          afterQuantity = inv.quantity;
-          if (isTxActive && session) {
-            await inv.save({ session });
-          } else {
-            await inv.save();
-          }
+          const effCost = (inv.averageCost && isValidCost(inv.averageCost)) ? inv.averageCost : returnCost;
+          inv.totalCostValue = Math.round(inv.quantity * effCost * 100) / 100;
+          inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
+        }
+        afterQuantity = inv.quantity;
+
+        if (isTxActive && session) {
+          await inv.save({ session });
+        } else {
+          await inv.save();
         }
 
         const movement = new InventoryMovement({
@@ -140,8 +135,8 @@ export async function PATCH(
           type: "RETURN_IN",
           quantity: 1,
           serialNumbers: item.serialNumber ? [item.serialNumber] : [],
-          unitCost: rentFee,
-          totalCost: rentFee,
+          unitCost: returnCost,
+          totalCost: returnCost,
           referenceType: "RENTAL_RETURN",
           referenceId: booking.bookingNumber,
           reason: `Rental Return Intake (${diffDays} days rental @ Rs. ${item.perDayRate}/day = Rs. ${rentFee})`,

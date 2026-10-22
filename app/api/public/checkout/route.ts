@@ -63,14 +63,44 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "At least one order item is required." }, { status: 400 });
     }
 
-    // 4. Find Central Warehouse Location
-    let warehouseLocation = await Location.findOne({ type: "Warehouse", active: true }).lean();
-    if (!warehouseLocation) {
-      warehouseLocation = await Location.findOne({ active: true }).lean();
+    // 4. Find Best Fulfilling Location (Prefer Warehouse, or fallback to location with stock)
+    const { Inventory } = await import("@/models/Inventory");
+    let targetLocation = await Location.findOne({ type: "Warehouse", active: true }).lean();
+    if (!targetLocation) {
+      targetLocation = await Location.findOne({ active: true }).lean();
     }
-    if (!warehouseLocation) {
+    if (!targetLocation) {
       if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
-      return NextResponse.json({ success: false, error: "Central Warehouse location not configured." }, { status: 500 });
+      return NextResponse.json({ success: false, error: "No active fulfilling location configured." }, { status: 500 });
+    }
+
+    let locationHasStock = true;
+    for (const item of items) {
+      const q = Math.max(1, Number(item.quantity || 1));
+      const invCheck = await Inventory.findOne({
+        product: item.productId,
+        location: targetLocation._id,
+        quantity: { $gte: q },
+      });
+      if (!invCheck) {
+        locationHasStock = false;
+        break;
+      }
+    }
+
+    if (!locationHasStock && items.length > 0) {
+      const firstItem = items[0];
+      const altInv = await Inventory.findOne({
+        product: firstItem.productId,
+        quantity: { $gte: Math.max(1, Number(firstItem.quantity || 1)) },
+      }).lean();
+
+      if (altInv) {
+        const altLoc = await Location.findById(altInv.location).lean();
+        if (altLoc && altLoc.active) {
+          targetLocation = altLoc;
+        }
+      }
     }
 
     // 5. Auto-Resolve / Create Customer in CRM Database
@@ -146,8 +176,8 @@ export async function POST(req: NextRequest) {
       saleNumber,
       creationMode: "WAREHOUSE_QUICK_SALE",
       saleSource: "WEBSITE",
-      location: warehouseLocation._id,
-      locationName: warehouseLocation.name,
+      location: targetLocation._id,
+      locationName: targetLocation.name,
       customer: customerObjId,
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),

@@ -108,11 +108,34 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    // 4. Fetch pending Stock Audits
+    const { StockAudit } = await import("@/models/StockAudit");
+    const pendingAudits = await StockAudit.find({ status: "PENDING_APPROVAL" })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const formattedAudits = pendingAudits.map((aud: any) => ({
+      id: aud._id,
+      type: "Stock Audit",
+      reference: aud.auditNumber,
+      supplierName: "Shelf Audit Reconciliation",
+      supplierCode: "AUDIT",
+      date: aud.createdAt,
+      amount: aud.summary?.netCostDelta || 0,
+      locationName: aud.locationName,
+      productCount: (aud.missingSerials?.length || 0) + (aud.itemVariances?.length || 0),
+      quantity: (aud.summary?.totalMissingUnits || 0) + (aud.summary?.totalSurplusUnits || 0),
+      createdBy: aud.performedBy,
+      status: aud.status,
+      pendingSince: aud.createdAt,
+    }));
+
     // Merge and sort by pendingSince (oldest first)
     const combinedApprovals = [
       ...formattedInvoices,
       ...formattedReceivings,
       ...formattedTransfers,
+      ...formattedAudits,
     ].sort(
       (a: any, b: any) => new Date(a.pendingSince).getTime() - new Date(b.pendingSince).getTime()
     );

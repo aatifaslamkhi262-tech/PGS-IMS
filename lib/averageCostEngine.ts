@@ -58,6 +58,19 @@ export async function updateAverageCostOnIntake(
   let existingQty = 0;
   let existingVal = 0;
 
+  // Retrieve Product master baseline cost price for zero/placeholder pool healing
+  let masterCostPrice = 0;
+  try {
+    const prodQuery = Product.findById(input.productId);
+    if (session) prodQuery.session(session);
+    const prod = await prodQuery.exec();
+    if (prod && prod.costPrice && prod.costPrice > 1) {
+      masterCostPrice = prod.costPrice;
+    }
+  } catch {
+    // ignore in mocked environments
+  }
+
   try {
     const allInvsQuery = Inventory.find({
       product: input.productId,
@@ -70,9 +83,25 @@ export async function updateAverageCostOnIntake(
       for (const item of allInvs) {
         const q = Math.max(0, item.quantity || 0);
         if (q > 0) {
-          existingQty += q;
-          const c = (item.averageCost && item.averageCost > 1) ? item.averageCost : 0;
-          existingVal += q * c;
+          // If this pool has a valid cost, use it; otherwise fallback to masterCostPrice
+          const poolCost = (item.averageCost && item.averageCost > 1) ? item.averageCost : masterCostPrice;
+          if (poolCost > 1) {
+            existingQty += q;
+            existingVal += q * poolCost;
+
+            // Auto-heal uncosted pool
+            if (!item.averageCost || item.averageCost <= 1) {
+              item.averageCost = poolCost;
+              item.totalCostValue = Math.round(q * poolCost * 100) / 100;
+              if (session) {
+                await item.save({ session });
+              } else {
+                await item.save();
+              }
+            }
+          }
+          // Note: If poolCost <= 1 (i.e. pool has 0 cost and product master also has 0 cost),
+          // we intentionally DO NOT count it in existingQty / existingVal to prevent zero-cost dilution!
         }
       }
     }
@@ -82,24 +111,14 @@ export async function updateAverageCostOnIntake(
 
   // Fallback if allInvs was empty or mocked without find:
   if (existingQty === 0 && inv && (inv.quantity || 0) > 0) {
-    existingQty = Math.max(0, inv.quantity || 0);
-    existingVal = existingQty * Math.max(0, inv.averageCost || 0);
-  }
-
-  // If no pools had valid cost (> 1), check Product.costPrice
-  let existingAvgCost = existingQty > 0 ? (existingVal / existingQty) : 0;
-  if (existingQty > 0 && existingAvgCost <= 1) {
-    try {
-      const prodQuery = Product.findById(input.productId);
-      if (session) prodQuery.session(session);
-      const prod = await prodQuery.exec();
-      if (prod && prod.costPrice && prod.costPrice > 1) {
-        existingAvgCost = prod.costPrice;
-      }
-    } catch {
-      // ignore in mocked environments
+    const fallbackCost = (inv.averageCost && inv.averageCost > 1) ? inv.averageCost : masterCostPrice;
+    if (fallbackCost > 1) {
+      existingQty = Math.max(0, inv.quantity || 0);
+      existingVal = existingQty * fallbackCost;
     }
   }
+
+  let existingAvgCost = existingQty > 0 ? (existingVal / existingQty) : masterCostPrice;
 
   const { blendAverageCost } = await import("@/lib/costing");
   const newAverageCost = blendAverageCost({

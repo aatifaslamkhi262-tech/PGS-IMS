@@ -116,6 +116,12 @@ function SalesWorkspaceContent() {
   const [queuePaymentMethod, setQueuePaymentMethod] = useState<"CASH" | "CARD" | "BANK_TRANSFER">("CASH");
   const [queuePriceAdjustment, setQueuePriceAdjustment] = useState<number>(0);
   const [completingQueueSale, setCompletingQueueSale] = useState(false);
+  const [queueItemSerials, setQueueItemSerials] = useState<Record<string, string[]>>({});
+  const [queueAvailableSerials, setQueueAvailableSerials] = useState<Record<string, string[]>>({});
+  const [queueSerialInputs, setQueueSerialInputs] = useState<Record<string, string>>({});
+  const [queueFulfillLocationId, setQueueFulfillLocationId] = useState<string>("");
+  const [reassigningQueueLocation, setReassigningQueueLocation] = useState(false);
+  const [loadingQueueSerials, setLoadingQueueSerials] = useState(false);
 
   // Cancellation Modal States
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -145,8 +151,133 @@ function SalesWorkspaceContent() {
     }
   };
 
+  const openQueueVerifyModal = async (sale: any) => {
+    setSelectedQueueSale(sale);
+    setQueuePriceAdjustment(0);
+    setQueuePaymentMethod((sale.paymentMethod as any) || "CASH");
+    const locId = (sale.location?._id || sale.location || "").toString();
+    setQueueFulfillLocationId(locId);
+
+    // Initialize existing serial numbers
+    const initSerials: Record<string, string[]> = {};
+    for (const item of sale.items || []) {
+      const pId = (item.product?._id || item.product || "").toString();
+      if (pId) {
+        initSerials[pId] = Array.isArray(item.serialNumbers) ? [...item.serialNumbers] : [];
+      }
+    }
+    setQueueItemSerials(initSerials);
+    setQueueSerialInputs({});
+    setShowVerifyModal(true);
+
+    // Fetch available serial numbers for serialized items in this sale
+    setLoadingQueueSerials(true);
+    try {
+      const availMap: Record<string, string[]> = {};
+      for (const item of sale.items || []) {
+        const pId = (item.product?._id || item.product || "").toString();
+        if (!pId) continue;
+        const prodMeta = products.find((p) => p._id === pId);
+        const isTracked = prodMeta?.serialTracking ?? (item.serialNumbers && item.serialNumbers.length > 0);
+        if (isTracked) {
+          const res = await fetch(`/api/serial-numbers?product=${pId}&status=Available&limit=100`);
+          const data = await res.json();
+          if (data.success && Array.isArray(data.data)) {
+            availMap[pId] = data.data.map((s: any) => s.serialNumber);
+          }
+        }
+      }
+      setQueueAvailableSerials(availMap);
+    } catch (err) {
+      console.error("Error fetching serials for queue sale:", err);
+    } finally {
+      setLoadingQueueSerials(false);
+    }
+  };
+
+  const handleReassignQueueLocation = async (newLocationId: string) => {
+    if (!selectedQueueSale || !newLocationId || newLocationId === queueFulfillLocationId) return;
+    try {
+      setReassigningQueueLocation(true);
+      const res = await fetch(`/api/sales/${selectedQueueSale._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locationId: newLocationId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const targetLoc = locations.find((l) => l._id === newLocationId);
+        const locName = targetLoc ? targetLoc.name : "Warehouse";
+        setQueueFulfillLocationId(newLocationId);
+        setSelectedQueueSale((prev: any) => prev ? { ...prev, location: newLocationId, locationName: locName } : null);
+        setPendingSales((prev) =>
+          prev.map((s) => (s._id === selectedQueueSale._id ? { ...s, location: newLocationId, locationName: locName } : s))
+        );
+      } else {
+        alert(data.error || "Failed to reassign location.");
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to reassign location.");
+    } finally {
+      setReassigningQueueLocation(false);
+    }
+  };
+
+  const handleAddSerialToQueueItem = (productId: string, rawSerial: string, requiredQty: number) => {
+    const clean = rawSerial.trim();
+    if (!clean) return;
+
+    const currentList = queueItemSerials[productId] || [];
+    if (currentList.some((s) => s.toUpperCase() === clean.toUpperCase())) {
+      alert(`Serial number '${clean}' is already assigned to this item.`);
+      return;
+    }
+    for (const [otherPId, otherList] of Object.entries(queueItemSerials)) {
+      if (otherPId !== productId && otherList.some((s) => s.toUpperCase() === clean.toUpperCase())) {
+        alert(`Serial number '${clean}' is already assigned to another item in this order.`);
+        return;
+      }
+    }
+
+    if (currentList.length >= requiredQty) {
+      alert(`This item only requires ${requiredQty} serial number(s). Remove one before adding another.`);
+      return;
+    }
+
+    setQueueItemSerials((prev) => ({
+      ...prev,
+      [productId]: [...(prev[productId] || []), clean],
+    }));
+    setQueueSerialInputs((prev) => ({
+      ...prev,
+      [productId]: "",
+    }));
+  };
+
+  const handleRemoveSerialFromQueueItem = (productId: string, serialToRemove: string) => {
+    setQueueItemSerials((prev) => ({
+      ...prev,
+      [productId]: (prev[productId] || []).filter((s) => s !== serialToRemove),
+    }));
+  };
+
   const handleCompleteQueueCheckout = async () => {
     if (!selectedQueueSale) return;
+
+    // Strict validation: Ensure all serialized products have required serials assigned
+    for (const item of selectedQueueSale.items || []) {
+      const pId = (item.product?._id || item.product || "").toString();
+      const prodMeta = products.find((p) => p._id === pId);
+      const isTracked = prodMeta?.serialTracking || (queueAvailableSerials[pId] && queueAvailableSerials[pId].length > 0) || (item.serialNumbers && item.serialNumbers.length > 0);
+      const assigned = queueItemSerials[pId] || [];
+      if (isTracked && assigned.length !== item.quantity) {
+        alert(
+          `Serial Number Required:\n'${item.productName || "Product"}' requires ${item.quantity} serial number(s), but only ${assigned.length} assigned.\n\nPlease scan or select all serial numbers before completing checkout.`
+        );
+        return;
+      }
+    }
+
     try {
       setCompletingQueueSale(true);
 
@@ -163,6 +294,11 @@ function SalesWorkspaceContent() {
             : `Discount Adjustment: -Rs. ${Math.abs(adjNum)}`)
         : undefined;
 
+      const itemSerialsPayload = Object.entries(queueItemSerials).map(([productId, serialNumbers]) => ({
+        productId,
+        serialNumbers,
+      }));
+
       const res = await fetch(`/api/sales/${selectedQueueSale._id}/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -170,6 +306,7 @@ function SalesWorkspaceContent() {
           paymentAllocations: [{ method: queuePaymentMethod, amount: finalCheckoutAmount }],
           priceAdjustment: adjNum,
           notes: noteText,
+          itemSerials: itemSerialsPayload,
         }),
       });
       const data = await res.json();
@@ -194,14 +331,18 @@ function SalesWorkspaceContent() {
             salesmanName: selectedQueueSale.salesmanName || "Direct Counter",
             customerName: selectedQueueSale.customerName || "Walk-in Customer",
             customerPhone: selectedQueueSale.customerPhone || "N/A",
-            items: (selectedQueueSale.items || []).map((it: any) => ({
-              productName: it.productName || "Product Item",
-              condition: it.condition || "New",
-              quantity: it.quantity || 1,
-              unitPrice: it.unitPrice || 0,
-              lineTotal: it.lineTotal || (it.quantity * (it.unitPrice || 0)),
-              serialNumbers: it.serialNumbers || [],
-            })),
+            items: (selectedQueueSale.items || []).map((it: any) => {
+              const pId = (it.product?._id || it.product || "").toString();
+              const assignedSns = queueItemSerials[pId] || it.serialNumbers || [];
+              return {
+                productName: it.productName || "Product Item",
+                condition: it.condition || "New",
+                quantity: it.quantity || 1,
+                unitPrice: it.unitPrice || 0,
+                lineTotal: it.lineTotal || (it.quantity * (it.unitPrice || 0)),
+                serialNumbers: assignedSns,
+              };
+            }),
             subtotal: selectedQueueSale.subtotal || selectedQueueSale.totalAmount,
             discountAmount: revisedDiscount,
             deliveryCharges: selectedQueueSale.deliveryCharges || 0,
@@ -218,6 +359,9 @@ function SalesWorkspaceContent() {
         setShowVerifyModal(false);
         setSelectedQueueSale(null);
         setQueuePriceAdjustment(0);
+        setQueueItemSerials({});
+        setQueueAvailableSerials({});
+        setQueueSerialInputs({});
         fetchQueue();
         broadcastOrderSync();
       } else {
@@ -597,10 +741,7 @@ function SalesWorkspaceContent() {
     if (targetSaleIdParam && pendingSales.length > 0 && !showVerifyModal) {
       const found = pendingSales.find((s) => s._id === targetSaleIdParam);
       if (found && found.status !== "COMPLETED") {
-        setSelectedQueueSale(found);
-        setQueuePriceAdjustment(0);
-        setQueuePaymentMethod((found.paymentMethod as any) || "CASH");
-        setShowVerifyModal(true);
+        openQueueVerifyModal(found);
       }
     }
   }, [targetSaleIdParam, pendingSales, showVerifyModal]);
@@ -2278,12 +2419,7 @@ function SalesWorkspaceContent() {
                             </button>
                             {sale.status !== "COMPLETED" && (
                               <button
-                                onClick={() => {
-                                  setSelectedQueueSale(sale);
-                                  setQueuePriceAdjustment(0);
-                                  setQueuePaymentMethod((sale.paymentMethod as any) || "CASH");
-                                  setShowVerifyModal(true);
-                                }}
+                                onClick={() => openQueueVerifyModal(sale)}
                                 className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg font-bold shadow-lg shadow-emerald-600/20 transition flex items-center gap-1"
                               >
                                 ✅ {cardDue > 0 ? `Collect Rs. ${cardDue.toLocaleString()} & Complete` : "Verify & Complete"}
@@ -3796,8 +3932,8 @@ function SalesWorkspaceContent() {
         {/* Queue Order Verification & Final Payment Modal */}
         {showVerifyModal && selectedQueueSale && (
           <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-lg w-full space-y-5 shadow-2xl">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-xl w-full max-h-[92vh] flex flex-col shadow-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
                 <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                   <CheckCircle className="w-4 h-4 text-emerald-400" />
                   Verify & Complete Order #{selectedQueueSale.saleNumber}
@@ -3813,7 +3949,7 @@ function SalesWorkspaceContent() {
                 </button>
               </div>
 
-              <div className="space-y-3 text-xs">
+              <div className="space-y-4 text-xs overflow-y-auto pr-1">
                 {(() => {
                   const mTotal = selectedQueueSale.totalAmount || 0;
                   const mPaid = selectedQueueSale.totalPaid || 0;
@@ -3877,6 +4013,188 @@ function SalesWorkspaceContent() {
                     </div>
                   );
                 })()}
+
+                {/* Fulfillment Location Reassignment */}
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <Truck className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Fulfilling Branch / Location:</span>
+                    </label>
+                    {reassigningQueueLocation && (
+                      <span className="text-[10px] text-amber-400 font-semibold animate-pulse">
+                        Updating location...
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    value={queueFulfillLocationId}
+                    disabled={reassigningQueueLocation}
+                    onChange={(e) => handleReassignQueueLocation(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-medium"
+                  >
+                    {locations.map((loc) => (
+                      <option key={loc._id} value={loc._id}>
+                        {loc.name} {loc._id === (selectedQueueSale.location?._id || selectedQueueSale.location) ? "(Current Location)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Ordered Items & Serial Number Tracking */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <Barcode className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Ordered Items & Serial Numbers</span>
+                    </label>
+                    {loadingQueueSerials && (
+                      <span className="text-[10px] text-slate-400">Loading stock serials...</span>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                    {(selectedQueueSale.items || []).map((item: any, idx: number) => {
+                      const pId = (item.product?._id || item.product || "").toString();
+                      const prodMeta = products.find((p) => p._id === pId);
+                      const isTracked = prodMeta?.serialTracking || (queueAvailableSerials[pId] && queueAvailableSerials[pId].length > 0) || (item.serialNumbers && item.serialNumbers.length > 0);
+                      const assignedSerials = queueItemSerials[pId] || [];
+                      const isComplete = assignedSerials.length === item.quantity;
+                      const availList = (queueAvailableSerials[pId] || []).filter((sn) => !assignedSerials.includes(sn));
+
+                      return (
+                        <div
+                          key={idx}
+                          className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2"
+                        >
+                          <div className="flex justify-between items-start gap-2">
+                            <div>
+                              <div className="font-bold text-slate-100 text-xs">
+                                {item.productName || "Product Item"}
+                              </div>
+                              <div className="text-[11px] text-slate-400">
+                                Condition: <span className="text-slate-300">{item.condition || "New"}</span> | Qty: <span className="font-bold text-emerald-400">{item.quantity}</span> | Rate: Rs. {(item.unitPrice || 0).toLocaleString()}
+                              </div>
+                            </div>
+
+                            {isTracked ? (
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                                  isComplete
+                                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                                    : "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                                }`}
+                              >
+                                {isComplete ? "✅ Serials Assigned" : `⚠️ ${assignedSerials.length}/${item.quantity} Required`}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded-full border border-slate-800">
+                                Non-serialized
+                              </span>
+                            )}
+                          </div>
+
+                          {isTracked && (
+                            <div className="pt-2 border-t border-slate-900 space-y-2">
+                              {/* Scanned / Assigned Serial Chips */}
+                              {assignedSerials.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 items-center">
+                                  {assignedSerials.map((sn, sIdx) => (
+                                    <span
+                                      key={sIdx}
+                                      className="inline-flex items-center gap-1 bg-emerald-950/60 border border-emerald-600/40 text-emerald-300 text-[11px] font-mono px-2 py-0.5 rounded-md font-semibold"
+                                    >
+                                      <span>{sn}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveSerialFromQueueItem(pId, sn)}
+                                        className="text-emerald-400 hover:text-rose-400 transition ml-0.5"
+                                        title="Remove Serial"
+                                      >
+                                        ✕
+                                      </button>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Serial Input & Available Selector if more needed */}
+                              {assignedSerials.length < item.quantity && (
+                                <div className="space-y-1.5">
+                                  <div className="flex gap-1.5 items-center">
+                                    <div className="relative flex-1">
+                                      <input
+                                        type="text"
+                                        placeholder="Scan barcode or type serial..."
+                                        value={queueSerialInputs[pId] || ""}
+                                        onChange={(e) =>
+                                          setQueueSerialInputs((prev) => ({
+                                            ...prev,
+                                            [pId]: e.target.value,
+                                          }))
+                                        }
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            e.preventDefault();
+                                            handleAddSerialToQueueItem(
+                                              pId,
+                                              queueSerialInputs[pId] || "",
+                                              item.quantity
+                                            );
+                                          }
+                                        }}
+                                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                                      />
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleAddSerialToQueueItem(
+                                          pId,
+                                          queueSerialInputs[pId] || "",
+                                          item.quantity
+                                        )
+                                      }
+                                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition"
+                                    >
+                                      Add
+                                    </button>
+                                  </div>
+
+                                  {/* Quick Select from Available Stock */}
+                                  {availList.length > 0 && (
+                                    <div className="flex items-center gap-2 text-[11px]">
+                                      <span className="text-slate-400 text-[10px] shrink-0">Quick Pick:</span>
+                                      <select
+                                        defaultValue=""
+                                        onChange={(e) => {
+                                          if (e.target.value) {
+                                            handleAddSerialToQueueItem(pId, e.target.value, item.quantity);
+                                            e.target.value = "";
+                                          }
+                                        }}
+                                        className="bg-slate-900 border border-slate-800 rounded-md px-2 py-0.5 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-indigo-500"
+                                      >
+                                        <option value="" disabled>
+                                          Select Available S/N ({availList.length} in stock)...
+                                        </option>
+                                        {availList.map((availSn) => (
+                                          <option key={availSn} value={availSn}>
+                                            {availSn}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
 
                 {/* +/- Price Adjustment Input Field */}
                 <div className="space-y-1.5 bg-slate-950 p-3 rounded-xl border border-slate-800">
@@ -3978,31 +4296,54 @@ function SalesWorkspaceContent() {
                 </div>
               </div>
 
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowVerifyModal(false);
-                    setSelectedQueueSale(null);
-                    setQueuePriceAdjustment(0);
-                  }}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={completingQueueSale}
-                  onClick={handleCompleteQueueCheckout}
-                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/20 transition flex items-center gap-2"
-                >
-                  {completingQueueSale ? (
-                    <span>Processing...</span>
-                  ) : (
-                    <span>Complete & Print Invoice 🖨️</span>
-                  )}
-                </button>
-              </div>
+              {(() => {
+                let missingCount = 0;
+                for (const it of selectedQueueSale.items || []) {
+                  const pId = (it.product?._id || it.product || "").toString();
+                  const prodMeta = products.find((p) => p._id === pId);
+                  const isTracked = prodMeta?.serialTracking || (queueAvailableSerials[pId] && queueAvailableSerials[pId].length > 0) || (it.serialNumbers && it.serialNumbers.length > 0);
+                  if (isTracked) {
+                    const assigned = (queueItemSerials[pId] || []).length;
+                    if (assigned < it.quantity) {
+                      missingCount += (it.quantity - assigned);
+                    }
+                  }
+                }
+
+                return (
+                  <div className="flex justify-end gap-3 pt-3 border-t border-slate-800 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowVerifyModal(false);
+                        setSelectedQueueSale(null);
+                        setQueuePriceAdjustment(0);
+                      }}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={completingQueueSale || missingCount > 0}
+                      onClick={handleCompleteQueueCheckout}
+                      className={`px-5 py-2.5 text-white text-xs font-bold rounded-xl shadow-lg transition flex items-center gap-2 ${
+                        missingCount > 0
+                          ? "bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed opacity-80"
+                          : "bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20"
+                      }`}
+                    >
+                      {completingQueueSale ? (
+                        <span>Processing...</span>
+                      ) : missingCount > 0 ? (
+                        <span>⚠️ Assign Serials ({missingCount} needed)</span>
+                      ) : (
+                        <span>Complete & Print Invoice 🖨️</span>
+                      )}
+                    </button>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}

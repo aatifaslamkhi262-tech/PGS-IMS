@@ -19,7 +19,7 @@ import { ToastContainer, ToastMessage } from "@/components/Toast";
 
 interface PendingApprovalItem {
   id: string;
-  type: "Purchase Invoice" | "Purchase Receiving" | "Stock Transfer";
+  type: "Purchase Invoice" | "Purchase Receiving" | "Stock Transfer" | "Stock Audit";
   reference: string;
   parentReference?: string;
   supplierName: string;
@@ -126,6 +126,8 @@ export default function ApprovalsPage() {
           ? `/api/purchase-invoices/${item.id}`
           : item.type === "Purchase Receiving"
           ? `/api/purchase-receivings/${item.id}`
+          : item.type === "Stock Audit"
+          ? `/api/inventory/audit/${item.id}`
           : `/api/transfers/${item.id}`;
       const res = await fetch(endpoint);
       const data = await res.json();
@@ -155,6 +157,8 @@ export default function ApprovalsPage() {
           ? `/api/purchase-invoices/${selectedItem.id}/approve`
           : selectedItem.type === "Purchase Receiving"
           ? `/api/purchase-receivings/${selectedItem.id}/approve`
+          : selectedItem.type === "Stock Audit"
+          ? `/api/inventory/audit/${selectedItem.id}/approve`
           : `/api/transfers/${selectedItem.id}/approve`;
 
       const res = await fetch(endpoint, { method: "POST" });
@@ -193,6 +197,8 @@ export default function ApprovalsPage() {
           ? `/api/purchase-invoices/${selectedItem.id}/reject`
           : selectedItem.type === "Purchase Receiving"
           ? `/api/purchase-receivings/${selectedItem.id}/reject`
+          : selectedItem.type === "Stock Audit"
+          ? `/api/inventory/audit/${selectedItem.id}/reject`
           : `/api/transfers/${selectedItem.id}/reject`;
 
       const res = await fetch(endpoint, {

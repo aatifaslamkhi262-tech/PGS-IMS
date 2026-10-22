@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json().catch(() => ({}));
-    const { product: productId, location: locationId, quantity: rawQty, serialNumbers, notes } = body;
+    const { product: productId, location: locationId, quantity: rawQty, unitCost: rawUnitCost, costPrice: rawCostPrice, serialNumbers, notes } = body;
 
     // 1. Validations
     if (!productId) {
@@ -109,7 +109,14 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // 3. Update Inventory
+      // 3. Update Inventory with Proper Costing
+      const { isValidCost, blendAverageCost } = await import("@/lib/costing");
+      const resolvedUnitCost = (rawUnitCost !== undefined && isValidCost(Number(rawUnitCost)))
+        ? Number(rawUnitCost)
+        : ((rawCostPrice !== undefined && isValidCost(Number(rawCostPrice)))
+            ? Number(rawCostPrice)
+            : ((productObj.costPrice && isValidCost(productObj.costPrice)) ? productObj.costPrice : 0));
+
       let inventory = await Inventory.findOne({
         product: productId,
         location: locationId,
@@ -124,14 +131,40 @@ export async function POST(req: NextRequest) {
           location: locationId,
           condition: productObj.condition,
           quantity: quantity,
+          averageCost: resolvedUnitCost,
+          totalCostValue: Math.round(quantity * resolvedUnitCost * 100) / 100,
           serialTracking: productObj.serialTracking,
+          status: quantity > 0 ? "In Stock" : "Out of Stock",
         });
       } else {
-        inventory.quantity += quantity;
+        const existingQty = Math.max(0, inventory.quantity || 0);
+        const existingAvg = (inventory.averageCost && isValidCost(inventory.averageCost))
+          ? inventory.averageCost
+          : resolvedUnitCost;
+        const newQty = existingQty + quantity;
+        const newAvg = (existingQty > 0 && isValidCost(existingAvg) && isValidCost(resolvedUnitCost))
+          ? blendAverageCost({
+              existingQty,
+              existingAvg,
+              incomingQty: quantity,
+              incomingCost: resolvedUnitCost,
+            })
+          : (isValidCost(resolvedUnitCost) ? resolvedUnitCost : existingAvg);
+
+        inventory.quantity = newQty;
+        inventory.averageCost = newAvg;
+        inventory.totalCostValue = Math.round(newQty * newAvg * 100) / 100;
+        inventory.status = newQty > 0 ? "In Stock" : "Out of Stock";
       }
 
       await inventory.save({ session });
       const afterQuantity = inventory.quantity;
+
+      // Update product master costPrice if it was missing/placeholder and opening stock has valid cost
+      if ((!productObj.costPrice || productObj.costPrice <= 1) && resolvedUnitCost > 1) {
+        productObj.costPrice = resolvedUnitCost;
+        await productObj.save({ session });
+      }
 
       // 4. Create serials if serialized
       if (productObj.serialTracking) {
@@ -157,6 +190,8 @@ export async function POST(req: NextRequest) {
           {
             product: productId,
             quantity: quantity,
+            unitCost: resolvedUnitCost,
+            totalCost: Math.round(quantity * resolvedUnitCost * 100) / 100,
             serialNumbers: cleanSerials,
             sourceName: "Opening Balance",
             destinationLocation: locationId,

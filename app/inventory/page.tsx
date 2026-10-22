@@ -13,6 +13,7 @@ import {
   Plus,
   X,
   Camera,
+  CheckSquare,
 } from "lucide-react";
 import { ToastContainer, ToastMessage } from "@/components/Toast";
 import { Pagination } from "@/components/Pagination";
@@ -284,18 +285,28 @@ export default function InventoryPage() {
           </p>
         </div>
 
-        {userRole && (userRole === "Admin" || userRole === "Warehouse") && (
-          <button
-            onClick={() => {
-              setShowLocationModal(true);
-              setModalError("");
-            }}
-            className="flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-655 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold shadow-md shadow-indigo-900/30 transition-colors cursor-pointer w-full sm:w-auto"
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <Link
+            href="/inventory/audit"
+            className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-md shadow-emerald-900/30 transition-colors w-full sm:w-auto"
           >
-            <Plus className="w-4 h-4" />
-            <span>Create Location</span>
-          </button>
-        )}
+            <CheckSquare className="w-4 h-4" />
+            <span>Shelf Stock Audit</span>
+          </Link>
+
+          {userRole && (userRole === "Admin" || userRole === "Warehouse") && (
+            <button
+              onClick={() => {
+                setShowLocationModal(true);
+                setModalError("");
+              }}
+              className="flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-655 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold shadow-md shadow-indigo-900/30 transition-colors cursor-pointer w-full sm:w-auto"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create Location</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Search & Filter Panel */}

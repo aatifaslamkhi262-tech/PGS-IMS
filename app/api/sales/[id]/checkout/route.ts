@@ -16,7 +16,7 @@ export async function POST(
 
     const { id } = await params;
     const body = await req.json();
-    const { paymentAllocations, priceAdjustment, notes } = body;
+    const { paymentAllocations, priceAdjustment, notes, itemSerials } = body;
 
     if (!paymentAllocations || !Array.isArray(paymentAllocations) || paymentAllocations.length === 0) {
       return NextResponse.json({ success: false, error: "Payment allocations are required." }, { status: 400 });
@@ -28,6 +28,7 @@ export async function POST(
       paymentAllocations,
       priceAdjustment: priceAdjustment !== undefined ? Number(priceAdjustment) : undefined,
       notes,
+      itemSerials,
     });
 
     const completedSaleDoc = result.sale;

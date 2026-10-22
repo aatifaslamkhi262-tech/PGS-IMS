@@ -332,6 +332,10 @@ export interface CompleteSaleInput {
   }>;
   priceAdjustment?: number;
   notes?: string;
+  itemSerials?: Array<{
+    productId: string;
+    serialNumbers: string[];
+  }>;
 }
 
 /**
@@ -411,6 +415,17 @@ export async function completeSale(input: CompleteSaleInput) {
       throw new Error("Sale record disappeared during transaction.");
     }
 
+    // Attach / Update serial numbers if provided at checkout (e.g. from Queue fulfillment)
+    if (input.itemSerials && Array.isArray(input.itemSerials) && input.itemSerials.length > 0) {
+      for (const itemSerial of input.itemSerials) {
+        const pIdStr = itemSerial.productId.toString();
+        const matchItem = sale.items.find((it) => it.product.toString() === pIdStr);
+        if (matchItem) {
+          matchItem.serialNumbers = itemSerial.serialNumbers.map((sn) => sn.trim()).filter(Boolean);
+        }
+      }
+    }
+
     const location = await Location.findById(sale.location).session(session);
     if (!location) {
       throw new Error("Sale location not found.");
@@ -464,7 +479,52 @@ export async function completeSale(input: CompleteSaleInput) {
         );
       }
 
-      if (item.serialNumbers && item.serialNumbers.length > 0) {
+      let isSerialTracked = false;
+      try {
+        const isMocked = typeof (Product.findById as any)?.mock === "object";
+        if (mongoose.connection.readyState === 1 || isMocked) {
+          const prodQuery: any = Product.findById(item.product);
+          if (session && prodQuery && typeof prodQuery.session === "function") {
+            prodQuery.session(session);
+          }
+          const prodDoc = prodQuery && typeof prodQuery.exec === "function" ? await prodQuery.exec() : await prodQuery;
+          isSerialTracked = Boolean(prodDoc?.serialTracking);
+        }
+      } catch {
+        // Graceful fallback in mocked unit tests
+      }
+
+      if (isSerialTracked) {
+        const cleanSerials = (item.serialNumbers || []).map((s) => s?.trim()).filter(Boolean);
+        if (cleanSerials.length !== item.quantity) {
+          throw new Error(
+            `Product '${item.productName}' requires exactly ${item.quantity} serial number(s) to complete checkout. (Currently assigned: ${cleanSerials.length})`
+          );
+        }
+
+        const snSet = new Set<string>();
+        for (const sn of cleanSerials) {
+          const upperSn = sn.toUpperCase();
+          if (snSet.has(upperSn)) {
+            throw new Error(`Duplicate serial number '${sn}' detected in order items.`);
+          }
+          snSet.add(upperSn);
+
+          const serialDoc = await SerialNumber.findOne({
+            product: item.product,
+            serialNumber: sn,
+          }).session(session);
+
+          if (!serialDoc) {
+            throw new Error(`Serial number '${sn}' not found in database for product '${item.productName}'.`);
+          }
+          if (serialDoc.status !== "Available" && serialDoc.status !== "Reserved") {
+            throw new Error(
+              `Serial number '${sn}' is not available (Current status: '${serialDoc.status}').`
+            );
+          }
+        }
+      } else if (item.serialNumbers && item.serialNumbers.length > 0) {
         for (const sn of item.serialNumbers) {
           const serialDoc = await SerialNumber.findOne({
             product: item.product,

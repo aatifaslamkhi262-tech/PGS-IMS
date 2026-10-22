@@ -96,16 +96,39 @@ export async function DELETE(
         });
 
         const beforeQty = inv ? inv.quantity : 0;
+
+        // Resolve accurate unit cost to restore
+        const { isValidCost } = await import("@/lib/costing");
+        let restoredCost = 0;
+        if (isValidCost(item.unitCost)) {
+          restoredCost = item.unitCost;
+        } else if (inv && isValidCost(inv.averageCost)) {
+          restoredCost = inv.averageCost;
+        } else {
+          const { Product } = await import("@/models/Product");
+          const prodDoc = await Product.findById(item.product);
+          if (prodDoc && isValidCost(prodDoc.costPrice)) {
+            restoredCost = prodDoc.costPrice;
+          }
+        }
+
         if (!inv) {
           inv = new Inventory({
             product: item.product,
             location: sale.location,
             condition: item.condition,
             quantity: item.quantity,
+            averageCost: restoredCost,
+            totalCostValue: Math.round(item.quantity * restoredCost * 100) / 100,
             status: "In Stock",
           });
         } else {
           inv.quantity += item.quantity;
+          if (!isValidCost(inv.averageCost) && restoredCost > 0) {
+            inv.averageCost = restoredCost;
+          }
+          const effCost = (inv.averageCost && isValidCost(inv.averageCost)) ? inv.averageCost : restoredCost;
+          inv.totalCostValue = Math.round(inv.quantity * effCost * 100) / 100;
           inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
         }
         await inv.save();
@@ -128,6 +151,8 @@ export async function DELETE(
         await InventoryMovement.create({
           product: item.product,
           quantity: item.quantity,
+          unitCost: restoredCost,
+          totalCost: Math.round(item.quantity * restoredCost * 100) / 100,
           serialNumbers: item.serialNumbers || [],
           sourceLocation: sale.location,
           sourceName: sale.customerName || "Customer",
@@ -290,11 +315,31 @@ export async function PATCH(
 
     const { id } = await params;
     const body = await req.json();
-    const { salesmanId, action, isAccrued } = body;
+    const { salesmanId, locationId, action, isAccrued } = body;
 
     const sale = await Sale.findById(id);
     if (!sale) {
       return NextResponse.json({ success: false, error: "Sale not found." }, { status: 404 });
+    }
+
+    if (locationId) {
+      if (sale.status === "COMPLETED") {
+        return NextResponse.json({ success: false, error: "Cannot reassign fulfilling location on a completed sale." }, { status: 400 });
+      }
+      const LocationModule = (await import("@/models/Location")).Location;
+      const targetLoc = await LocationModule.findById(locationId).lean();
+      if (!targetLoc) {
+        return NextResponse.json({ success: false, error: "Target location not found." }, { status: 400 });
+      }
+      sale.location = targetLoc._id as any;
+      sale.locationName = targetLoc.name;
+      await sale.save();
+
+      return NextResponse.json({
+        success: true,
+        message: `Fulfilling location updated to '${targetLoc.name}' successfully.`,
+        data: sale,
+      });
     }
 
     if (action === "TOGGLE_ACCRUED" || isAccrued !== undefined) {

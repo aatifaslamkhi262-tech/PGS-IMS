@@ -286,6 +286,14 @@ export const Navbar: React.FC<NavbarProps> = () => {
                       </Link>
 
                       <Link
+                        href="/inventory/audit"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-emerald-400 font-bold transition"
+                      >
+                        <CheckSquare className="w-4 h-4 text-emerald-400" />
+                        <span>Shelf Stock Audit</span>
+                      </Link>
+
+                      <Link
                         href="/price-lookup"
                         className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-slate-200 hover:bg-slate-800 hover:text-indigo-400 transition"
                       >
