@@ -142,20 +142,19 @@ export async function updateAverageCostOnIntake(
     await inv.save();
   }
 
-  // Synchronize any other active inventory pools for this product & condition to new company average
+  // Synchronize ALL other inventory pools for this product & condition to new company average
   try {
     const syncQuery = Inventory.find({
       product: input.productId,
       condition,
       _id: { $ne: inv._id },
-      quantity: { $gt: 0 },
     });
     if (session) syncQuery.session(session);
     const otherInvs = await syncQuery.exec();
     if (Array.isArray(otherInvs)) {
       for (const other of otherInvs) {
         other.averageCost = newAverageCost;
-        other.totalCostValue = Math.round(other.quantity * newAverageCost * 100) / 100;
+        other.totalCostValue = Math.round(Math.max(0, other.quantity || 0) * newAverageCost * 100) / 100;
         if (session) {
           await other.save({ session });
         } else {
@@ -167,11 +166,72 @@ export async function updateAverageCostOnIntake(
     // Ignore in mocked environments
   }
 
+  // Synchronize Product master baseline costPrice with new company average
+  try {
+    const prodUpdateQuery = Product.updateOne(
+      { _id: input.productId },
+      { $set: { costPrice: newAverageCost } }
+    );
+    if (session) prodUpdateQuery.session(session);
+    await prodUpdateQuery.exec();
+  } catch {
+    // Ignore in mocked environments
+  }
+
   return {
     newQuantity,
     newAverageCost,
     totalCostValue,
   };
+}
+
+/**
+ * Revalues all inventory pools and Product master cost for a given condition upon manual cost override.
+ */
+export async function revalueCompanyStockOnManualOverride(
+  input: {
+    productId: string | Types.ObjectId;
+    condition?: string;
+    newCost: number;
+  },
+  session?: ClientSession
+): Promise<{ newAverageCost: number; updatedPoolsCount: number }> {
+  const newCost = Math.max(0, Number(input.newCost || 0));
+  const condition = input.condition || "New";
+
+  const invQuery = Inventory.find({
+    product: input.productId,
+    condition,
+  });
+  if (session) invQuery.session(session);
+  const invs = await invQuery.exec();
+
+  let count = 0;
+  if (Array.isArray(invs)) {
+    for (const inv of invs) {
+      inv.averageCost = newCost;
+      inv.totalCostValue = Math.round(Math.max(0, inv.quantity || 0) * newCost * 100) / 100;
+      if (session) {
+        await inv.save({ session });
+      } else {
+        await inv.save();
+      }
+      count++;
+    }
+  }
+
+  try {
+    const prodUpdateQuery = Product.updateOne(
+      { _id: input.productId },
+      { $set: { costPrice: newCost } }
+    );
+    if (session) prodUpdateQuery.session(session);
+    await prodUpdateQuery.exec();
+  } catch {
+    // Ignore in mocked environments
+  }
+
+  return { newAverageCost: newCost, updatedPoolsCount: count };
 }
 
 /**

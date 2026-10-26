@@ -612,7 +612,13 @@ export async function executeStockAuditReconciliation(
 
     const beforeQty = inv.quantity;
     inv.quantity = Math.max(0, itemVar.physicalQuantity);
-    inv.totalCostValue = inv.quantity * (inv.averageCost || itemVar.unitCost || 0);
+    if (!inv.averageCost || inv.averageCost <= 1) {
+      if (itemVar.unitCost && itemVar.unitCost > 1) {
+        inv.averageCost = itemVar.unitCost;
+      }
+    }
+    inv.totalCostValue = Math.round(inv.quantity * (inv.averageCost || itemVar.unitCost || 0) * 100) / 100;
+    inv.status = inv.quantity > 0 ? "In Stock" : "Out of Stock";
     await inv.save({ session });
 
     await new InventoryMovement({

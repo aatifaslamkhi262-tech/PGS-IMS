@@ -1552,6 +1552,8 @@ function SalesWorkspaceContent() {
         action: "RENTAL_SWAP",
         locationId: targetLocationId,
         salesman: (selectedSalesman && selectedSalesman !== "ALL" && selectedSalesman !== "DIRECT") ? selectedSalesman : undefined,
+        bookingId: selectedRentalBooking?._id || undefined,
+        customerId: selectedRentalBooking?.customer || undefined,
         customerName: customerName || "Rental Customer",
         customerPhone: customerPhone || undefined,
         securityDepositPaid: totalSecDeposit,

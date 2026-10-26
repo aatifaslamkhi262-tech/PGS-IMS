@@ -278,4 +278,61 @@ describe("Physical Shelf Stock Audit & Reconciliation Engine", () => {
     expect(reconciledAudit.approvedBy).toBe("admin_user");
     expect(mockAudit.save).toHaveBeenCalled();
   });
+
+  it("analyzeStockAudit cleanly accepts physicalCounts for newly discovered items not in branch inventory", async () => {
+    vi.spyOn(Location, "findById").mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: dhaLocationId,
+        name: "DHA Branch",
+      }),
+    } as any);
+
+    // Empty branch inventory (0 items)
+    vi.spyOn(Inventory, "find").mockReturnValue({
+      populate: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue([]),
+      }),
+    } as any);
+
+    // Mock SerialNumber.find for local available serials
+    vi.spyOn(SerialNumber, "find").mockReturnValue({
+      populate: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue([]),
+      }),
+    } as any);
+
+    // Mock product master lookup for newly discovered accessory
+    const accessoryId = new Types.ObjectId("60c72b2f9b1d8b2b8c8ba005");
+    vi.spyOn(Product, "findById").mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: accessoryId,
+        name: "Type-C Fast Cable",
+        costPrice: 500,
+        serialTracking: false,
+      }),
+    } as any);
+
+    const analysis = await analyzeStockAudit({
+      locationId: dhaLocationId.toString(),
+      scannedSerials: [],
+      physicalCounts: [
+        {
+          productId: accessoryId.toString(),
+          condition: "New",
+          physicalQuantity: 5,
+        },
+      ],
+      auditScope: "NON_SERIALIZED_ONLY",
+    });
+
+    expect(analysis.itemVariances.length).toBe(1);
+    expect(analysis.itemVariances[0].productName).toBe("Type-C Fast Cable");
+    expect(analysis.itemVariances[0].systemQuantity).toBe(0);
+    expect(analysis.itemVariances[0].physicalQuantity).toBe(5);
+    expect(analysis.itemVariances[0].variance).toBe(5); // +5 surplus
+    expect(analysis.itemVariances[0].unitCost).toBe(500);
+    expect(analysis.itemVariances[0].totalCostDelta).toBe(2500); // 5 * 500
+    expect(analysis.summary.totalSurplusUnits).toBe(5);
+  });
 });
+

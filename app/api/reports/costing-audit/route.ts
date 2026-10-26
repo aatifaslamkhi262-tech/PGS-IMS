@@ -16,6 +16,10 @@ export async function GET() {
       .sort({ updatedAt: -1 })
       .lean();
 
+    const productIds = products.map((p: any) => p._id.toString());
+    const { batchCalculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
+    const batchPricing = await batchCalculateProductWeightedPricing(productIds);
+
     let sellingBelowCostCount = 0;
     let minPriceErrorCount = 0;
     let zeroCostCount = 0;
@@ -23,9 +27,13 @@ export async function GET() {
     let zeroPriceCount = 0;
 
     const auditedProducts = products.map((prod: any) => {
-      const cost = Number(prod.costPrice || 0);
-      const sell = Number(prod.sellingPrice || 0);
-      const minSell = Number(prod.minSellingPrice || 0);
+      const pId = prod._id.toString();
+      const pricing = batchPricing[pId];
+      const effective = resolveProductEffectivePricing(prod, pricing);
+
+      const cost = Number(effective.costPrice !== undefined ? effective.costPrice : (prod.costPrice || 0));
+      const sell = Number(effective.sellingPrice !== undefined ? effective.sellingPrice : (prod.sellingPrice || 0));
+      const minSell = Number(effective.minSellingPrice !== undefined ? effective.minSellingPrice : (prod.minSellingPrice || 0));
 
       const reasons: Array<{ code: string; label: string; severity: "HIGH" | "MEDIUM" | "LOW" }> = [];
 

@@ -24,6 +24,7 @@ import {
   Receipt,
   ArrowDownLeft,
   ArrowUpRight,
+  Gamepad2,
 } from "lucide-react";
 import { ThermalReceiptModal } from "@/components/ThermalReceipt";
 
@@ -35,7 +36,7 @@ export default function CustomersPage() {
   const [customerSales, setCustomerSales] = useState<any[]>([]);
   const [customerRentals, setCustomerRentals] = useState<any[]>([]);
   const [customerLedger, setCustomerLedger] = useState<any[]>([]);
-  const [activeHistoryTab, setActiveHistoryTab] = useState<"LEDGER" | "SALES">("LEDGER");
+  const [activeHistoryTab, setActiveHistoryTab] = useState<"LEDGER" | "SALES" | "RENTALS">("LEDGER");
   const [salesmen, setSalesmen] = useState<any[]>([]);
   const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -452,10 +453,15 @@ export default function CustomersPage() {
                 </div>
 
                 <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
-                  <span className="text-[10px] font-bold text-purple-400 uppercase">Advance & Rental Deposits</span>
+                  <span className="text-[10px] font-bold text-purple-400 uppercase">Customer Advance Balance</span>
                   <p className="font-mono font-bold text-purple-400 text-sm">
-                    Rs. {(selectedCustomer.advanceBalance + activeRentalDepositTotal).toLocaleString()}
+                    Rs. {selectedCustomer.advanceBalance.toLocaleString()}
                   </p>
+                  {activeRentalDepositTotal > 0 && (
+                    <p className="text-[10px] text-purple-300/80 font-mono">
+                      + Active Rental Dep: Rs. {activeRentalDepositTotal.toLocaleString()}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -488,6 +494,19 @@ export default function CustomersPage() {
                       <Receipt className="w-3.5 h-3.5" />
                       <span>POS Sales Invoices ({customerSales.length})</span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveHistoryTab("RENTALS")}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                        activeHistoryTab === "RENTALS"
+                          ? "bg-purple-600 text-white shadow-md shadow-purple-600/20"
+                          : "bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800"
+                      }`}
+                    >
+                      <Gamepad2 className="w-3.5 h-3.5" />
+                      <span>Rental Bookings ({customerRentals.length})</span>
+                    </button>
                   </div>
                 </div>
 
@@ -502,7 +521,7 @@ export default function CustomersPage() {
                           <th className="p-3">Type / Description</th>
                           <th className="p-3 text-right">Debit (+ Udhar)</th>
                           <th className="p-3 text-right">Credit (- Wasool)</th>
-                          <th className="p-3 text-right">Running Due</th>
+                          <th className="p-3 text-right">Running Balance</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/60 font-mono">
@@ -553,8 +572,18 @@ export default function CustomersPage() {
                               <td className="p-3 text-right font-bold text-emerald-400">
                                 {entry.credit > 0 ? `Rs. ${entry.credit.toLocaleString()}` : "-"}
                               </td>
-                              <td className="p-3 text-right font-bold text-slate-200">
-                                Rs. {entry.runningOutstanding?.toLocaleString() || 0}
+                              <td className="p-3 text-right font-bold font-mono">
+                                {entry.runningOutstanding > 0 ? (
+                                  <span className="text-rose-400 font-bold" title="Customer Udhar Due">
+                                    Due: Rs. {entry.runningOutstanding.toLocaleString()}
+                                  </span>
+                                ) : entry.runningAdvance > 0 ? (
+                                  <span className="text-purple-400 font-bold" title="Customer Advance Credit">
+                                    Adv: Rs. {entry.runningAdvance.toLocaleString()}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400">Rs. 0</span>
+                                )}
                               </td>
                             </tr>
                           ))
@@ -721,6 +750,82 @@ export default function CustomersPage() {
                           </React.Fragment>
                         );
                       })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* 🎮 Rental Bookings Tab Table */}
+              {activeHistoryTab === "RENTALS" && (
+                <div className="overflow-x-auto bg-slate-950 border border-slate-800 rounded-xl">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-slate-900 border-b border-slate-800 text-slate-400">
+                      <tr>
+                        <th className="p-3">Booking #</th>
+                        <th className="p-3">Date</th>
+                        <th className="p-3">Rented Game(s)</th>
+                        <th className="p-3 text-right">Deposit Held</th>
+                        <th className="p-3 text-right">Rent Realized</th>
+                        <th className="p-3 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono">
+                      {customerRentals.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-6 text-center text-slate-500 font-sans">
+                            Koi rental booking nahi mili is customer ki.
+                          </td>
+                        </tr>
+                      ) : (
+                        customerRentals.map((r) => (
+                          <tr key={r._id} className="hover:bg-slate-900/60 transition">
+                            <td className="p-3 font-bold text-purple-400">
+                              {r.bookingNumber}
+                            </td>
+                            <td className="p-3 font-sans text-slate-300">
+                              {new Date(r.createdAt).toLocaleDateString()}
+                            </td>
+                            <td className="p-3 font-sans">
+                              <div className="space-y-1">
+                                {r.items?.map((it: any, itIdx: number) => (
+                                  <div key={itIdx} className="flex items-center gap-2">
+                                    <span className="font-semibold text-slate-200">
+                                      {it.productName}
+                                    </span>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                                      it.status === "RETURNED"
+                                        ? "bg-slate-800 text-slate-400"
+                                        : "bg-purple-950 text-purple-300 border border-purple-800/40"
+                                    }`}>
+                                      {it.status === "RETURNED" ? "Wapis (Returned)" : "Out on Rent"}
+                                    </span>
+                                    {it.depositPaid > 0 && (
+                                      <span className="text-[10px] text-slate-400 font-mono">
+                                        (Dep: Rs. {it.depositPaid?.toLocaleString()})
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="p-3 text-right text-emerald-400 font-bold">
+                              Rs. {(r.totalDepositHeld || 0).toLocaleString()}
+                            </td>
+                            <td className="p-3 text-right text-purple-300 font-bold">
+                              Rs. {(r.totalRentRealized || 0).toLocaleString()}
+                            </td>
+                            <td className="p-3 text-center font-sans">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                r.status === "COMPLETED"
+                                  ? "bg-slate-800 text-slate-300 border border-slate-700"
+                                  : "bg-purple-950/80 text-purple-300 border border-purple-800/60"
+                              }`}>
+                                {r.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>

@@ -8,6 +8,7 @@ import { InventoryMovement } from "@/models/InventoryMovement";
 import { SerialNumber } from "@/models/SerialNumber";
 import { Location } from "@/models/Location";
 import { User } from "@/models/User";
+import { RentalBooking } from "@/models/RentalBooking";
 import { updateAverageCostOnIntake, deductInventoryWithAverageCost } from "@/lib/averageCostEngine";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 import { recordCashMovement } from "@/lib/cashSessionEngine";
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { action, originalSaleId, locationId, salesman, customerName, customerPhone, securityDepositPaid, rentalFeeDeducted, additionalTopUpCash, returnedItem, returnedItems, replacementItems, paymentMethod, cashAmount, nonCashAmount, processedBy, notes } = body;
+    const { action, originalSaleId, locationId, salesman, customerName, customerPhone, securityDepositPaid, rentalFeeDeducted, additionalTopUpCash, returnedItem, returnedItems, replacementItems, paymentMethod, cashAmount, nonCashAmount, processedBy, notes, bookingId } = body;
     idempotencyKeyHeader = request.headers.get("x-idempotency-key") || body.idempotencyKey || "";
 
     if (idempotencyKeyHeader) {
@@ -140,10 +141,26 @@ export async function POST(request: Request) {
       let beforeQty = 0;
       let afterQty = 0;
 
-      // In RENTAL_SWAP, intake inventory at the product's actual costPrice so rental deposits/fees never skew moving average inventory cost
-      const intakeUnitCost = action === "RENTAL_SWAP"
-        ? (Number(product.costPrice) > 0 ? Number(product.costPrice) : returnValuation)
-        : returnValuation;
+      // Determine authentic Inventory intake unit cost to protect moving average from customer selling prices or refund amounts
+      let intakeUnitCost = 0;
+      const origItem = originalSale?.items?.find(
+        (it: any) => it.product?.toString() === rItem.productId?.toString()
+      );
+
+      if (action === "RENTAL_SWAP") {
+        intakeUnitCost = Number(product.costPrice) > 0 ? Number(product.costPrice) : returnValuation;
+      } else if (origItem && isValidCost(origItem.unitCost) && (rItem.condition === origItem.condition || !rItem.condition)) {
+        // Returned in same condition: restore inventory at original Cost of Goods Sold (COGS)
+        intakeUnitCost = origItem.unitCost;
+      } else if (rItem.agreedReturnValuation !== undefined && isValidCost(Number(rItem.agreedReturnValuation)) && rItem.condition !== origItem?.condition) {
+        // Altered/degraded condition with explicit staff valuation for the new condition pool
+        intakeUnitCost = Number(rItem.agreedReturnValuation);
+      } else {
+        // Fallback to active pool moving average or product costPrice to protect pool averageCost
+        const { getPoolAverageCost } = await import("@/lib/averageCostEngine");
+        const poolAvg = await getPoolAverageCost(product._id, targetLocationId, condition, isTxActive ? session : undefined);
+        intakeUnitCost = isValidCost(poolAvg) ? poolAvg : (isValidCost(product.costPrice) ? product.costPrice : returnValuation);
+      }
 
       if (isValidCost(intakeUnitCost)) {
         const currentInv = await Inventory.findOne({
@@ -444,7 +461,7 @@ export async function POST(request: Request) {
           referenceType: "Return",
           referenceId: returnTxNumber,
           notes: action === "RENTAL_SWAP"
-            ? `Rental Return Deposit Credit (Deposit: Rs. ${secDepositPaid}, Rent Deducted: Rs. ${rentDeducted})`
+            ? `Rental Return Deposit Credit (Deposit: Rs. ${secDepositPaid}, Rent Deducted: Rs. ${rentDeducted}${topUpCash > 0 ? `, Top-up Paid: Rs. ${topUpCash}` : ""})`
             : `Returned items against Invoice ${originalSale?.saleNumber || ""}`,
           createdBy: processedBy || auth.user?.username || "system",
         },
@@ -505,6 +522,90 @@ export async function POST(request: Request) {
             isTxActive ? session : undefined
           );
         }
+      }
+    }
+
+    // Resolve & Update existing RentalBooking(s) and create new booking if replacement games issued
+    if (action === "RENTAL_SWAP") {
+      const activeBookings = await RentalBooking.find({
+        $or: [
+          ...(bookingId && mongoose.Types.ObjectId.isValid(bookingId) ? [{ _id: bookingId }] : []),
+          ...(targetCustId ? [{ customer: targetCustId }] : []),
+          ...(customerPhone ? [{ customerPhone: customerPhone.trim() }] : []),
+        ],
+        status: { $ne: "COMPLETED" },
+      }).sort({ createdAt: 1 });
+
+      let remainingRentCut = rentDeducted;
+      for (const booking of activeBookings) {
+        let bookingModified = false;
+        for (const rItem of rawReturnedList) {
+          const matchItem = booking.items.find(
+            (it: any) =>
+              (it.status === "ON_RENT" || !it.status) &&
+              (it.product.toString() === rItem.productId.toString() ||
+                (rItem.serialNumber && it.serialNumber === rItem.serialNumber))
+          );
+          if (matchItem) {
+            matchItem.status = "RETURNED";
+            matchItem.returnedAt = new Date();
+            const allocatedFee = Math.min(matchItem.depositPaid, remainingRentCut);
+            matchItem.accruedRent = (matchItem.accruedRent || 0) + allocatedFee;
+            matchItem.netRefundPaid = Math.max(0, matchItem.depositPaid - allocatedFee);
+            remainingRentCut = Math.max(0, remainingRentCut - allocatedFee);
+            booking.totalRentRealized = (booking.totalRentRealized || 0) + allocatedFee;
+            booking.totalDepositHeld = Math.max(0, booking.totalDepositHeld - matchItem.depositPaid);
+            bookingModified = true;
+          }
+        }
+
+        const hasRemainingItems = booking.items.some((it: any) => it.status === "ON_RENT");
+        if (!hasRemainingItems) {
+          booking.status = "COMPLETED";
+          booking.totalDepositHeld = 0;
+          bookingModified = true;
+        } else {
+          booking.status = "PARTIALLY_RETURNED";
+        }
+
+        if (bookingModified) {
+          if (isTxActive) await booking.save({ session });
+          else await booking.save();
+        }
+      }
+
+      // If replacement items were taken on rent in this swap, create a new active RentalBooking for them
+      if (processedReplacements.length > 0) {
+        const newBookingNum = `RENT-${dateStr}-${Math.floor(100 + Math.random() * 900)}`;
+        const newRentalBooking = new RentalBooking({
+          bookingNumber: newBookingNum,
+          location: targetLocationId,
+          locationName: location.name,
+          salesman: salesmanUser?._id,
+          salesmanName: salesmanUser?.name || salesmanUser?.username || "Direct Counter",
+          customer: targetCustId || undefined,
+          customerName: customerName || "Rental Customer",
+          customerPhone: customerPhone || undefined,
+          items: processedReplacements.map((it: any) => ({
+            product: it.product,
+            productName: it.productName,
+            sku: it.sku,
+            serialNumber: it.serialNumbers?.[0] || undefined,
+            condition: it.condition || "Used",
+            depositPaid: it.lineTotal,
+            perDayRate: 0,
+            rentedAt: new Date(),
+            status: "ON_RENT",
+          })),
+          totalDepositHeld: replacementTotalValue,
+          totalRentRealized: 0,
+          status: "ACTIVE",
+          notes: `Game CD Swap Replacement for ${returnTxNumber}`,
+          createdBy: processedBy || auth.user?.username || "system",
+        });
+
+        if (isTxActive) await newRentalBooking.save({ session });
+        else await newRentalBooking.save();
       }
     }
 

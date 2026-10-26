@@ -284,11 +284,33 @@ async function calculateProductWeightedPricingInner(productId: string): Promise<
 
 /**
  * Calculates dynamic product pricing with Inventory moving average cost overlay.
+ * Supports condition-specific cost isolation so New, Used, and other conditions do not contaminate each other.
  */
-export async function calculateProductWeightedPricing(productId: string): Promise<WeightedPricingResult> {
+export async function calculateProductWeightedPricing(
+  productId: string,
+  condition?: string
+): Promise<WeightedPricingResult> {
   const base = await calculateProductWeightedPricingInner(productId);
   const costs = await getInventoryCostMap([productId]);
-  return { ...base, avgCostPrice: costs[productId] ?? null };
+
+  let matchedCost: number | null = null;
+  if (condition) {
+    matchedCost = costs[`${productId}:${condition}`] ?? costs[productId] ?? null;
+  } else {
+    let prodCond = "New";
+    try {
+      if (mongoose.Types.ObjectId.isValid(productId) && mongoose.connection.readyState === 1) {
+        const { Product } = await import("@/models/Product");
+        const prod = await Product.findById(productId).select("condition").lean();
+        if (prod?.condition) prodCond = prod.condition;
+      }
+    } catch {
+      // fallback in mocked environments
+    }
+    matchedCost = costs[`${productId}:${prodCond}`] ?? costs[productId] ?? null;
+  }
+
+  return { ...base, avgCostPrice: matchedCost };
 }
 
 /**

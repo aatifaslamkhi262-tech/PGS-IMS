@@ -82,7 +82,8 @@ export async function GET(req: NextRequest) {
       // ── Product-level weighted average (same logic as barcode/name lookup) ──
       const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
       const productId = (serialRecord.product as any)._id.toString();
-      const pricingResult = await calculateProductWeightedPricing(productId);
+      const condition = (serialRecord.product as any).condition || (serialRecord as any).condition || "New";
+      const pricingResult = await calculateProductWeightedPricing(productId, condition);
       const effective = resolveProductEffectivePricing(serialRecord.product as any, pricingResult);
 
       const safeWeightedPricing = {
@@ -190,7 +191,7 @@ export async function GET(req: NextRequest) {
 
     // Dynamic quantity-weighted average calculation & effective precedence resolution
     const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
-    const pricingResult = await calculateProductWeightedPricing(product._id.toString());
+    const pricingResult = await calculateProductWeightedPricing(product._id.toString(), product.condition);
     const effective = resolveProductEffectivePricing(product as any, pricingResult);
 
     // Project safe product details for restricted roles

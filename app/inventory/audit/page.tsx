@@ -215,9 +215,52 @@ export default function StockAuditPage() {
           setDraftNumber(draft.auditNumber);
           setAuditNotes(draft.notes || "");
           if (draft.auditScope) setAuditScope(draft.auditScope);
+          const crossMap = new Map<string, any>((draft.crossBranchSerials || []).map((c: any) => [c.serialNumber?.trim()?.toUpperCase(), c]));
+          const reactivatedMap = new Map<string, any>((draft.reactivatedSerials || []).map((r: any) => [r.serialNumber?.trim()?.toUpperCase(), r]));
+          const unregMap = new Map<string, any>((draft.unregisteredSerials || []).map((u: any) => [u.serialNumber?.trim()?.toUpperCase(), u]));
+
           const vMap: Record<string, any> = {};
           for (const sn of draft.scannedSerials || []) {
-            vMap[sn] = { type: "MATCHED_LOCAL", serialNumber: sn };
+            const snUpper = sn.trim().toUpperCase();
+            if (crossMap.has(snUpper)) {
+              const c: any = crossMap.get(snUpper);
+              vMap[sn] = {
+                serialNumber: sn,
+                type: "CROSS_BRANCH",
+                badgeColor: "amber",
+                label: "Cross-Branch Found",
+                product: c.product,
+                fromLocationName: c.fromLocationName,
+                message: `Registered at ${c.fromLocationName || "another branch"}.`,
+              };
+            } else if (reactivatedMap.has(snUpper)) {
+              const r: any = reactivatedMap.get(snUpper);
+              vMap[sn] = {
+                serialNumber: sn,
+                type: "REACTIVATED",
+                badgeColor: "blue",
+                label: "Found Stock (Reactivated)",
+                product: r.product,
+                message: `Previously marked as ${r.previousStatus || "Sold/Returned"}.`,
+              };
+            } else if (unregMap.has(snUpper)) {
+              const u: any = unregMap.get(snUpper);
+              vMap[sn] = {
+                serialNumber: sn,
+                type: "UNREGISTERED",
+                badgeColor: "rose",
+                label: "Unregistered Serial",
+                product: u.product,
+                message: "Serial not found in database. Can be registered as new found stock.",
+              };
+            } else {
+              vMap[sn] = {
+                serialNumber: sn,
+                type: "MATCHED_LOCAL",
+                badgeColor: "emerald",
+                label: "Matched (Local)",
+              };
+            }
           }
           setSerialVerificationMap(vMap);
 
@@ -232,6 +275,18 @@ export default function StockAuditPage() {
             setCrossBranchResolutions(cbRes);
           }
 
+          // Restore unregistered mappings from DB draft
+          if (Array.isArray(draft.unregisteredSerials)) {
+            const restoredMappings = draft.unregisteredSerials
+              .filter((u: any) => u.product)
+              .map((u: any) => ({
+                serialNumber: u.serialNumber,
+                productId: (u.product?._id || u.product).toString(),
+                condition: u.condition || "New",
+              }));
+            setUnregisteredMappings(restoredMappings);
+          }
+
           // Restore physical counts from DB draft itemVariances
           const draftCounts: Record<string, number> = { ...initCounts };
           if (Array.isArray(draft.itemVariances)) {
@@ -239,9 +294,7 @@ export default function StockAuditPage() {
               const pId = iv.product?._id || iv.product;
               if (pId) {
                 const key = `${pId.toString()}_${iv.condition || "New"}`;
-                if (draftCounts[key] !== undefined) {
-                  draftCounts[key] = iv.physicalQuantity;
-                }
+                draftCounts[key] = iv.physicalQuantity;
               }
             }
           }
@@ -394,7 +447,7 @@ export default function StockAuditPage() {
   };
 
   // Discard draft and start fresh
-  const handleClearDraft = () => {
+  const handleClearDraft = async () => {
     if (
       !confirm(
         "Are you sure you want to discard this draft count? All scanned serials and count adjustments in this session will be cleared."
@@ -402,6 +455,9 @@ export default function StockAuditPage() {
     ) {
       return;
     }
+
+    const draftIdToDelete = currentDraftId;
+
     setScannedSerials([]);
     setSerialVerificationMap({});
     setUnregisteredMappings([]);
@@ -420,6 +476,17 @@ export default function StockAuditPage() {
       initCounts[key] = item.quantity;
     }
     setPhysicalCounts(initCounts);
+
+    if (draftIdToDelete) {
+      try {
+        await fetch(`/api/inventory/audit/${draftIdToDelete}`, {
+          method: "DELETE",
+        });
+      } catch (err) {
+        console.error("Failed to delete draft from DB:", err);
+      }
+    }
+
     addToast("info", "Draft discarded. Started a fresh audit count.");
   };
 
@@ -434,9 +501,52 @@ export default function StockAuditPage() {
     setDraftNumber(aud.auditNumber);
     setAuditNotes(aud.notes || "");
     if (aud.auditScope) setAuditScope(aud.auditScope);
+    const crossMap = new Map<string, any>((aud.crossBranchSerials || []).map((c: any) => [c.serialNumber?.trim()?.toUpperCase(), c]));
+    const reactivatedMap = new Map<string, any>((aud.reactivatedSerials || []).map((r: any) => [r.serialNumber?.trim()?.toUpperCase(), r]));
+    const unregMap = new Map<string, any>((aud.unregisteredSerials || []).map((u: any) => [u.serialNumber?.trim()?.toUpperCase(), u]));
+
     const vMap: Record<string, any> = {};
     for (const sn of aud.scannedSerials || []) {
-      vMap[sn] = { type: "MATCHED_LOCAL", serialNumber: sn };
+      const snUpper = sn.trim().toUpperCase();
+      if (crossMap.has(snUpper)) {
+        const c: any = crossMap.get(snUpper);
+        vMap[sn] = {
+          serialNumber: sn,
+          type: "CROSS_BRANCH",
+          badgeColor: "amber",
+          label: "Cross-Branch Found",
+          product: c.product,
+          fromLocationName: c.fromLocationName,
+          message: `Registered at ${c.fromLocationName || "another branch"}.`,
+        };
+      } else if (reactivatedMap.has(snUpper)) {
+        const r: any = reactivatedMap.get(snUpper);
+        vMap[sn] = {
+          serialNumber: sn,
+          type: "REACTIVATED",
+          badgeColor: "blue",
+          label: "Found Stock (Reactivated)",
+          product: r.product,
+          message: `Previously marked as ${r.previousStatus || "Sold/Returned"}.`,
+        };
+      } else if (unregMap.has(snUpper)) {
+        const u: any = unregMap.get(snUpper);
+        vMap[sn] = {
+          serialNumber: sn,
+          type: "UNREGISTERED",
+          badgeColor: "rose",
+          label: "Unregistered Serial",
+          product: u.product,
+          message: "Serial not found in database. Can be registered as new found stock.",
+        };
+      } else {
+        vMap[sn] = {
+          serialNumber: sn,
+          type: "MATCHED_LOCAL",
+          badgeColor: "emerald",
+          label: "Matched (Local)",
+        };
+      }
     }
     setSerialVerificationMap(vMap);
 
@@ -450,6 +560,19 @@ export default function StockAuditPage() {
       }
     }
     setCrossBranchResolutions(cbRes);
+
+    // Restore unregistered mappings from history draft
+    let restoredMappings: any[] = [];
+    if (Array.isArray(aud.unregisteredSerials)) {
+      restoredMappings = aud.unregisteredSerials
+        .filter((u: any) => u.product)
+        .map((u: any) => ({
+          serialNumber: u.serialNumber,
+          productId: (u.product?._id || u.product).toString(),
+          condition: u.condition || "New",
+        }));
+      setUnregisteredMappings(restoredMappings);
+    }
 
     // Reconstruct physical counts from itemVariances
     const initCounts: Record<string, number> = {};
@@ -475,7 +598,7 @@ export default function StockAuditPage() {
           locationId: locId,
           scannedSerials: aud.scannedSerials || [],
           serialVerificationMap: vMap,
-          unregisteredMappings: [],
+          unregisteredMappings: restoredMappings,
           crossBranchResolutions: cbRes,
           physicalCounts: initCounts,
           auditScope: aud.auditScope || "ALL",
@@ -519,14 +642,33 @@ export default function StockAuditPage() {
     const clean = term.trim().toLowerCase();
     if (!clean) return;
 
-    // Look for exact match by barcode or SKU first
-    const matched =
+    // Look for exact match by barcode or SKU in branch inventory first
+    let matched =
       nonSerializedItems.find(
         (it) =>
           (it.product?.barcode || "").toLowerCase().trim() === clean ||
           (it.product?.sku || "").toLowerCase().trim() === clean
       ) ||
       nonSerializedItems.find((it) => (it.product?.name || "").toLowerCase().includes(clean));
+
+    // Fallback: Check global catalog productList for newly discovered items
+    if (!matched) {
+      const catalogMatch = productList.find(
+        (p: any) =>
+          !p.serialTracking &&
+          ((p.barcode || "").toLowerCase().trim() === clean ||
+            (p.sku || "").toLowerCase().trim() === clean ||
+            (p.name || "").toLowerCase().includes(clean))
+      );
+      if (catalogMatch) {
+        matched = {
+          product: catalogMatch,
+          condition: catalogMatch.condition || "New",
+          quantity: 0,
+          averageCost: catalogMatch.costPrice || 0,
+        };
+      }
+    }
 
     if (matched) {
       const key = `${matched.product?._id}_${matched.condition || "New"}`;
@@ -658,7 +800,27 @@ export default function StockAuditPage() {
         .filter((v) => v?.type === "PREVIOUSLY_SOLD");
 
   // Calculate Non-serialized Variances
-  const nonSerializedItems = inventoryList.filter((item) => !item.product?.serialTracking);
+  const baseNonSerialized = inventoryList.filter((item) => !item.product?.serialTracking);
+  const existingKeys = new Set(baseNonSerialized.map((i) => `${i.product?._id}_${i.condition || "New"}`));
+
+  // Include any extra counted non-serialized items that were not originally in this location's inventory
+  const extraCountedItems: any[] = [];
+  for (const [key, pQty] of Object.entries(physicalCounts)) {
+    if (!existingKeys.has(key) && pQty > 0) {
+      const [pId, cond] = key.split("_");
+      const matchedProd = productList.find((p: any) => p._id?.toString() === pId);
+      if (matchedProd && !matchedProd.serialTracking) {
+        extraCountedItems.push({
+          product: matchedProd,
+          condition: cond || "New",
+          quantity: 0,
+          averageCost: matchedProd.costPrice || 0,
+        });
+      }
+    }
+  }
+
+  const nonSerializedItems = [...baseNonSerialized, ...extraCountedItems];
   let totalMissingQty = missingSerialsList.length;
   let totalSurplusQty = unregisteredSerialsList.length + reactivatedSerialsList.length;
   let netCostDelta = 0;

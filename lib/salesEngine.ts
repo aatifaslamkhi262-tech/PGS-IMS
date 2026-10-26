@@ -190,7 +190,7 @@ export async function createSaleInput(input: CreateSaleInput) {
     }
 
     const condition = itemInput.condition || product.condition || "New";
-    const weightedPricing = await calculateProductWeightedPricing(product._id.toString());
+    const weightedPricing = await calculateProductWeightedPricing(product._id.toString(), condition);
     const effective = resolveProductEffectivePricing(product, weightedPricing) || {
       costPrice: product.costPrice || 0,
       sellingPrice: product.sellingPrice || 0,

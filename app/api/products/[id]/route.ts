@@ -32,7 +32,7 @@ export async function GET(
     }
 
     const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
-    const pricing = await calculateProductWeightedPricing(product._id.toString());
+    const pricing = await calculateProductWeightedPricing(product._id.toString(), product.condition);
     const effective = resolveProductEffectivePricing(product, pricing);
 
     const productWithPricing = {
@@ -209,13 +209,21 @@ export async function PUT(
       );
     }
 
-    // Track if cost price was explicitly requested to be overridden by user
-    const hasExplicitReason = Boolean((body.costReason || body.reason || "").trim());
-    const isCostPriceChanged = body.costPrice !== undefined && 
-      (body.isCostOverride === true || hasExplicitReason || body.costType === "HISTORICAL_CORRECTION" || Number(body.costPrice) !== product.costPrice);
+    // Pre-calculate effective cost price before edit to distinguish real manual overrides from form load values
+    const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
+    const targetCondition = nextCondition || product.condition || "New";
+    const pricingBeforeEdit = await calculateProductWeightedPricing(product._id.toString(), targetCondition);
+    const effectiveBeforeEdit = resolveProductEffectivePricing(product, pricingBeforeEdit);
 
-    const isSellingPriceProvided = body.sellingPrice !== undefined;
-    const isMinSellingPriceProvided = body.minSellingPrice !== undefined;
+    const hasExplicitReason = Boolean((body.costReason || body.reason || "").trim());
+    const isCostExplicitlyRequested = body.isCostOverride === true || hasExplicitReason || body.costType === "HISTORICAL_CORRECTION";
+    const numericCost = Number(costPrice);
+    const isCostDiffFromEffective = Math.abs(numericCost - effectiveBeforeEdit.costPrice) > 0.01;
+    const isCostDiffFromMaster = Math.abs(numericCost - (product.costPrice || 0)) > 0.01;
+    const isCostPriceChanged = body.costPrice !== undefined && (isCostExplicitlyRequested || (isCostDiffFromEffective && isCostDiffFromMaster));
+
+    const isSellingPriceProvided = body.sellingPrice !== undefined && Number(body.sellingPrice) !== product.sellingPrice;
+    const isMinSellingPriceProvided = body.minSellingPrice !== undefined && Number(body.minSellingPrice) !== product.minSellingPrice;
 
     if (isCostPriceChanged || isSellingPriceProvided || isMinSellingPriceProvided) {
       product.manuallyEditedAt = new Date();
@@ -236,29 +244,18 @@ export async function PUT(
 
     try {
       if (isCostPriceChanged) {
-        const { Inventory } = await import("@/models/Inventory");
-        const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
+        const { revalueCompanyStockOnManualOverride } = await import("@/lib/averageCostEngine");
         const { CostAdjustment } = await import("@/models/CostAdjustment");
 
-        // Compute pricing BEFORE modifying pools so previousCost accurately reflects pre-edit state
-        const pricingBeforeEdit = await calculateProductWeightedPricing(product._id.toString());
-        const effectiveBeforeEdit = resolveProductEffectivePricing(product, pricingBeforeEdit);
-
-        const targetCondition = nextCondition || product.condition || "New";
-        const invQuery = Inventory.find({ product: product._id, condition: targetCondition });
-        if (session) invQuery.session(session);
-        const activeInventories = await invQuery.exec();
-
-        // Synchronize Inventory average cost baseline across pools for THIS condition (if any exist)
-        for (const inv of activeInventories) {
-          inv.averageCost = costPrice;
-          inv.totalCostValue = Math.round((inv.quantity || 0) * costPrice * 100) / 100;
-          if (session) {
-            await inv.save({ session });
-          } else {
-            await inv.save();
-          }
-        }
+        // Revalue company-wide stock across all branches and sync Product master cost
+        await revalueCompanyStockOnManualOverride(
+          {
+            productId: product._id,
+            condition: targetCondition,
+            newCost: costPrice,
+          },
+          session
+        );
 
         const costType = body.costType === "HISTORICAL_CORRECTION" ? "HISTORICAL_CORRECTION" : "MANUAL_OVERRIDE";
         const reason = (body.costReason || body.reason || "").trim() || "Manual Cost Adjustment in Product Directory";

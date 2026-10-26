@@ -31,15 +31,15 @@ export async function GET(
     }
 
     const { calculateProductWeightedPricing } = await import("@/lib/pricing");
-    const pricing = await calculateProductWeightedPricing(product._id.toString());
+    const pricing = await calculateProductWeightedPricing(product._id.toString(), product.condition);
     const isAuthorizedForCost = ["Admin", "Warehouse", "Accountant"].includes(auth.user?.role || "");
 
     const safeProduct = {
       ...product,
       priceConfigured: pricing.priceConfigured,
-      costPrice: pricing.priceConfigured ? pricing.avgCostPrice : product.costPrice,
-      sellingPrice: pricing.priceConfigured ? pricing.avgSellingPrice : product.sellingPrice,
-      minSellingPrice: pricing.priceConfigured ? pricing.avgMinSellingPrice : product.minSellingPrice,
+      costPrice: pricing.avgCostPrice !== null && pricing.avgCostPrice !== undefined ? pricing.avgCostPrice : product.costPrice,
+      sellingPrice: pricing.priceConfigured && pricing.avgSellingPrice ? pricing.avgSellingPrice : product.sellingPrice,
+      minSellingPrice: pricing.priceConfigured && pricing.avgMinSellingPrice ? pricing.avgMinSellingPrice : product.minSellingPrice,
     };
 
     if (!isAuthorizedForCost) {
