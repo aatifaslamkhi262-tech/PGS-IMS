@@ -204,7 +204,19 @@ export async function revalueCompanyStockOnManualOverride(
     condition,
   });
   if (session) invQuery.session(session);
-  const invs = await invQuery.exec();
+  let invs = await invQuery.exec();
+
+  // Resilient fallback: If no inventory was found for this exact condition,
+  // but the product has active inventory in another condition (mismatch safeguard),
+  // revalue those active pools so manual cost override always takes effect.
+  if (!invs || invs.length === 0) {
+    const allInvsQuery = Inventory.find({
+      product: input.productId,
+      quantity: { $gt: 0 },
+    });
+    if (session) allInvsQuery.session(session);
+    invs = await allInvsQuery.exec();
+  }
 
   let count = 0;
   if (Array.isArray(invs)) {

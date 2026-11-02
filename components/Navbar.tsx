@@ -74,6 +74,53 @@ export const Navbar: React.FC<NavbarProps> = () => {
   const isAdmin = user?.role === "Admin";
   const isWarehouse = user?.role === "Warehouse";
   const isAccountant = user?.role === "Accountant";
+  const isHR = user?.role === "HR";
+  const isGuard = user?.role === "Guard";
+
+  if (pathname === "/guard/kiosk" || isGuard) {
+    return (
+      <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-14">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-100 font-bold text-xs">
+                PGS
+              </div>
+              <span className="font-bold text-sm text-slate-100 tracking-tight">
+                PGS Gate Attendance Kiosk
+              </span>
+              {user && (
+                <span className="px-2 py-0.5 text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700 rounded uppercase">
+                  {user.role}: {user.username}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {(isAdmin || isHR || isWarehouse) && (
+                <Link
+                  href="/hr/attendance"
+                  className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold"
+                >
+                  ← Back to HR Panel
+                </Link>
+              )}
+              <ThemeToggle />
+              {user && (
+                <button
+                  onClick={handleLogout}
+                  title="Logout"
+                  className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold flex items-center gap-1"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Logout</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </header>
+    );
+  }
 
   if (pathname === "/login") {
     return (
@@ -113,6 +160,7 @@ export const Navbar: React.FC<NavbarProps> = () => {
     pathname.startsWith("/approvals");
 
   const isReportsActive = pathname.startsWith("/reports");
+  const isHRActive = pathname.startsWith("/hr");
 
   return (
     <>
@@ -406,6 +454,74 @@ export const Navbar: React.FC<NavbarProps> = () => {
                         >
                           <AlertTriangle className="w-4 h-4 text-rose-400" />
                           <span>Costing & Pricing Audit</span>
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* HR & Staff Dropdown */}
+                {(isAdmin || isHR || isWarehouse) && (
+                  <div
+                    className="relative group"
+                    onMouseEnter={() => setActiveDropdown("hr")}
+                    onMouseLeave={() => setActiveDropdown(null)}
+                  >
+                    <button
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                        isHRActive
+                          ? "bg-blue-600 text-white border border-blue-600"
+                          : "text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+                      }`}
+                    >
+                      <Users className="w-3.5 h-3.5 text-blue-400" />
+                      <span>HR & Staff</span>
+                      <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform" />
+                    </button>
+
+                    <div className="absolute top-full left-0 hidden group-hover:block w-52 pt-1 z-50">
+                      <div className="bg-slate-900 border border-slate-800 rounded-lg shadow-xl p-1.5 space-y-0.5">
+                        <Link
+                          href="/hr"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded text-xs text-slate-200 hover:bg-slate-800 font-semibold transition"
+                        >
+                          <LayoutDashboard className="w-4 h-4 text-blue-400" />
+                          <span>HR Overview</span>
+                        </Link>
+                        <Link
+                          href="/hr/attendance"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded text-xs text-slate-200 hover:bg-slate-800 transition"
+                        >
+                          <Clock className="w-4 h-4 text-emerald-400" />
+                          <span>Daily Attendance</span>
+                        </Link>
+                        <Link
+                          href="/hr/employees"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded text-xs text-slate-200 hover:bg-slate-800 transition"
+                        >
+                          <Users className="w-4 h-4 text-indigo-400" />
+                          <span>Staff & Duty Rules</span>
+                        </Link>
+                        <Link
+                          href="/hr/cards"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded text-xs text-slate-200 hover:bg-slate-800 transition"
+                        >
+                          <Tag className="w-4 h-4 text-amber-400" />
+                          <span>Employee ID Cards</span>
+                        </Link>
+                        <Link
+                          href="/hr/audit-logs"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded text-xs text-slate-200 hover:bg-slate-800 transition"
+                        >
+                          <FileText className="w-4 h-4 text-slate-400" />
+                          <span>HR Audit Log</span>
+                        </Link>
+                        <Link
+                          href="/guard/kiosk"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded text-xs text-slate-200 hover:bg-slate-800 border-t border-slate-800 mt-1 pt-2 font-semibold transition"
+                        >
+                          <CheckSquare className="w-4 h-4 text-emerald-400" />
+                          <span>Gate Kiosk Screen</span>
                         </Link>
                       </div>
                     </div>

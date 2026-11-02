@@ -32,7 +32,11 @@ export default function LoginPage() {
 
       if (data.success) {
         const userRole = data.data?.role;
-        if (userRole === "Admin" || userRole === "Warehouse") {
+        if (userRole === "Guard") {
+          router.push("/guard/kiosk");
+        } else if (userRole === "HR") {
+          router.push("/hr");
+        } else if (userRole === "Admin" || userRole === "Warehouse") {
           router.push("/");
         } else {
           router.push("/price-lookup");

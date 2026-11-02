@@ -224,6 +224,10 @@ export default function UsersManagementPage() {
                               ? "bg-purple-950 text-purple-300 border-purple-800"
                               : u.role === "Accountant"
                               ? "bg-amber-950 text-amber-300 border-amber-800"
+                              : u.role === "HR"
+                              ? "bg-pink-950 text-pink-300 border-pink-800"
+                              : u.role === "Guard" || u.role === "Security"
+                              ? "bg-cyan-950 text-cyan-300 border-cyan-800"
                               : "bg-blue-950 text-blue-300 border-blue-800"
                           }`}
                         >
@@ -328,6 +332,9 @@ export default function UsersManagementPage() {
                     <option value="Salesman">Salesman</option>
                     <option value="Branch">Branch Staff / Manager</option>
                     <option value="Warehouse">Warehouse Manager</option>
+                    <option value="HR">HR Manager</option>
+                    <option value="Guard">Gate Guard (Kiosk Only)</option>
+                    <option value="Security">Security Guard (Kiosk Only)</option>
                     <option value="Accountant">Accountant</option>
                     <option value="Admin">Admin</option>
                   </select>

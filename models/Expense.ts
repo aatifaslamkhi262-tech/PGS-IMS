@@ -8,7 +8,7 @@ export type ExpenseCategory =
   | "Rent"
   | "Utility"
   | "Packaging"
-  | "Other";
+  | "Other";  
 
 export interface IExpense {
   _id?: Types.ObjectId;

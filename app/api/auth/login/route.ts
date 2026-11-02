@@ -22,6 +22,8 @@ export async function POST(req: NextRequest) {
     if (userCount === 0) {
       const usersToSeed = [
         { username: "admin", password: "adminpassword", role: "Admin" },
+        { username: "hr", password: "hrpassword", role: "HR" },
+        { username: "guard", password: "guardpassword", role: "Guard" },
         { username: "warehouse", password: "warehousepassword", role: "Warehouse" },
         { username: "accountant", password: "accountantpassword", role: "Accountant" },
         { username: "branch", password: "branchpassword", role: "Branch" },

@@ -17,10 +17,13 @@ export async function middleware(request: NextRequest) {
     });
   }
 
-  // 1. Bypass public assets, login pages, seeding scripts, and public ecommerce API endpoints
+  // 1. Bypass public assets, static files, login pages, and public ecommerce API endpoints
   if (
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico" ||
+    pathname.startsWith("/card/") ||
+    pathname.endsWith(".html") ||
+    /\.(png|jpg|jpeg|gif|svg|webp|ico|css|js|woff2?|ttf|eot)$/i.test(pathname) ||
     pathname.startsWith("/api/public") ||
     pathname === "/api/auth/login" ||
     pathname === "/login"
@@ -45,13 +48,42 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // 4. Proceed to destination route
+  // 4. Enforce strict route lock for Gate Guard / Security role (Kiosk screen only)
+  if (verifiedSession.role === "Guard" || verifiedSession.role === "Security") {
+    if (pathname.startsWith("/api")) {
+      const allowedGuardApis = [
+        "/api/auth/",
+        "/api/hr/kiosk",
+        "/api/locations",
+      ];
+      const isAllowedApi = allowedGuardApis.some((prefix) =>
+        pathname.startsWith(prefix)
+      );
+      if (!isAllowedApi) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Access Denied. Gate Guard account is restricted to Kiosk operations only.",
+          },
+          { status: 403 }
+        );
+      }
+      return NextResponse.next();
+    }
+
+    if (pathname !== "/guard/kiosk") {
+      const kioskUrl = new URL("/guard/kiosk", request.url);
+      return NextResponse.redirect(kioskUrl);
+    }
+  }
+
+  // 5. Proceed to destination route
   return NextResponse.next();
 }
 
 export const config = {
   matcher: [
-    // Protect all routes, except static files and assets
-    "/((?!_next/static|_next/image|favicon.ico).*)",
+    // Protect all routes, except static files, assets and images
+    "/((?!_next/static|_next/image|favicon.ico|card/|card-preview|.*\\.(?:svg|png|jpg|jpeg|gif|webp|html)$).*)",
   ],
 };

@@ -593,7 +593,7 @@ export async function POST(request: Request) {
             serialNumber: it.serialNumbers?.[0] || undefined,
             condition: it.condition || "Used",
             depositPaid: it.lineTotal,
-            perDayRate: 0,
+            perDayRate: it.perDayRate !== undefined && it.perDayRate !== null ? Number(it.perDayRate) : 100,
             rentedAt: new Date(),
             status: "ON_RENT",
           })),

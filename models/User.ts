@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Model, Types } from "mongoose";
 
-export type UserRole = "Admin" | "Warehouse" | "Accountant" | "Branch" | "Salesman";
+export type UserRole = "Admin" | "Warehouse" | "Accountant" | "Branch" | "Salesman" | "HR" | "Guard" | "Security";
 
 export interface IUser {
   _id?: Types.ObjectId;
@@ -35,7 +35,7 @@ const UserSchema: Schema = new Schema(
     },
     role: {
       type: String,
-      enum: ["Admin", "Warehouse", "Accountant", "Branch", "Salesman"],
+      enum: ["Admin", "Warehouse", "Accountant", "Branch", "Salesman", "HR", "Guard", "Security"],
       required: [true, "User role is required"],
     },
     assignedLocation: {
