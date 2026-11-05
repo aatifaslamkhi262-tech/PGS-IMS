@@ -374,40 +374,76 @@ export async function POST(request: Request) {
 
     // Save Exchange / Rental Swap Invoice in Sale collection for Salesman Attribution & Daily Reporting
     if (processedReplacements.length > 0 || action === "RENTAL_SWAP") {
-      let exchangeSaleItems = processedReplacements.map((it) => ({
-        product: it.product,
-        productName: it.productName,
-        sku: it.sku,
-        barcode: it.sku,
-        condition: it.condition || "Used",
-        quantity: it.quantity,
-        unitCost: it.unitPrice,
-        unitPrice: it.unitPrice,
-        minSellingPrice: it.unitPrice,
-        discountAmount: 0,
-        lineTotal: it.lineTotal,
-        grossProfit: 0,
-      }));
+      let exchangeSaleItems: any[] = [];
 
-      if (exchangeSaleItems.length === 0 && action === "RENTAL_SWAP") {
-        const rentFeeVal = Number(rentDeducted || 0);
-        const firstReturnedProdId = rawReturnedList[0]?.productId;
-        exchangeSaleItems = [
-          {
-            product: firstReturnedProdId || targetLocationId,
-            productName: `[RENTAL REALIZED SERVICE] Rent Usage Cut: Rs. ${rentFeeVal.toLocaleString()}`,
-            sku: "RENT-SERVICE",
-            barcode: "RENT-SERVICE",
-            condition: "Service",
-            quantity: 1,
-            unitCost: 0,
-            unitPrice: rentFeeVal,
-            minSellingPrice: rentFeeVal,
-            discountAmount: 0,
-            lineTotal: rentFeeVal,
-            grossProfit: rentFeeVal,
-          },
-        ];
+      if (action === "RENTAL_SWAP") {
+        const returnedSummaryItems = processedReturns.map((r) => ({
+          product: r.product || targetLocationId,
+          productName: `[RENTAL RETURNED] ${r.productName} (Deposit: Rs. ${secDepositPaid.toLocaleString()} - Rent: Rs. ${rentDeducted.toLocaleString()})`,
+          sku: r.sku || "RENT-RETURN",
+          barcode: r.sku || "RENT-RETURN",
+          condition: r.condition || "Used",
+          quantity: r.quantity || 1,
+          unitCost: 0,
+          unitPrice: netDepositCredit,
+          minSellingPrice: netDepositCredit,
+          discountAmount: 0,
+          lineTotal: netDepositCredit,
+          grossProfit: 0,
+        }));
+
+        const replacementSummaryItems = processedReplacements.map((it) => ({
+          product: it.product,
+          productName: `[ISSUED ON RENT / SWAP] ${it.productName}`,
+          sku: it.sku,
+          barcode: it.sku,
+          condition: it.condition || "Used",
+          quantity: it.quantity,
+          unitCost: it.unitPrice,
+          unitPrice: it.unitPrice,
+          minSellingPrice: it.unitPrice,
+          discountAmount: 0,
+          lineTotal: it.lineTotal,
+          grossProfit: 0,
+        }));
+
+        exchangeSaleItems = [...returnedSummaryItems, ...replacementSummaryItems];
+
+        if (exchangeSaleItems.length === 0) {
+          const rentFeeVal = Number(rentDeducted || 0);
+          const firstReturnedProdId = rawReturnedList[0]?.productId;
+          exchangeSaleItems = [
+            {
+              product: firstReturnedProdId || targetLocationId,
+              productName: `[RENTAL REALIZED SERVICE] Rent Usage Cut: Rs. ${rentFeeVal.toLocaleString()}`,
+              sku: "RENT-SERVICE",
+              barcode: "RENT-SERVICE",
+              condition: "Service",
+              quantity: 1,
+              unitCost: 0,
+              unitPrice: rentFeeVal,
+              minSellingPrice: rentFeeVal,
+              discountAmount: 0,
+              lineTotal: rentFeeVal,
+              grossProfit: rentFeeVal,
+            },
+          ];
+        }
+      } else {
+        exchangeSaleItems = processedReplacements.map((it) => ({
+          product: it.product,
+          productName: it.productName,
+          sku: it.sku,
+          barcode: it.sku,
+          condition: it.condition || "Used",
+          quantity: it.quantity,
+          unitCost: it.unitPrice,
+          unitPrice: it.unitPrice,
+          minSellingPrice: it.unitPrice,
+          discountAmount: 0,
+          lineTotal: it.lineTotal,
+          grossProfit: 0,
+        }));
       }
 
       if (exchangeSaleItems.length > 0) {

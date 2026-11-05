@@ -91,7 +91,7 @@ export async function GET(req: NextRequest) {
         emp,
         pktNow.year,
         pktNow.month,
-        holidayDates
+        emp.holidayOffAllowed ? holidayDates : []
       );
 
       return {
@@ -174,7 +174,7 @@ export async function POST(req: NextRequest) {
           shiftEndTime: "20:00",
           requiredDailyHours: Number(body.defaultDailyHours) || 10,
           graceMinutes: 15,
-          halfDayMinutes: 90,
+          halfDayMinutes: 180,
           offPolicy: "WEEKLY_FIXED",
           weeklyOffDays: [0],
           monthlyOffQuota: 4,
@@ -246,6 +246,7 @@ export async function POST(req: NextRequest) {
       weeklyOffDays,
       monthlyOffQuota,
       monthlyHalfDayQuota,
+      holidayOffAllowed,
       pin,
       autoIssueCard = true,
     } = body;
@@ -325,12 +326,13 @@ export async function POST(req: NextRequest) {
       requiredDailyHours: Number(requiredDailyHours) || 8,
       breakMinutes: Number(breakMinutes ?? 60),
       graceMinutes: Number(graceMinutes ?? 15),
-      halfDayMinutes: Number(halfDayMinutes ?? 90),
+      halfDayMinutes: Number(halfDayMinutes ?? 180),
       crossesMidnight: Boolean(crossesMidnight),
       offPolicy: offPolicy || "WEEKLY_FIXED",
       weeklyOffDays: Array.isArray(weeklyOffDays) ? weeklyOffDays : [0],
       monthlyOffQuota: Number(monthlyOffQuota ?? 4),
       monthlyHalfDayQuota: Number(monthlyHalfDayQuota ?? 0),
+      holidayOffAllowed: Boolean(holidayOffAllowed),
       pinHash,
       hasPin,
       activeCardUid: initialCardUid,

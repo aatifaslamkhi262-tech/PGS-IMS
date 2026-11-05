@@ -382,7 +382,7 @@ export async function completeSale(input: CompleteSaleInput) {
         processingAttemptId: attemptId,
       },
     },
-    { new: true }
+    { returnDocument: "after" }
   );
 
   if (!lockedSale) {

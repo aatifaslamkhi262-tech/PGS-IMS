@@ -108,13 +108,14 @@ export default function HREmployeesPage() {
   const [shiftEndTime, setShiftEndTime] = useState("20:00");
   const [requiredDailyHours, setRequiredDailyHours] = useState("10");
   const [graceMinutes, setGraceMinutes] = useState("15");
-  const [halfDayMinutes, setHalfDayMinutes] = useState("90");
+  const [halfDayMinutes, setHalfDayMinutes] = useState("180");
   const [offPolicy, setOffPolicy] = useState<
     "WEEKLY_FIXED" | "MONTHLY_QUOTA" | "NONE"
   >("WEEKLY_FIXED");
   const [weeklyOffDays, setWeeklyOffDays] = useState<number[]>([0]);
   const [monthlyOffQuota, setMonthlyOffQuota] = useState("4");
   const [monthlyHalfDayQuota, setMonthlyHalfDayQuota] = useState("0");
+  const [holidayOffAllowed, setHolidayOffAllowed] = useState(false);
 
   // PIN & Card
   const [pin, setPin] = useState("");
@@ -227,11 +228,12 @@ export default function HREmployeesPage() {
     setShiftEndTime("20:00");
     setRequiredDailyHours("10");
     setGraceMinutes("15");
-    setHalfDayMinutes("90");
+    setHalfDayMinutes("180");
     setOffPolicy("WEEKLY_FIXED");
     setWeeklyOffDays([0]);
     setMonthlyOffQuota("4");
     setMonthlyHalfDayQuota("0");
+    setHolidayOffAllowed(false);
     setPin("");
     setAutoIssueCard(true);
     setEditReason("");
@@ -265,13 +267,14 @@ export default function HREmployeesPage() {
     setShiftEndTime(emp.shiftEndTime || "20:00");
     setRequiredDailyHours(String(emp.requiredDailyHours ?? 8));
     setGraceMinutes(String(emp.graceMinutes ?? 15));
-    setHalfDayMinutes(String(emp.halfDayMinutes ?? 90));
+    setHalfDayMinutes(String(emp.halfDayMinutes ?? 180));
     setOffPolicy(emp.offPolicy || "WEEKLY_FIXED");
     setWeeklyOffDays(
       Array.isArray(emp.weeklyOffDays) ? emp.weeklyOffDays : [0]
     );
     setMonthlyOffQuota(String(emp.monthlyOffQuota ?? 4));
     setMonthlyHalfDayQuota(String(emp.monthlyHalfDayQuota ?? 0));
+    setHolidayOffAllowed(Boolean(emp.holidayOffAllowed));
     setPin("");
     setEditReason("Updated staff schedule / profile");
     setShowModal(true);
@@ -299,7 +302,7 @@ export default function HREmployeesPage() {
       setShiftEndTime(found.endTime || "20:00");
       setRequiredDailyHours(String(found.paidDailyHours || 8));
       setGraceMinutes(String(found.graceMinutes ?? 15));
-      setHalfDayMinutes(String(found.halfDayThresholdMinutes ?? 90));
+      setHalfDayMinutes(String(found.halfDayThresholdMinutes ?? 180));
       if (Array.isArray(found.weeklyOffDays)) {
         setWeeklyOffDays(found.weeklyOffDays);
       }
@@ -351,11 +354,12 @@ export default function HREmployeesPage() {
         shiftEndTime,
         requiredDailyHours: Number(requiredDailyHours) || 8,
         graceMinutes: Number(graceMinutes ?? 15),
-        halfDayMinutes: Number(halfDayMinutes ?? 90),
+        halfDayMinutes: Number(halfDayMinutes ?? 180),
         offPolicy,
         weeklyOffDays,
         monthlyOffQuota: Number(monthlyOffQuota ?? 0),
         monthlyHalfDayQuota: Number(monthlyHalfDayQuota ?? 0),
+        holidayOffAllowed,
         pin: pin.trim() || undefined,
         autoIssueCard,
         reason: editReason.trim() || "Profile update",
@@ -403,20 +407,21 @@ export default function HREmployeesPage() {
   };
 
   const formatOffPolicyLabel = (emp: any) => {
+    const holidayTag = emp.holidayOffAllowed ? " + Holiday Off" : "";
     if (emp.offPolicy === "WEEKLY_FIXED") {
       const days = (emp.weeklyOffDays || [0])
         .map((d: number) => DAY_NAMES[d])
         .join(", ");
-      return `Weekly: ${days || "None"} (${(emp.weeklyOffDays || []).length}/wk)`;
+      return `Weekly: ${days || "None"} (${(emp.weeklyOffDays || []).length}/wk)${holidayTag}`;
     }
     if (emp.offPolicy === "MONTHLY_QUOTA") {
       let txt = `Monthly: ${emp.monthlyOffQuota ?? 0} Off(s)`;
       if (emp.monthlyHalfDayQuota) {
         txt += ` + ${emp.monthlyHalfDayQuota} Half-Day(s)`;
       }
-      return `${txt}/mo`;
+      return `${txt}/mo${holidayTag}`;
     }
-    return "No Fixed Offs";
+    return `No Fixed Offs${holidayTag}`;
   };
 
   return (
@@ -1196,7 +1201,7 @@ export default function HREmployeesPage() {
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-slate-300 mb-1">
-                        Half-Day Late (Mins)
+                        Half-Day Late Threshold (Mins — 180 for 3 hours)
                       </label>
                       <input
                         type="number"
@@ -1272,6 +1277,23 @@ export default function HREmployeesPage() {
                     </div>
                   </div>
                 )}
+
+                <div className="pt-2 border-t border-slate-800/80">
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={holidayOffAllowed}
+                      onChange={(e) => setHolidayOffAllowed(e.target.checked)}
+                      className="rounded border-slate-700"
+                    />
+                    <span className="font-semibold">
+                      Allow Public / Gazetted Holiday Offs
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      (Deduct registered holidays from monthly target hours)
+                    </span>
+                  </label>
+                </div>
               </div>
 
               {/* Section 3: Gate Security & PIN */}

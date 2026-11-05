@@ -56,13 +56,15 @@ export function calculateMonthlyTargetHours(
   employee: Pick<
     IEmployee,
     "offPolicy" | "weeklyOffDays" | "monthlyOffQuota" | "requiredDailyHours"
-  > & { monthlyHalfDayQuota?: number },
+  > & { monthlyHalfDayQuota?: number; holidayOffAllowed?: boolean },
   year: number,
   month: number, // 1-12
   holidayDates: string[] = []
 ) {
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const holidaySet = new Set(holidayDates);
+  const effectiveHolidayDates =
+    employee.holidayOffAllowed === false ? [] : holidayDates;
+  const holidaySet = new Set(effectiveHolidayDates);
 
   let scheduledOffDays = 0;
   let effectiveHolidays = 0;
@@ -121,6 +123,77 @@ export function calculateMonthlyTargetHours(
 }
 
 /**
+ * Calculates calendar-based working days and target hours for any arbitrary date range (e.g. 11th to 10th, 13th to 12th).
+ */
+export function calculatePeriodTargetHours(
+  employee: Pick<
+    IEmployee,
+    "offPolicy" | "weeklyOffDays" | "monthlyOffQuota" | "requiredDailyHours"
+  > & { monthlyHalfDayQuota?: number; holidayOffAllowed?: boolean },
+  startDateStr: string, // YYYY-MM-DD
+  endDateStr: string,   // YYYY-MM-DD
+  holidayDates: string[] = []
+) {
+  const [sY, sM, sD] = startDateStr.split("-").map((n) => parseInt(n, 10));
+  const [eY, eM, eD] = endDateStr.split("-").map((n) => parseInt(n, 10));
+
+  const startUtc = new Date(Date.UTC(sY, sM - 1, sD));
+  const endUtc = new Date(Date.UTC(eY, eM - 1, eD));
+
+  const effectiveHolidayDates =
+    employee.holidayOffAllowed === false ? [] : holidayDates;
+  const holidaySet = new Set(effectiveHolidayDates);
+  let calendarDays = 0;
+  let scheduledOffDays = 0;
+  let effectiveHolidays = 0;
+  const offDaySet = new Set(employee.weeklyOffDays || [0]);
+
+  const curr = new Date(startUtc);
+  while (curr <= endUtc) {
+    calendarDays++;
+    const y = curr.getUTCFullYear();
+    const m = String(curr.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(curr.getUTCDate()).padStart(2, "0");
+    const dateStr = `${y}-${m}-${d}`;
+    const dow = curr.getUTCDay();
+
+    if (employee.offPolicy === "WEEKLY_FIXED" && offDaySet.has(dow)) {
+      scheduledOffDays++;
+    } else if (holidaySet.has(dateStr)) {
+      effectiveHolidays++;
+    }
+
+    curr.setUTCDate(curr.getUTCDate() + 1);
+  }
+
+  if (employee.offPolicy === "MONTHLY_QUOTA") {
+    const approxMonths = Math.max(1, calendarDays / 30);
+    scheduledOffDays = Math.round((employee.monthlyOffQuota || 4) * approxMonths);
+  }
+
+  const halfDays = Math.max(0, employee.monthlyHalfDayQuota || 0);
+  const fullWorkingDays = Math.max(
+    0,
+    calendarDays - scheduledOffDays - effectiveHolidays - halfDays
+  );
+  const dailyHours = employee.requiredDailyHours || 8;
+  const targetHours = Number(
+    (fullWorkingDays * dailyHours + halfDays * dailyHours * 0.5).toFixed(2)
+  );
+
+  return {
+    calendarDays,
+    scheduledOffDays,
+    effectiveHolidays,
+    halfDays,
+    workingDays: fullWorkingDays + halfDays * 0.5,
+    dailyHours,
+    targetHours,
+    targetMinutes: Math.round(targetHours * 60),
+  };
+}
+
+/**
  * Checks if a specific YYYY-MM-DD date is a fixed weekly off or gazetted holiday for the employee.
  */
 export async function checkDayOffOrHoliday(
@@ -136,7 +209,9 @@ export async function checkDayOffOrHoliday(
     Array.isArray(employee.weeklyOffDays) &&
     employee.weeklyOffDays.includes(dow);
 
-  const holiday = await Holiday.findOne({ date: dateStr }).lean();
+  const holiday = employee.holidayOffAllowed
+    ? await Holiday.findOne({ date: dateStr }).lean()
+    : null;
 
   return {
     isWeeklyOff,
@@ -207,14 +282,17 @@ export function recomputeAttendanceRecord(
     const checkInParts = getPKTTimeParts(effectiveCheckIn);
     const arrivalMins = checkInParts.totalMinutesOfDay;
     const grace = employee.graceMinutes ?? 15;
-    const halfDayThreshold = employee.halfDayMinutes ?? 90;
+    const halfDayThreshold = employee.halfDayMinutes ?? 180; // 3 Hours (180 mins) late = Half Day
 
     if (arrivalMins > shiftStartMins + grace) {
       lateMinutes = arrivalMins - shiftStartMins;
-      flagSet.add("LATE_ARRIVAL");
       if (lateMinutes > halfDayThreshold) {
         isHalfDayByLate = true;
         flagSet.add("HALF_DAY_LATE");
+        flagSet.delete("LATE_ARRIVAL");
+      } else {
+        flagSet.add("LATE_ARRIVAL");
+        flagSet.delete("HALF_DAY_LATE");
       }
     } else {
       flagSet.delete("LATE_ARRIVAL");

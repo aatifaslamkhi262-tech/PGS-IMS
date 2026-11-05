@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { Employee } from "@/models/Employee";
 import { Attendance } from "@/models/Attendance";
 import { Holiday } from "@/models/Holiday";
+import { MonthlyPayroll } from "@/models/MonthlyPayroll";
 import "@/models/Location";
 import { verifyRole } from "@/lib/auth/rbac";
 import {
@@ -91,11 +92,14 @@ export async function GET(req: NextRequest) {
         Array.isArray(emp.weeklyOffDays) &&
         emp.weeklyOffDays.includes(dayOfWeek);
 
+      const empHolidayDates = emp.holidayOffAllowed ? holidayDates : [];
+      const empHolidayToday = emp.holidayOffAllowed ? holidayToday : null;
+
       const targetSummary = calculateMonthlyTargetHours(
         emp,
         yearNum,
         monthNum,
-        holidayDates
+        empHolidayDates
       );
 
       const monthWorkedMinutes = empMonthRecords.reduce(
@@ -107,7 +111,7 @@ export async function GET(req: NextRequest) {
       ).length;
 
       let syntheticStatus = "ABSENT";
-      if (holidayToday) {
+      if (empHolidayToday) {
         syntheticStatus = "HOLIDAY";
       } else if (isWeeklyOff) {
         syntheticStatus = "WEEKLY_OFF";
@@ -117,8 +121,8 @@ export async function GET(req: NextRequest) {
         employee: emp,
         date: dateStr,
         isWeeklyOff,
-        isHoliday: !!holidayToday,
-        holidayName: holidayToday?.name || null,
+        isHoliday: !!empHolidayToday,
+        holidayName: empHolidayToday?.name || null,
         attendance: todayRec,
         effectiveStatus: todayRec ? todayRec.status : syntheticStatus,
         monthStats: {
@@ -195,6 +199,25 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           { success: false, error: "Attendance record not found." },
           { status: 404 }
+        );
+      }
+
+      const lockedEarly = await MonthlyPayroll.findOne({
+        employee: att.employee,
+        status: { $in: ["LOCKED", "RELEASED"] },
+        $or: [
+          { startDate: { $lte: att.date }, endDate: { $gte: att.date } },
+          { month: att.date.slice(0, 7) },
+        ],
+      }).lean();
+
+      if (lockedEarly) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Payroll period (${lockedEarly.periodLabel || lockedEarly.month}) is LOCKED. Reopen payroll before editing attendance for ${att.date}.`,
+          },
+          { status: 403 }
         );
       }
 
@@ -275,6 +298,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const lockedManual = await MonthlyPayroll.findOne({
+      employee: targetEmpId,
+      status: { $in: ["LOCKED", "RELEASED"] },
+      $or: [
+        { startDate: { $lte: targetDate }, endDate: { $gte: targetDate } },
+        { month: targetDate.slice(0, 7) },
+      ],
+    }).lean();
+
+    if (lockedManual) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Payroll period (${lockedManual.periodLabel || lockedManual.month}) is LOCKED. Reopen payroll before modifying attendance for ${targetDate}.`,
+        },
+        { status: 403 }
+      );
+    }
+
     const employee = await Employee.findById(targetEmpId);
     if (!employee) {
       return NextResponse.json(
@@ -332,8 +374,11 @@ export async function POST(req: NextRequest) {
     const dayInfo = await checkDayOffOrHoliday(employee, targetDate);
     recomputeAttendanceRecord(employee, att, dayInfo);
 
-    if (statusOverride) {
+    if (statusOverride && statusOverride !== "MISSING_CHECKOUT") {
       att.status = statusOverride;
+    } else if (att.checkOut && att.status === "MISSING_CHECKOUT") {
+      // Recompute already set the status (e.g. PRESENT, HALF_DAY, LATE, etc.)
+      att.flags = att.flags.filter((f) => f !== "MISSING_CHECKOUT");
     }
 
     if (notes !== undefined) {

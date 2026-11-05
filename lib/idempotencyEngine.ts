@@ -71,7 +71,7 @@ export async function lockIdempotencyKey(
       startedAt: now,
       expiresAt,
     },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: "after" }
   );
 
   return { isDuplicate: false };

@@ -137,7 +137,9 @@ export default function HRAttendancePage() {
         ? toHHMMInPKT(attRecord.checkOut)
         : emp.shiftEndTime || "20:00"
     );
-    setStatusOverride(attRecord?.status || "");
+    setStatusOverride(
+      attRecord?.status === "MISSING_CHECKOUT" ? "" : attRecord?.status || ""
+    );
     setReason(
       attRecord?.status === "MISSING_CHECKOUT"
         ? "Verified checkout time with gate guard register"
@@ -173,7 +175,10 @@ export default function HRAttendancePage() {
             statusOverride === "WEEKLY_OFF"
               ? ""
               : checkOutTime,
-          statusOverride: statusOverride || undefined,
+          statusOverride:
+            statusOverride === "MISSING_CHECKOUT"
+              ? undefined
+              : statusOverride || undefined,
           reason: reason.trim(),
           notes,
         }),

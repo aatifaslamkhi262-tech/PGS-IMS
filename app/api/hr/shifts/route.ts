@@ -179,7 +179,7 @@ export async function PUT(req: NextRequest) {
     const updated = await Shift.findByIdAndUpdate(
       _id,
       { $set: updates },
-      { new: true }
+      { returnDocument: "after" }
     ).lean();
 
     await recordHRAuditLog({

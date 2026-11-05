@@ -25,6 +25,8 @@ import {
   Users,
   Handshake,
   Wrench,
+  CalendarDays,
+  Banknote,
 } from "lucide-react";
 
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -494,6 +496,20 @@ export const Navbar: React.FC<NavbarProps> = () => {
                         >
                           <Clock className="w-4 h-4 text-emerald-400" />
                           <span>Daily Attendance</span>
+                        </Link>
+                        <Link
+                          href="/hr/leaves"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded text-xs text-slate-200 hover:bg-slate-800 transition"
+                        >
+                          <CalendarDays className="w-4 h-4 text-blue-400" />
+                          <span>Leaves & Absence</span>
+                        </Link>
+                        <Link
+                          href="/hr/payroll"
+                          className="flex items-center gap-2.5 px-3 py-2 rounded text-xs text-slate-200 hover:bg-slate-800 transition"
+                        >
+                          <Banknote className="w-4 h-4 text-emerald-400" />
+                          <span>Monthly Payroll</span>
                         </Link>
                         <Link
                           href="/hr/employees"

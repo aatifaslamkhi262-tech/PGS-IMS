@@ -30,6 +30,7 @@ interface ThermalReceiptProps {
     changeDue: number;
     balanceDue?: number;
     status?: string;
+    notes?: string;
     payments: Array<{
       method: string;
       amount: number;
@@ -111,7 +112,6 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptProps> = ({ receiptData
           #printable-thermal-receipt img {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
-            filter: grayscale(100%) contrast(120%) !important;
             image-rendering: -webkit-optimize-contrast !important;
           }
         }
@@ -153,6 +153,10 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptProps> = ({ receiptData
             {(receiptData.status === "ADVANCE_BOOKED" || (receiptData.balanceDue !== undefined && receiptData.balanceDue > 0)) ? (
               <div className="text-center bg-black text-white font-black text-xs py-1 my-1 uppercase rounded tracking-wider">
                 *** ADVANCE BOOKING RECEIPT ***
+              </div>
+            ) : (receiptData.status === "RENTAL_SWAP" || receiptData.invoiceNumber?.startsWith("RNT-")) ? (
+              <div className="text-center bg-gray-200 text-black font-black text-[11px] py-0.5 my-1 uppercase tracking-wider border border-black">
+                *** CD RENTAL RETURN & SWAP RECEIPT ***
               </div>
             ) : (
               <div className="text-center bg-gray-200 text-black font-black text-[11px] py-0.5 my-1 uppercase tracking-wider border border-black">
@@ -288,6 +292,13 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptProps> = ({ receiptData
                 </div>
               )}
             </div>
+
+            {receiptData.notes && (
+              <div className="pt-2 text-[10px] font-bold text-black border-t border-dashed border-black break-words leading-tight">
+                <span className="font-black uppercase">NOTE: </span>
+                <span>{receiptData.notes}</span>
+              </div>
+            )}
           </div>
 
           {/* Invoice Barcode Section */}

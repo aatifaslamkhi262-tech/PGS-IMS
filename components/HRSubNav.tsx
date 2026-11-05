@@ -11,11 +11,14 @@ import {
   CalendarDays,
   ShieldAlert,
   ScanLine,
+  Banknote,
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/hr", label: "Overview", icon: LayoutGrid, exact: true },
   { href: "/hr/attendance", label: "Daily Attendance", icon: CalendarCheck },
+  { href: "/hr/leaves", label: "Leaves", icon: CalendarDays },
+  { href: "/hr/payroll", label: "Monthly Payroll", icon: Banknote },
   { href: "/hr/employees", label: "Staff & Duty Rules", icon: Users },
   { href: "/hr/cards", label: "Employee Cards", icon: CreditCard },
   { href: "/hr/audit-logs", label: "Audit Log", icon: ShieldAlert },
@@ -32,12 +35,12 @@ export const HRSubNav: React.FC = () => {
             <h1 className="text-base font-bold text-slate-100 tracking-tight">
               HR & Staff Management
             </h1>
-            <span className="px-2 py-0.5 text-[11px] font-semibold bg-slate-800 text-slate-300 border border-slate-700 rounded">
-              Phase 1 · Foundation
+            <span className="px-2 py-0.5 text-[11px] font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800 rounded">
+              Phase 1 & 2 · Active
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-0.5">
-            Gate attendance, custom employee duty hours & off quotas, ID card lifecycle, and tamper-evident audit trail
+            Gate attendance, custom duty hours, 3-Late penalty rule, Tareeqa A compensation, and monthly payroll lock
           </p>
         </div>
 

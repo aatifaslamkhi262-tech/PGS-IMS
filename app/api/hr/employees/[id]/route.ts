@@ -42,6 +42,7 @@ export async function PATCH(
       weeklyOffDays: existing.weeklyOffDays,
       monthlyOffQuota: existing.monthlyOffQuota,
       monthlyHalfDayQuota: existing.monthlyHalfDayQuota,
+      holidayOffAllowed: existing.holidayOffAllowed,
     };
 
     if (body.name !== undefined) existing.name = body.name.trim();
@@ -78,7 +79,7 @@ export async function PATCH(
     if (body.graceMinutes !== undefined)
       existing.graceMinutes = Number(body.graceMinutes ?? 15);
     if (body.halfDayMinutes !== undefined)
-      existing.halfDayMinutes = Number(body.halfDayMinutes ?? 90);
+      existing.halfDayMinutes = Number(body.halfDayMinutes ?? 180);
     if (body.crossesMidnight !== undefined)
       existing.crossesMidnight = Boolean(body.crossesMidnight);
     if (body.offPolicy !== undefined) existing.offPolicy = body.offPolicy;
@@ -88,6 +89,8 @@ export async function PATCH(
       existing.monthlyOffQuota = Number(body.monthlyOffQuota ?? 0);
     if (body.monthlyHalfDayQuota !== undefined)
       existing.monthlyHalfDayQuota = Number(body.monthlyHalfDayQuota ?? 0);
+    if (body.holidayOffAllowed !== undefined)
+      existing.holidayOffAllowed = Boolean(body.holidayOffAllowed);
 
     // CNIC encryption if provided
     if (body.cnic && String(body.cnic).trim()) {
@@ -122,6 +125,7 @@ export async function PATCH(
       weeklyOffDays: existing.weeklyOffDays,
       monthlyOffQuota: existing.monthlyOffQuota,
       monthlyHalfDayQuota: existing.monthlyHalfDayQuota,
+      holidayOffAllowed: existing.holidayOffAllowed,
     };
 
     await recordHRAuditLog({

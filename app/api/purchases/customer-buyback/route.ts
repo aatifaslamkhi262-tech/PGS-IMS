@@ -120,9 +120,9 @@ export async function POST(req: NextRequest) {
         };
 
         if (isTxActive) {
-          await SerialNumber.findOneAndUpdate(snFilter, snUpdate, { upsert: true, new: true, session });
+          await SerialNumber.findOneAndUpdate(snFilter, snUpdate, { upsert: true, returnDocument: "after", session });
         } else {
-          await SerialNumber.findOneAndUpdate(snFilter, snUpdate, { upsert: true, new: true });
+          await SerialNumber.findOneAndUpdate(snFilter, snUpdate, { upsert: true, returnDocument: "after" });
         }
       }
 

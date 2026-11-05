@@ -675,10 +675,17 @@ export default function CustomersPage() {
                                         type="button"
                                         onClick={(e) => {
                                           e.stopPropagation();
+                                          const isRentalSwap =
+                                            s.saleSource === "EXCHANGE" ||
+                                            s.saleNumber?.startsWith("RNT-") ||
+                                            s.invoiceNumber?.startsWith("RNT-") ||
+                                            (s.notes && s.notes.includes("Rental Return"));
+
                                           setPrintReceiptData({
-                                            invoiceNumber: s.invoiceNumber || s.saleNumber,
+                                            invoiceNumber: s.saleNumber || s.invoiceNumber || `INV-${s._id.slice(-6).toUpperCase()}`,
+                                            status: isRentalSwap ? "RENTAL_SWAP" : (s.balanceDue > 0 ? "ADVANCE_BOOKED" : undefined),
                                             date: s.createdAt,
-                                            locationName: s.locationName || "Warehouse",
+                                            locationName: s.locationName || locations.find((l) => l._id === (s.locationId || s.location))?.name || "Main Shop",
                                             cashierName:
                                               s.createdByName ||
                                               s.createdBy ||
@@ -701,7 +708,8 @@ export default function CustomersPage() {
                                             totalAmount: s.totalAmount,
                                             paidAmount: s.totalPaid || s.totalAmount,
                                             changeDue: 0,
-                                            payments: s.payments || [{ method: "CASH", amount: s.totalAmount }],
+                                            payments: s.payments || [{ method: "CASH", amount: s.totalPaid || s.totalAmount }],
+                                            notes: s.notes,
                                           });
                                           setShowReceiptModal(true);
                                         }}
@@ -767,12 +775,13 @@ export default function CustomersPage() {
                         <th className="p-3 text-right">Deposit Held</th>
                         <th className="p-3 text-right">Rent Realized</th>
                         <th className="p-3 text-center">Status</th>
+                        <th className="p-3 text-right">Slip</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 font-mono">
                       {customerRentals.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="p-6 text-center text-slate-500 font-sans">
+                          <td colSpan={7} className="p-6 text-center text-slate-500 font-sans">
                             Koi rental booking nahi mili is customer ki.
                           </td>
                         </tr>
@@ -822,6 +831,48 @@ export default function CustomersPage() {
                               }`}>
                                 {r.status}
                               </span>
+                            </td>
+                            <td className="p-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const isReturnedOrSwap = r.items?.some((it: any) => it.status === "RETURNED");
+                                  const prepared = {
+                                    invoiceNumber: r.bookingNumber,
+                                    status: isReturnedOrSwap ? "RENTAL_SWAP" : "ADVANCE_BOOKED",
+                                    date: r.createdAt,
+                                    locationName: r.locationName || "Main Shop",
+                                    cashierName: r.createdBy || "Counter Staff",
+                                    salesmanName: r.salesmanName || "Direct Counter",
+                                    customerName: r.customerName || selectedCustomer?.name || "Customer",
+                                    customerPhone: r.customerPhone || selectedCustomer?.phone || "",
+                                    items: (r.items || []).map((it: any) => ({
+                                      productName: it.status === "RETURNED"
+                                        ? `[RETURNED] ${it.productName}${it.accruedRent ? ` (Rent Cut: Rs. ${it.accruedRent.toLocaleString()})` : ""}`
+                                        : `[ON RENT] ${it.productName}`,
+                                      condition: it.condition || "Used",
+                                      quantity: 1,
+                                      unitPrice: it.depositPaid || 0,
+                                      lineTotal: it.depositPaid || 0,
+                                      serialNumbers: it.serialNumber ? [it.serialNumber] : [],
+                                    })),
+                                    subtotal: (r.totalDepositHeld || 0) + (r.totalRentRealized || 0),
+                                    discountAmount: 0,
+                                    deliveryCharges: 0,
+                                    totalAmount: (r.totalDepositHeld || 0) + (r.totalRentRealized || 0),
+                                    paidAmount: (r.totalDepositHeld || 0) + (r.totalRentRealized || 0),
+                                    changeDue: 0,
+                                    payments: [{ method: "CASH", amount: (r.totalDepositHeld || 0) + (r.totalRentRealized || 0) }],
+                                    notes: r.notes || `Rental Deposit: Rs. ${(r.totalDepositHeld || 0).toLocaleString()} | Realized Rent: Rs. ${(r.totalRentRealized || 0).toLocaleString()}`,
+                                  };
+                                  setPrintReceiptData(prepared);
+                                  setShowReceiptModal(true);
+                                }}
+                                className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-lg transition inline-flex items-center gap-1 border border-slate-700"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                                Slip
+                              </button>
                             </td>
                           </tr>
                         ))

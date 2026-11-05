@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
       await User.findOneAndUpdate(
         { username: u.username },
         { username: u.username, passwordHash, role: u.role, active: true },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: "after" }
       );
       seededUsers.push(u.username);
     }
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
       const l = await Location.findOneAndUpdate(
         { code: loc.code },
         { name: loc.name, code: loc.code, type: loc.type, active: true },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: "after" }
       );
       seededLocations.push(l.name);
     }
@@ -66,12 +66,12 @@ export async function POST(req: NextRequest) {
     const accessories = await Category.findOneAndUpdate(
       { name: "Accessories" },
       { name: "Accessories", code: "ACC" },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
     const consoles = await Category.findOneAndUpdate(
       { name: "Consoles" },
       { name: "Consoles", code: "CNSL" },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
 
     // 2. Create Product Groups
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
         category: accessories._id,
         description: "Official PlayStation 5 DualSense Wireless Controller Family",
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
 
     const ps5ConsoleGroup = await ProductGroup.findOneAndUpdate(
@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
         category: consoles._id,
         description: "Sony PlayStation 5 Home Entertainment Console Family",
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
 
     const ps5SlimDiscGroup = await ProductGroup.findOneAndUpdate(
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
         description:
           "Sony PlayStation 5 Slim Disc Edition — New and Used sell as separate products under this group",
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
 
     // 3. Sample Products — New and Used are separate records with separate SKU, barcode, and price
@@ -207,7 +207,7 @@ export async function POST(req: NextRequest) {
       const prod = await Product.findOneAndUpdate(
         { sku: p.sku },
         { ...p, isDeleted: false },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: "after" }
       );
       seeded.push(prod);
     }

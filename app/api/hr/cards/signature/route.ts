@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
         updatedBy: auth.user?.username || "Admin",
         updatedAt: new Date(),
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
 
     // Also update public/card/admin-signature.png if possible

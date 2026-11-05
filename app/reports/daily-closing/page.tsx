@@ -209,10 +209,20 @@ export default function DailyClosingReportPage() {
 
   const handlePrintSlip = (sale: any, e: React.MouseEvent) => {
     e.stopPropagation();
+    const isRentalSwap =
+      sale.saleSource === "EXCHANGE" ||
+      sale.saleNumber?.startsWith("RNT-") ||
+      sale.invoiceNumber?.startsWith("RNT-") ||
+      (sale.notes && sale.notes.includes("Rental Return"));
+
     const prepared = {
-      invoiceNumber: sale.invoiceNumber || `INV-${sale._id.slice(-6).toUpperCase()}`,
+      invoiceNumber:
+        sale.saleNumber ||
+        sale.invoiceNumber ||
+        `INV-${sale._id.slice(-6).toUpperCase()}`,
+      status: isRentalSwap ? "RENTAL_SWAP" : undefined,
       date: new Date(sale.createdAt).toLocaleString(),
-      locationName: locations.find((l) => l._id === sale.locationId)?.name || "Main Shop",
+      locationName: locations.find((l) => l._id === (sale.locationId || sale.location))?.name || sale.locationName || "Main Shop",
       cashierName: sale.createdByName || sale.createdBy || currentUser?.username || "Counter Staff",
       salesmanName: sale.salesmanName || "Direct Counter",
       customerName: sale.customerName || "Walk-in Customer",
@@ -231,7 +241,8 @@ export default function DailyClosingReportPage() {
       totalAmount: sale.totalAmount,
       paidAmount: sale.totalPaid || sale.totalAmount,
       changeDue: 0,
-      payments: [{ method: sale.paymentMethod || "CASH", amount: sale.totalAmount }],
+      payments: [{ method: sale.paymentMethod || "CASH", amount: sale.totalPaid || sale.totalAmount }],
+      notes: sale.notes,
     };
 
     setPrintReceiptData(prepared);

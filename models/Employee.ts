@@ -37,6 +37,7 @@ export interface IEmployee {
   weeklyOffDays: number[];    // 0=Sun..6=Sat (1 or 2 days per week)
   monthlyOffQuota: number;    // e.g. 1, 2, 4 offs per month
   monthlyHalfDayQuota?: number; // e.g. 1 or 2 half-days per month (counted at 50% target hours)
+  holidayOffAllowed?: boolean; // true only for staff who get Gazetted/Public Holiday offs (e.g. Ayan Hashmi)
 
   // Backup 4-digit PIN (Hashed, locked 15m after 3 failed tries)
   pinHash?: string;
@@ -164,7 +165,7 @@ const EmployeeSchema: Schema = new Schema(
     },
     halfDayMinutes: {
       type: Number,
-      default: 90,
+      default: 180, // 3 hours late triggers half day
       min: 15,
     },
     crossesMidnight: {
@@ -191,6 +192,10 @@ const EmployeeSchema: Schema = new Schema(
       default: 0,
       min: 0,
       max: 31,
+    },
+    holidayOffAllowed: {
+      type: Boolean,
+      default: false,
     },
 
     // Backup PIN
