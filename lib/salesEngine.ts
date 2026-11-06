@@ -652,8 +652,16 @@ export async function completeSale(input: CompleteSaleInput) {
       status: "OPEN",
     }).session(session);
 
+    const usedPaymentNums = new Set<string>();
     for (const alloc of input.paymentAllocations) {
-      const paymentNumber = await generatePaymentNumber();
+      let paymentNumber = await generatePaymentNumber(session);
+      while (usedPaymentNums.has(paymentNumber)) {
+        const parts = paymentNumber.split("-");
+        const seq = parseInt(parts[parts.length - 1], 10) || 1;
+        parts[parts.length - 1] = String(seq + 1).padStart(3, "0");
+        paymentNumber = parts.join("-");
+      }
+      usedPaymentNums.add(paymentNumber);
       const payment = new Payment({
         paymentNumber,
         sale: sale._id,

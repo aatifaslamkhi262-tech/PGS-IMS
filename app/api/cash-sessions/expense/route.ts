@@ -54,6 +54,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Expense amount must be greater than 0." }, { status: 400 });
     }
 
+    if (expenseAmount > session.expectedCash) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Insufficient cash in active register drawer. Available: Rs. ${session.expectedCash.toLocaleString()}, Requested Expense: Rs. ${expenseAmount.toLocaleString()}.`,
+        },
+        { status: 400 }
+      );
+    }
+
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     const count = await Expense.countDocuments();
     const expenseNumber = `EXP-${dateStr}-${String(count + 1).padStart(3, "0")}`;

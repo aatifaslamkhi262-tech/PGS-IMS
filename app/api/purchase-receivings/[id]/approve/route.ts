@@ -205,17 +205,32 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
 
     // c. Create InventoryMovement record if not already created
     if (!existingMovement) {
+      const invLineForMove = parentInvoice?.items.find(
+        (line: any) => line.product.toString() === item.product.toString() && line.condition === item.condition
+      );
+      const moveUnitCost = invLineForMove?.unitCost !== undefined ? Number(invLineForMove.unitCost) : 0;
+      const moveTotalCost = Math.round(moveUnitCost * item.quantityReceived * 100) / 100;
+      const moveSourceName =
+        parentInvoice?.receivingType === "CUSTOMER_BUYBACK" || parentInvoice?.receivingType === "CUSTOMER_RETURN"
+          ? parentInvoice.customerName || "Customer"
+          : "Supplier";
+
       if (session) {
         await InventoryMovement.create(
           [
             {
               product: item.product,
+              productName: productObj.name,
+              sku: productObj.sku,
               quantity: item.quantityReceived,
+              unitCost: moveUnitCost,
+              totalCost: moveTotalCost,
               serialNumbers: item.serialNumbers || [],
-              sourceName: "Supplier",
+              sourceName: moveSourceName,
               destinationLocation: receiving.location,
               destinationName: locationObj.name,
               type: "PURCHASE_RECEIVING",
+              referenceType: parentInvoice?.receivingType || "SUPPLIER_PURCHASE",
               referenceTransaction: receiving.receivingNumber,
               beforeQuantity,
               afterQuantity,
@@ -230,12 +245,17 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
       } else {
         await InventoryMovement.create({
           product: item.product,
+          productName: productObj.name,
+          sku: productObj.sku,
           quantity: item.quantityReceived,
+          unitCost: moveUnitCost,
+          totalCost: moveTotalCost,
           serialNumbers: item.serialNumbers || [],
-          sourceName: "Supplier",
+          sourceName: moveSourceName,
           destinationLocation: receiving.location,
           destinationName: locationObj.name,
           type: "PURCHASE_RECEIVING",
+          referenceType: parentInvoice?.receivingType || "SUPPLIER_PURCHASE",
           referenceTransaction: receiving.receivingNumber,
           beforeQuantity,
           afterQuantity,

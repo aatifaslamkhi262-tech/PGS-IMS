@@ -91,6 +91,13 @@ export async function POST(req: NextRequest) {
       totalAcquisitionValue += lineTotal;
 
       // Update Moving Average Cost & Stock Intake
+      const invBefore = await Inventory.findOne({
+        product: product._id,
+        location: location._id,
+        condition,
+      });
+      const beforeQty = invBefore ? invBefore.quantity : 0;
+
       const intakeRes = await updateAverageCostOnIntake(
         {
           productId: product._id,
@@ -111,7 +118,7 @@ export async function POST(req: NextRequest) {
         const snFilter = { serialNumber: sn };
         const snUpdate = {
           product: product._id,
-          location: location._id,
+          location: location.name,
           serialNumber: sn,
           status: "Available",
           condition,
@@ -131,17 +138,23 @@ export async function POST(req: NextRequest) {
         product: product._id,
         productName: product.name,
         sku: product.sku,
-        location: location._id,
-        locationName: location.name,
+        sourceName: customerName || customerObj?.name || "Customer",
+        destinationLocation: location._id,
+        destinationName: location.name,
         type: "STOCK_IN",
         quantity,
         serialNumbers: cleanSerials,
         unitCost: acquisitionVal,
         totalCost: lineTotal,
         referenceType: "PURCHASE",
+        referenceTransaction: buybackRefNumber,
         referenceId: buybackRefNumber,
         reason: `Daily Customer Purchase (${condition})`,
-        createdBy: auth.user?.username || "system",
+        beforeQuantity: beforeQty,
+        afterQuantity: intakeRes.newQuantity,
+        performedBy: auth.user?.username || "system",
+        condition,
+        date: new Date(),
       });
 
       if (isTxActive) {

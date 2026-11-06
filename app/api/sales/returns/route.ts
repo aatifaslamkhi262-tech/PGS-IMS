@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { dbConnect } from "@/lib/db";
 import { Sale } from "@/models/Sale";
+import { Payment } from "@/models/Payment";
 import { Product } from "@/models/Product";
 import { Inventory } from "@/models/Inventory";
 import { InventoryMovement } from "@/models/InventoryMovement";
@@ -10,6 +11,7 @@ import { Location } from "@/models/Location";
 import { User } from "@/models/User";
 import { RentalBooking } from "@/models/RentalBooking";
 import { updateAverageCostOnIntake, deductInventoryWithAverageCost } from "@/lib/averageCostEngine";
+import { generatePaymentNumber } from "@/lib/salesEngine";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 import { recordCashMovement } from "@/lib/cashSessionEngine";
 import { CashSession } from "@/models/CashSession";
@@ -43,7 +45,7 @@ export async function POST(request: Request) {
     let originalSale: any = null;
     let targetLocationId = locationId;
 
-    if (action !== "RENTAL_SWAP") {
+    if (action !== "RENTAL_SWAP" && action !== "DIRECT_TRADE_IN") {
       originalSale = await Sale.findById(originalSaleId);
       if (!originalSale || originalSale.status !== "COMPLETED") {
         if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
@@ -86,7 +88,19 @@ export async function POST(request: Request) {
 
     let returnTotalValue = 0;
     const processedReturns: any[] = [];
-    const rawReturnedList = returnedItems || (returnedItem ? [returnedItem] : []);
+    const rawReturnedList =
+      returnedItems ||
+      (returnedItem
+        ? [returnedItem]
+        : body.tradeInItem
+        ? [
+            {
+              ...body.tradeInItem,
+              agreedReturnValuation:
+                body.tradeInItem.agreedTradeInValue ?? body.tradeInItem.agreedReturnValuation,
+            },
+          ]
+        : []);
 
     const secDepositPaid = Number(securityDepositPaid || 0);
     const rentDeducted = Number(rentalFeeDeducted || 0);
@@ -149,6 +163,8 @@ export async function POST(request: Request) {
 
       if (action === "RENTAL_SWAP") {
         intakeUnitCost = Number(product.costPrice) > 0 ? Number(product.costPrice) : returnValuation;
+      } else if (action === "DIRECT_TRADE_IN" && isValidCost(returnValuation)) {
+        intakeUnitCost = returnValuation;
       } else if (origItem && isValidCost(origItem.unitCost) && (rItem.condition === origItem.condition || !rItem.condition)) {
         // Returned in same condition: restore inventory at original Cost of Goods Sold (COGS)
         intakeUnitCost = origItem.unitCost;
@@ -255,13 +271,22 @@ export async function POST(request: Request) {
       const serials = rItem.serialNumbers || (rItem.serialNumber ? [rItem.serialNumber] : []);
       if (serials && serials.length > 0) {
         const targetStatus = condition === "Defective" ? "Defective" : "Available";
-        const snFilter = { serialNumber: { $in: serials } };
-        const snUpdate = { $set: { status: targetStatus, location: location.name } };
-        
-        if (isTxActive) {
-          await SerialNumber.updateMany(snFilter, snUpdate, { session });
-        } else {
-          await SerialNumber.updateMany(snFilter, snUpdate);
+        for (const sn of serials) {
+          const snFilter = { serialNumber: sn };
+          const snUpdate = {
+            $set: {
+              product: product._id,
+              sku: product.sku,
+              condition,
+              status: targetStatus,
+              location: location.name,
+            },
+          };
+          if (isTxActive) {
+            await SerialNumber.updateOne(snFilter, snUpdate, { upsert: true, session });
+          } else {
+            await SerialNumber.updateOne(snFilter, snUpdate, { upsert: true });
+          }
         }
       }
 
@@ -357,6 +382,9 @@ export async function POST(request: Request) {
           sku: product.sku,
           condition: repInput.condition || "New",
           quantity: repQty,
+          unitCost: deductRes.unitCost,
+          totalCost: deductRes.totalCost,
+          serialNumbers: repInput.serialNumbers || [],
           unitPrice,
           lineTotal,
         });
@@ -437,20 +465,31 @@ export async function POST(request: Request) {
           barcode: it.sku,
           condition: it.condition || "Used",
           quantity: it.quantity,
-          unitCost: it.unitPrice,
+          serialNumbers: it.serialNumbers || [],
+          unitCost: it.unitCost ?? 0,
           unitPrice: it.unitPrice,
           minSellingPrice: it.unitPrice,
           discountAmount: 0,
           lineTotal: it.lineTotal,
-          grossProfit: 0,
+          grossProfit: it.lineTotal - (it.totalCost ?? 0),
         }));
       }
 
       if (exchangeSaleItems.length > 0) {
+        const replacementTotalCost = processedReplacements.reduce(
+          (sum, it) => sum + Number(it.totalCost || 0),
+          0
+        );
+        const exchangeTotalCost = action === "RENTAL_SWAP" ? 0 : replacementTotalCost;
+        const exchangeNetProfit =
+          action === "RENTAL_SWAP"
+            ? Number(rentDeducted || 0)
+            : replacementTotalValue - replacementTotalCost;
+
         const newExchangeSale = new Sale({
           saleNumber: returnTxNumber,
           creationMode: "DIRECT_COUNTER",
-          saleSource: action === "RENTAL_SWAP" ? "EXCHANGE" : "EXCHANGE",
+          saleSource: action === "DIRECT_TRADE_IN" ? "TRADE_IN" : "EXCHANGE",
           location: targetLocationId,
           locationName: location.name,
           salesman: salesmanUser?._id || originalSale?.salesman,
@@ -465,8 +504,8 @@ export async function POST(request: Request) {
           totalAmount: netDifference > 0 ? netDifference : (replacementTotalValue || Number(rentDeducted || 0)),
           totalPaid: netDifference > 0 ? netDifference : (replacementTotalValue || Number(rentDeducted || 0)),
           balanceDue: 0,
-          totalCost: 0,
-          netProfit: Number(rentDeducted || 0),
+          totalCost: exchangeTotalCost,
+          netProfit: exchangeNetProfit,
           status: "COMPLETED",
           notes: notes || (action === "RENTAL_SWAP" ? "Rental Deposit Return & Exchange Swap" : "Invoice Return Exchange"),
           createdBy: processedBy || auth.user?.username || "system",
@@ -478,6 +517,29 @@ export async function POST(request: Request) {
           await newExchangeSale.save({ session });
         } else {
           await newExchangeSale.save();
+        }
+
+        if (netDifference > 0) {
+          const chosenPaymentMethod = paymentMethod || "CASH";
+          const payNum = await generatePaymentNumber(isTxActive ? session : undefined);
+          const exchangePayment = new Payment({
+            paymentNumber: payNum,
+            sale: newExchangeSale._id,
+            saleNumber: newExchangeSale.saleNumber,
+            location: targetLocationId,
+            locationName: location.name,
+            customerName: newExchangeSale.customerName,
+            amount: netDifference,
+            paymentMethod: chosenPaymentMethod,
+            status: "PAID",
+            receivedBy: processedBy || auth.user?.username || "system",
+            notes: `Exchange / Trade-In top-up payment (${returnTxNumber})`,
+          });
+          if (isTxActive) {
+            await exchangePayment.save({ session });
+          } else {
+            await exchangePayment.save();
+          }
         }
       }
     }
