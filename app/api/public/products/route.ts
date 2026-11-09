@@ -14,8 +14,9 @@ export async function GET(req: NextRequest) {
     const category = searchParams.get("category") || "";
     const brand = searchParams.get("brand") || "";
     const condition = searchParams.get("condition") || "";
+    const inStockOnly = searchParams.get("inStockOnly") === "true";
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
-    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "24", 10)));
+    const limit = Math.min(1000, Math.max(1, parseInt(searchParams.get("limit") || "24", 10)));
     const skip = (page - 1) * limit;
 
     // 1. Identify Central Warehouse Location
@@ -121,6 +122,12 @@ export async function GET(req: NextRequest) {
           warehouseStock: 0,
           inStock: false,
         },
+      });
+    }
+
+    if (inStockOnly) {
+      pipeline.push({
+        $match: { inStock: true },
       });
     }
 

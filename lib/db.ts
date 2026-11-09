@@ -47,6 +47,11 @@ export async function dbConnect(): Promise<typeof mongoose> {
   if (!cached.promise) {
     const opts = {
       bufferCommands: false,
+      maxPoolSize: 5,
+      minPoolSize: 1,
+      maxIdleTimeMS: 15000,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 30000,
     };
 
     cached.promise = mongoose.connect(MONGO_URI, opts).then((mongooseInstance) => {
