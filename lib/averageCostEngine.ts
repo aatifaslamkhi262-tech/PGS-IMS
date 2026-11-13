@@ -54,7 +54,42 @@ export async function updateAverageCostOnIntake(
     });
   }
 
-  // 1. Calculate company-wide existing stock and value for this product + condition
+  // Helper: Identify Damage & Claim ("Claim Godam" / "DMG-CLM") location IDs to exclude from Average Cost blending
+  const claimLocationIds = new Set<string>();
+  try {
+    const { default: mongoose } = await import("mongoose");
+    const { Location } = await import("@/models/Location");
+    const isLocMocked = Boolean(Location && typeof (Location as any).find === "function" && (Location as any).find.mock);
+    if (Location && typeof (Location as any).find === "function" && (mongoose.connection.readyState === 1 || isLocMocked)) {
+      const locQuery = (Location as any).find({
+        $or: [
+          { type: "Claim Godam" },
+          { code: "DMG-CLM" },
+          { name: { $regex: /damage\s*&?\s*claim/i } },
+        ],
+      });
+      let locDocs: any[] = [];
+      if (locQuery) {
+        if (typeof locQuery.select === "function") {
+          const sel = locQuery.select("_id");
+          locDocs = typeof sel.lean === "function" ? await sel.lean() : await sel;
+        } else if (typeof locQuery.lean === "function") {
+          locDocs = await locQuery.lean();
+        } else {
+          locDocs = await locQuery;
+        }
+      }
+      if (Array.isArray(locDocs)) {
+        for (const d of locDocs) {
+          if (d && d._id) claimLocationIds.add(d._id.toString());
+        }
+      }
+    }
+  } catch {
+    // Ignore in mocked environments
+  }
+
+  // 1. Calculate company-wide existing stock and value for this product + condition (EXCLUDING Damage & Claim)
   let existingQty = 0;
   let existingVal = 0;
 
@@ -71,6 +106,7 @@ export async function updateAverageCostOnIntake(
     // ignore in mocked environments
   }
 
+  let hadAnyAllInvs = false;
   try {
     const allInvsQuery = Inventory.find({
       product: input.productId,
@@ -80,7 +116,14 @@ export async function updateAverageCostOnIntake(
     const allInvs = await allInvsQuery.exec();
 
     if (Array.isArray(allInvs) && allInvs.length > 0) {
+      hadAnyAllInvs = true;
       for (const item of allInvs) {
+        const itemLocStr = item.location ? item.location.toString() : "";
+        // Strictly ignore Damage & Claim inventory when calculating new purchase moving average cost
+        if (itemLocStr && claimLocationIds.has(itemLocStr) && itemLocStr !== input.locationId.toString()) {
+          continue;
+        }
+
         const q = Math.max(0, item.quantity || 0);
         if (q > 0) {
           // If this pool has a valid cost, use it; otherwise fallback to masterCostPrice
@@ -110,7 +153,7 @@ export async function updateAverageCostOnIntake(
   }
 
   // Fallback if allInvs was empty or mocked without find:
-  if (existingQty === 0 && inv && (inv.quantity || 0) > 0) {
+  if (!hadAnyAllInvs && existingQty === 0 && inv && (inv.quantity || 0) > 0) {
     const fallbackCost = (inv.averageCost && inv.averageCost > 1) ? inv.averageCost : masterCostPrice;
     if (fallbackCost > 1) {
       existingQty = Math.max(0, inv.quantity || 0);
@@ -142,7 +185,8 @@ export async function updateAverageCostOnIntake(
     await inv.save();
   }
 
-  // Synchronize ALL other inventory pools for this product & condition to new company average
+  // Synchronize ALL other active branch inventory pools for this product & condition to new company average
+  // (Leaving Damage & Claim isolated at its locked claim cost)
   try {
     const syncQuery = Inventory.find({
       product: input.productId,
@@ -153,6 +197,10 @@ export async function updateAverageCostOnIntake(
     const otherInvs = await syncQuery.exec();
     if (Array.isArray(otherInvs)) {
       for (const other of otherInvs) {
+        const otherLocStr = other.location ? other.location.toString() : "";
+        if (otherLocStr && claimLocationIds.has(otherLocStr)) {
+          continue;
+        }
         other.averageCost = newAverageCost;
         other.totalCostValue = Math.round(Math.max(0, other.quantity || 0) * newAverageCost * 100) / 100;
         if (session) {

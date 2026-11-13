@@ -287,11 +287,11 @@ export default function InventoryPage() {
 
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <Link
-            href="/inventory/audit"
+            href="/inventory/live-sync"
             className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-md shadow-emerald-900/30 transition-colors w-full sm:w-auto"
           >
             <CheckSquare className="w-4 h-4" />
-            <span>Shelf Stock Audit</span>
+            <span>All-Branch Live Stock Sync</span>
           </Link>
 
           {userRole && (userRole === "Admin" || userRole === "Warehouse") && (
