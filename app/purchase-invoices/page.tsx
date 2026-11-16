@@ -46,10 +46,19 @@ export default function PurchaseInvoicesPage() {
 
   // Filters
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedSupplier, setSelectedSupplier] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+
+  // Debounce search input by 300ms to eliminate keystroke query storms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   // Toasts, Print & Return State
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -123,7 +132,7 @@ export default function PurchaseInvoicesPage() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (search.trim()) params.append("search", search);
+      if (debouncedSearch.trim()) params.append("search", debouncedSearch.trim());
       if (selectedSupplier) params.append("supplier", selectedSupplier);
       if (selectedStatus) params.append("status", selectedStatus);
       if (startDate) params.append("startDate", startDate);
@@ -143,14 +152,21 @@ export default function PurchaseInvoicesPage() {
     }
   };
 
+  // Load suppliers once on authorization
   useEffect(() => {
     if (userRole && isAuthorizedRole) {
       fetchSuppliers();
+    }
+  }, [userRole, isAuthorizedRole]);
+
+  // Load invoices on filter or debounced search change
+  useEffect(() => {
+    if (userRole && isAuthorizedRole) {
       fetchInvoices();
     } else if (userRole && !isAuthorizedRole) {
       setLoading(false);
     }
-  }, [userRole, search, selectedSupplier, selectedStatus, startDate, endDate]);
+  }, [userRole, isAuthorizedRole, debouncedSearch, selectedSupplier, selectedStatus, startDate, endDate]);
 
   const getStatusBadge = (status: InvoiceItem["status"]) => {
     switch (status) {

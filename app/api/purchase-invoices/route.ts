@@ -20,10 +20,14 @@ export async function GET(req: NextRequest) {
     const status = searchParams.get("status") || "";
     const startDate = searchParams.get("startDate") || "";
     const endDate = searchParams.get("endDate") || "";
+    const includeItems = searchParams.get("includeItems") === "true";
+    const limitParam = searchParams.get("limit");
+    const limit = limitParam === "all" ? 500 : Math.min(200, Math.max(10, parseInt(limitParam || "100", 10)));
 
     const query: any = {};
     if (search.trim()) {
-      query.invoiceNumber = new RegExp(search.trim(), "i");
+      const cleanSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      query.invoiceNumber = new RegExp(cleanSearch, "i");
     }
     if (supplier) {
       query.supplier = supplier;
@@ -42,10 +46,16 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const invoices = await PurchaseInvoice.find(query)
+    let queryBuilder = PurchaseInvoice.find(query)
       .populate("supplier", "name code")
       .sort({ invoiceDate: -1, createdAt: -1 })
-      .lean();
+      .limit(limit);
+
+    if (!includeItems) {
+      queryBuilder = queryBuilder.select("-items");
+    }
+
+    const invoices = await queryBuilder.lean();
 
     return NextResponse.json({ success: true, data: invoices });
   } catch (error: any) {

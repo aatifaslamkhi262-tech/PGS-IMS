@@ -42,9 +42,14 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
 
   const { isValidCost, COST_PLACEHOLDER_MAX } = await import("@/lib/costing");
 
+  // Batch-fetch all receiving products in one single query to eliminate N+1 roundtrips
+  const productIds = receiving.items.map((i: any) => i.product);
+  const products = await Product.find({ _id: { $in: productIds } }, null, sessionOptions);
+  const productMap = new Map(products.map((p: any) => [p._id.toString(), p]));
+
   // 2b. Pre-validate ALL receiving item costs before making ANY DB writes/intakes
   for (const item of receiving.items) {
-    const productObj = await Product.findById(item.product, null, sessionOptions);
+    const productObj = productMap.get(item.product.toString());
     if (!productObj) {
       throw new Error(`Product not found: ${item.product}`);
     }
@@ -61,7 +66,7 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
 
   // 3. Update Inventory, SerialNumbers, and InventoryMovement for each item idempotently
   for (const item of receiving.items) {
-    const productObj = await Product.findById(item.product, null, sessionOptions);
+    const productObj = productMap.get(item.product.toString());
     if (!productObj) {
       throw new Error(`Product not found: ${item.product}`);
     }
