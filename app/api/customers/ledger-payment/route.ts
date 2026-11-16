@@ -71,7 +71,21 @@ export async function POST(request: Request) {
     }
 
     // 🟢 Action: PAYMENT (-) [Customer made a payment / khata collection]
-    const location = locationId ? await Location.findById(locationId) : await Location.findOne();
+    let location = locationId ? await Location.findById(locationId) : null;
+    if (!location) {
+      const { getSession } = await import("@/lib/auth/session");
+      const sessionUser = await getSession();
+      if (sessionUser?.userId) {
+        const { User } = await import("@/models/User");
+        const u = await User.findById(sessionUser.userId).select("assignedLocation").lean();
+        if (u?.assignedLocation) {
+          location = await Location.findById(u.assignedLocation);
+        }
+      }
+    }
+    if (!location) {
+      return NextResponse.json({ success: false, error: "Valid branch location is required for ledger payment." }, { status: 400 });
+    }
 
     const count = await Payment.countDocuments();
     const paymentNumber = `PAY-${dateStr}-${String(count + 1).padStart(3, "0")}`;

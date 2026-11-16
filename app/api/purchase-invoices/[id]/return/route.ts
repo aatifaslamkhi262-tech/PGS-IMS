@@ -38,16 +38,20 @@ export async function POST(
       return NextResponse.json({ success: false, error: "At least one return item is required." }, { status: 400 });
     }
 
-    // Default location to primary location or first active location
+    // Resolve location strictly (No random guessing)
     let targetLocation = null;
     if (locationId) {
       targetLocation = await Location.findById(locationId);
     }
-    if (!targetLocation) {
-      targetLocation = await Location.findOne({ active: true });
+    if (!targetLocation && auth.user?.userId) {
+      const { User } = await import("@/models/User");
+      const u = await User.findById(auth.user.userId).select("assignedLocation").lean();
+      if (u?.assignedLocation) {
+        targetLocation = await Location.findById(u.assignedLocation);
+      }
     }
     if (!targetLocation) {
-      return NextResponse.json({ success: false, error: "No active location found for return." }, { status: 400 });
+      return NextResponse.json({ success: false, error: "Branch location is required for purchase return." }, { status: 400 });
     }
 
     const session = await mongoose.startSession();

@@ -6,6 +6,7 @@ import { Product } from "@/models/Product";
 import { Inventory } from "@/models/Inventory";
 import { InventoryMovement } from "@/models/InventoryMovement";
 import { Location } from "@/models/Location";
+import { User } from "@/models/User";
 import { Payment } from "@/models/Payment";
 import { resolveOrCreateCustomer } from "@/lib/customerResolver";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
@@ -134,16 +135,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Fault reason / problem description is required." }, { status: 400 });
     }
 
-    // 2. Resolve Location
+    // 2. Resolve Location strictly (No random guessing)
     let targetLocation = null;
     if (locationId) {
       targetLocation = await Location.findById(locationId).lean();
     }
-    if (!targetLocation) {
-      targetLocation = await Location.findOne({ active: true }).lean();
+    // Fallback strictly to logged-in user's assigned branch
+    if (!targetLocation && auth.user?.userId) {
+      const u = await User.findById(auth.user.userId).select("assignedLocation").lean();
+      if (u?.assignedLocation) {
+        targetLocation = await Location.findById(u.assignedLocation).lean();
+      }
     }
     if (!targetLocation) {
-      return NextResponse.json({ success: false, error: "No active location configured." }, { status: 500 });
+      return NextResponse.json(
+        { success: false, error: "Branch location is required. Please select an active branch." },
+        { status: 400 }
+      );
     }
 
     // 3. Auto-resolve or create Customer in CRM

@@ -58,8 +58,17 @@ export async function POST(request: Request) {
     }
 
     if (!targetLocationId || targetLocationId === "ALL" || !mongoose.Types.ObjectId.isValid(targetLocationId)) {
-      const defaultLoc = await Location.findOne({});
-      targetLocationId = defaultLoc?._id;
+      if (auth.user?.userId) {
+        const u = await User.findById(auth.user.userId).select("assignedLocation").lean();
+        if (u?.assignedLocation && mongoose.Types.ObjectId.isValid(u.assignedLocation.toString())) {
+          targetLocationId = u.assignedLocation;
+        }
+      }
+    }
+
+    if (!targetLocationId || targetLocationId === "ALL" || !mongoose.Types.ObjectId.isValid(targetLocationId)) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
+      return NextResponse.json({ success: false, error: "Valid branch location is required for returns." }, { status: 400 });
     }
 
     const location = await Location.findById(targetLocationId);

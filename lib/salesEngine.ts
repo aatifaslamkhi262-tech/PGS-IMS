@@ -431,6 +431,37 @@ export async function completeSale(input: CompleteSaleInput) {
       throw new Error("Sale location not found.");
     }
 
+    // Load active locations to support cross-branch serialized sales (e.g., PS5 from G-17 billed at G-14)
+    let allActiveLocations: any[] = [];
+    try {
+      const isLocFindMocked = Location && typeof (Location as any).find === "function" && Boolean((Location as any).find.mock);
+      if (mongoose.connection.readyState === 1 || isLocFindMocked) {
+        const findQuery: any = Location.find({ active: true });
+        if (session && findQuery && typeof findQuery.session === "function") {
+          findQuery.session(session);
+        }
+        const res = typeof findQuery?.lean === "function" ? await findQuery.lean() : (typeof findQuery?.exec === "function" ? await findQuery.exec() : await findQuery);
+        if (Array.isArray(res)) allActiveLocations = res;
+      }
+    } catch {
+      allActiveLocations = [];
+    }
+    if (!Array.isArray(allActiveLocations) || allActiveLocations.length === 0) {
+      allActiveLocations = [location];
+    }
+
+    const resolveSerialLocation = (rawLoc: string | undefined): any => {
+      if (!rawLoc) return location;
+      const raw = rawLoc.trim();
+      const norm = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+      for (const l of allActiveLocations) {
+        if (l._id && l._id.toString() === raw) return l;
+        if (l.code && norm === l.code.toLowerCase().replace(/[^a-z0-9]/g, "")) return l;
+        if (l.name && norm === l.name.toLowerCase().replace(/[^a-z0-9]/g, "")) return l;
+      }
+      return location;
+    };
+
     // Apply Price Adjustment (Discount or Additional Surcharge / Late Fee) if specified
     const adjustment = Number(input.priceAdjustment || 0);
     if (adjustment !== 0) {
@@ -464,21 +495,8 @@ export async function completeSale(input: CompleteSaleInput) {
       );
     }
 
-    // 4. Validate Inventory & Serials
+    // 4. Validate Inventory & Serials (Item-Level Multi-Branch Aware)
     for (const item of sale.items) {
-      const inv = await Inventory.findOne({
-        product: item.product,
-        location: sale.location,
-        condition: item.condition,
-      }).session(session);
-
-      const currentQty = inv ? inv.quantity : 0;
-      if (currentQty < item.quantity) {
-        throw new Error(
-          `Insufficient stock for '${item.productName}' (${item.condition}) at ${location.name}. Available: ${currentQty}, Required: ${item.quantity}`
-        );
-      }
-
       let isSerialTracked = false;
       try {
         const isMocked = typeof (Product.findById as any)?.mock === "object";
@@ -494,15 +512,17 @@ export async function completeSale(input: CompleteSaleInput) {
         // Graceful fallback in mocked unit tests
       }
 
-      if (isSerialTracked) {
+      if (isSerialTracked || (item.serialNumbers && item.serialNumbers.length > 0)) {
         const cleanSerials = (item.serialNumbers || []).map((s) => s?.trim()).filter(Boolean);
-        if (cleanSerials.length !== item.quantity) {
+        if (isSerialTracked && cleanSerials.length !== item.quantity) {
           throw new Error(
             `Product '${item.productName}' requires exactly ${item.quantity} serial number(s) to complete checkout. (Currently assigned: ${cleanSerials.length})`
           );
         }
 
         const snSet = new Set<string>();
+        const qtyByBranchId = new Map<string, { branchLoc: any; count: number }>();
+
         for (const sn of cleanSerials) {
           const upperSn = sn.toUpperCase();
           if (snSet.has(upperSn)) {
@@ -523,22 +543,44 @@ export async function completeSale(input: CompleteSaleInput) {
               `Serial number '${sn}' is not available (Current status: '${serialDoc.status}').`
             );
           }
+
+          // Resolve the branch where this serial physically resides
+          const actualBranch = resolveSerialLocation((serialDoc as any).location);
+          const bId = actualBranch._id.toString();
+          if (!qtyByBranchId.has(bId)) {
+            qtyByBranchId.set(bId, { branchLoc: actualBranch, count: 0 });
+          }
+          qtyByBranchId.get(bId)!.count += 1;
         }
-      } else if (item.serialNumbers && item.serialNumbers.length > 0) {
-        for (const sn of item.serialNumbers) {
-          const serialDoc = await SerialNumber.findOne({
+
+        // Validate stock at each respective branch holding the serials
+        for (const { branchLoc, count } of qtyByBranchId.values()) {
+          const inv = await Inventory.findOne({
             product: item.product,
-            serialNumber: sn,
+            location: branchLoc._id,
+            condition: item.condition,
           }).session(session);
 
-          if (!serialDoc) {
-            throw new Error(`Serial number '${sn}' not found.`);
-          }
-          if (serialDoc.status !== "Available" && serialDoc.status !== "Reserved") {
+          const currentQty = inv ? inv.quantity : 0;
+          if (currentQty < count) {
             throw new Error(
-              `Serial number '${sn}' is no longer Available/Reserved (Current status: '${serialDoc.status}').`
+              `Insufficient stock for '${item.productName}' (${item.condition}) at ${branchLoc.name}. Available: ${currentQty}, Required: ${count}`
             );
           }
+        }
+      } else {
+        // Non-serialized item: validate against counter branch (sale.location)
+        const inv = await Inventory.findOne({
+          product: item.product,
+          location: sale.location,
+          condition: item.condition,
+        }).session(session);
+
+        const currentQty = inv ? inv.quantity : 0;
+        if (currentQty < item.quantity) {
+          throw new Error(
+            `Insufficient stock for '${item.productName}' (${item.condition}) at ${location.name}. Available: ${currentQty}, Required: ${item.quantity}`
+          );
         }
       }
     }
@@ -548,62 +590,126 @@ export async function completeSale(input: CompleteSaleInput) {
     const invoiceNumber = await generateInvoiceNumber(session);
 
     for (const item of sale.items) {
-      const invBefore = await Inventory.findOne({
-        product: item.product,
-        location: sale.location,
-        condition: item.condition,
-      }).session(session);
-      const beforeQty = invBefore ? invBefore.quantity : 0;
-
-      const deductRes = await deductInventoryWithAverageCost(
-        {
-          productId: item.product,
-          locationId: sale.location,
-          condition: item.condition,
-          quantity: item.quantity,
-        },
-        session
-      );
-
-      if (deductRes.unitCost > 0) {
-        item.unitCost = deductRes.unitCost;
-        item.grossProfit = item.lineTotal - deductRes.totalCost;
-      }
-      recalculatedTotalCost += item.unitCost * item.quantity;
-
       if (item.serialNumbers && item.serialNumbers.length > 0) {
+        // Group serials by their physical branch location
+        const serialsByBranch = new Map<string, { branchLoc: any; serials: string[] }>();
         for (const sn of item.serialNumbers) {
-          const serialDoc = await SerialNumber.findOne({
+          const cleanSn = sn.trim();
+          const sDoc = await SerialNumber.findOne({
             product: item.product,
-            serialNumber: sn,
+            serialNumber: cleanSn,
           }).session(session);
 
-          if (serialDoc) {
-            serialDoc.status = "Sold";
-            serialDoc.location = sale.customerName || "Customer";
-            serialDoc.transactionReference = invoiceNumber;
-            serialDoc.saleDate = new Date();
-            await serialDoc.save({ session });
+          const actualBranch = resolveSerialLocation(sDoc?.location);
+          const bId = actualBranch._id.toString();
+          if (!serialsByBranch.has(bId)) {
+            serialsByBranch.set(bId, { branchLoc: actualBranch, serials: [] });
+          }
+          serialsByBranch.get(bId)!.serials.push(cleanSn);
+
+          if (sDoc) {
+            sDoc.status = "Sold";
+            sDoc.location = sale.customerName || "Customer";
+            sDoc.transactionReference = invoiceNumber;
+            sDoc.saleDate = new Date();
+            await sDoc.save({ session });
           }
         }
-      }
 
-      await new InventoryMovement({
-        product: item.product,
-        quantity: item.quantity,
-        serialNumbers: item.serialNumbers || [],
-        sourceLocation: location._id,
-        sourceName: location.name,
-        destinationName: sale.customerName || "Customer",
-        type: "TRANSFER",
-        referenceTransaction: invoiceNumber,
-        beforeQuantity: beforeQty,
-        afterQuantity: deductRes.remainingQty,
-        performedBy: input.completedBy,
-        condition: item.condition,
-        date: new Date(),
-        notes: `Sale Completed: Invoice ${invoiceNumber}`,
-      }).save({ session });
+        let itemBlendedCost = 0;
+        let itemDeductedCount = 0;
+
+        for (const { branchLoc, serials } of serialsByBranch.values()) {
+          const branchQty = serials.length;
+          const invBefore = await Inventory.findOne({
+            product: item.product,
+            location: branchLoc._id,
+            condition: item.condition,
+          }).session(session);
+          const beforeQty = invBefore ? invBefore.quantity : 0;
+
+          const deductRes = await deductInventoryWithAverageCost(
+            {
+              productId: item.product,
+              locationId: branchLoc._id,
+              condition: item.condition,
+              quantity: branchQty,
+            },
+            session
+          );
+
+          itemBlendedCost += deductRes.totalCost;
+          itemDeductedCount += branchQty;
+
+          const isCrossBranch = branchLoc._id.toString() !== location._id.toString();
+          await new InventoryMovement({
+            product: item.product,
+            quantity: branchQty,
+            serialNumbers: serials,
+            sourceLocation: branchLoc._id,
+            sourceName: branchLoc.name,
+            destinationName: sale.customerName || "Customer",
+            type: "TRANSFER",
+            referenceTransaction: invoiceNumber,
+            beforeQuantity: beforeQty,
+            afterQuantity: deductRes.remainingQty,
+            performedBy: input.completedBy,
+            condition: item.condition,
+            date: new Date(),
+            notes: isCrossBranch
+              ? `Cross-Branch Sale (Dispatched from ${branchLoc.name}, Billed at ${location.name}): Invoice ${invoiceNumber}`
+              : `Sale Completed: Invoice ${invoiceNumber}`,
+          }).save({ session });
+        }
+
+        if (itemDeductedCount > 0) {
+          const avgUnitCost = Math.round((itemBlendedCost / itemDeductedCount) * 100) / 100;
+          item.unitCost = avgUnitCost;
+          item.grossProfit = item.lineTotal - itemBlendedCost;
+          recalculatedTotalCost += itemBlendedCost;
+        }
+      } else {
+        // Non-serialized item: deduct directly from sale.location
+        const invBefore = await Inventory.findOne({
+          product: item.product,
+          location: sale.location,
+          condition: item.condition,
+        }).session(session);
+        const beforeQty = invBefore ? invBefore.quantity : 0;
+
+        const deductRes = await deductInventoryWithAverageCost(
+          {
+            productId: item.product,
+            locationId: sale.location,
+            condition: item.condition,
+            quantity: item.quantity,
+          },
+          session
+        );
+
+        if (deductRes.unitCost > 0) {
+          item.unitCost = deductRes.unitCost;
+          item.grossProfit = item.lineTotal - deductRes.totalCost;
+        }
+        recalculatedTotalCost += item.unitCost * item.quantity;
+
+        await new InventoryMovement({
+          product: item.product,
+          quantity: item.quantity,
+          serialNumbers: [],
+          sourceLocation: location._id,
+          sourceName: location.name,
+          destinationName: sale.customerName || "Customer",
+          type: "TRANSFER",
+          referenceTransaction: invoiceNumber,
+          beforeQuantity: beforeQty,
+          afterQuantity: deductRes.remainingQty,
+          performedBy: input.completedBy,
+          condition: item.condition,
+          date: new Date(),
+          notes: `Sale Completed: Invoice ${invoiceNumber}`,
+        }).save({ session });
+      }
     }
 
     sale.totalCost = recalculatedTotalCost;
