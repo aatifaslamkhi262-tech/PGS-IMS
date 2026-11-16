@@ -709,9 +709,12 @@ function SalesWorkspaceContent() {
   useEffect(() => {
     if (mode === "QUEUE") {
       fetchQueue(false);
+      // Low-frequency fallback poll (45s) only when tab is active/visible
       const interval = setInterval(() => {
-        fetchQueue(true);
-      }, 1500);
+        if (document.visibilityState === "visible") {
+          fetchQueue(true);
+        }
+      }, 45000);
 
       const onFocus = () => fetchQueue(true);
       const onVisibilityChange = () => {

@@ -55,7 +55,8 @@ export async function GET(request: Request) {
       .populate("salesman", "name code")
       .populate("customer", "name phone")
       .sort({ createdAt: -1 })
-      .limit(search ? 300 : 100);
+      .limit(search ? 300 : 100)
+      .lean();
 
     return NextResponse.json(
       {

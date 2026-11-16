@@ -51,9 +51,10 @@ export async function GET(req: NextRequest) {
 
       let hexMatchedSaleIds: any[] = [];
       const hexSuffix = cleanTerm.replace(/^INV-/i, "").trim().toLowerCase();
-      if (hexSuffix.length >= 4) {
-        const allSales = await Sale.find({}).select("_id").lean();
-        hexMatchedSaleIds = allSales
+      if (hexSuffix.length >= 4 && /^[0-9a-f]+$/i.test(hexSuffix)) {
+        // Safe bounded check on recent sales to avoid crashing memory by loading entire collection
+        const recentSales = await Sale.find({}).sort({ createdAt: -1 }).limit(200).select("_id").lean();
+        hexMatchedSaleIds = recentSales
           .filter((s: any) => s._id.toString().toLowerCase().endsWith(hexSuffix))
           .map((s: any) => s._id);
       }

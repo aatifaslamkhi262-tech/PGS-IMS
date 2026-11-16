@@ -143,6 +143,8 @@ const PurchaseReceivingSchema = new Schema<IPurchaseReceiving>(
 PurchaseReceivingSchema.index({ purchaseInvoice: 1 });
 PurchaseReceivingSchema.index({ location: 1 });
 PurchaseReceivingSchema.index({ status: 1 });
+PurchaseReceivingSchema.index({ "items.product": 1, status: 1 });
+PurchaseReceivingSchema.index({ status: 1, "items.product": 1 });
 
 export const PurchaseReceiving: Model<IPurchaseReceiving> =
   mongoose.models.PurchaseReceiving ||

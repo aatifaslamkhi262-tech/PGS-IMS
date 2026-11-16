@@ -240,9 +240,10 @@ export default function LiveBranchStockSyncPage() {
     return () => controller.abort();
   }, [currentPage, itemsPerPage, debouncedSearch, trackingFilter, statusFilter, selectedCategory, inStockOnly]);
 
-  // LIVE POS SALE WATCHER: Poll every 8s in background to auto-remove POS-sold serials & auto-deduct POS-sold quantities
+  // LIVE POS SALE WATCHER: Smart 30s background poll (only when tab is visible) to auto-remove POS-sold serials & auto-deduct POS-sold quantities
   useEffect(() => {
-    const interval = setInterval(async () => {
+    const doPoll = async () => {
+      if (document.visibilityState !== "visible") return;
       if (loading || Object.values(savingProductIds).some(Boolean)) return;
       try {
         const params = new URLSearchParams({
@@ -359,9 +360,18 @@ export default function LiveBranchStockSyncPage() {
       } catch {
         // ignore silent background poll errors
       }
-    }, 8000);
+    };
 
-    return () => clearInterval(interval);
+    const interval = setInterval(doPoll, 30000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") doPoll();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [
     loading,
     savingProductIds,

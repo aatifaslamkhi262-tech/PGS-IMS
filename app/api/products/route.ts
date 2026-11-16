@@ -9,6 +9,7 @@ import {
   buildSkuDraft,
 } from "@/lib/productCondition";
 import { verifyRole } from "@/lib/auth/rbac";
+import { invalidateStorefrontCache } from "@/lib/redis";
 
 // Helper function to generate unique system barcode
 async function generateSystemBarcode(): Promise<string> {
@@ -371,6 +372,8 @@ export async function POST(req: NextRequest) {
     const populatedProduct = await Product.findById(product._id)
       .populate("category", "name code")
       .populate("productGroup", "name");
+
+    invalidateStorefrontCache().catch(() => {});
 
     return NextResponse.json({ success: true, data: populatedProduct }, { status: 201 });
   } catch (error: any) {

@@ -84,8 +84,10 @@ SerialNumberSchema.index({ product: 1, serialNumber: 1 }, { unique: true });
 // Ensure unique serial number globally across all products
 SerialNumberSchema.index({ serialNumber: 1 }, { unique: true });
 
-// Index for querying available serials by product
+// Index for querying available serials by product & distinct status queries
 SerialNumberSchema.index({ product: 1, status: 1 });
+SerialNumberSchema.index({ status: 1, product: 1 });
+SerialNumberSchema.index({ location: 1, status: 1 });
 
 // Index for transaction reference lookups
 SerialNumberSchema.index({ transactionReference: 1 });

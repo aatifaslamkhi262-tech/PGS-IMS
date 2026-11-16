@@ -5,6 +5,7 @@ import "@/models/Category"; // Ensure Category model is registered
 import "@/models/ProductGroup"; // Ensure ProductGroup model is registered
 import { validateProductCondition, buildSkuDraft } from "@/lib/productCondition";
 import { verifyRole } from "@/lib/auth/rbac";
+import { invalidateStorefrontCache } from "@/lib/redis";
 
 export async function GET(
   req: NextRequest,
@@ -342,6 +343,8 @@ export async function PUT(
       .populate("category", "name code")
       .populate("productGroup", "name description");
 
+    invalidateStorefrontCache().catch(() => {});
+
     return NextResponse.json({ success: true, data: updatedProduct });
   } catch (error: any) {
     if (error.code === 11000) {
@@ -383,6 +386,8 @@ export async function DELETE(
     product.isDeleted = true;
     product.deletedAt = new Date();
     await product.save({ validateBeforeSave: false });
+
+    invalidateStorefrontCache().catch(() => {});
 
     return NextResponse.json({
       success: true,

@@ -32,8 +32,12 @@ export async function GET(req: NextRequest) {
     };
 
     if (search.trim()) {
-      const searchRegex = new RegExp(search.trim(), "i");
+      const term = search.trim();
+      const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const searchRegex = new RegExp(escaped, "i");
       matchQuery.$or = [
+        { sku: term.toUpperCase() },
+        { barcode: term },
         { name: searchRegex },
         { sku: searchRegex },
         { barcode: searchRegex },
@@ -56,9 +60,22 @@ export async function GET(req: NextRequest) {
       matchQuery.condition = condition;
     }
 
-    // 3. Build Aggregation Pipeline
+    // 3. Early Filter for inStockOnly to avoid running massive $lookup across out-of-stock items
     const warehouseLocationId = warehouseLocation ? warehouseLocation._id : null;
+    if (inStockOnly && warehouseLocationId) {
+      const { Inventory } = await import("@/models/Inventory");
+      const invFilter: any = {
+        location: warehouseLocationId,
+        quantity: { $gt: 0 },
+      };
+      if (condition) {
+        invFilter.condition = condition;
+      }
+      const inStockProductIds = await Inventory.distinct("product", invFilter);
+      matchQuery._id = { $in: inStockProductIds };
+    }
 
+    // 4. Build Aggregation Pipeline
     const pipeline: any[] = [{ $match: matchQuery }];
 
     if (warehouseLocationId) {
@@ -218,7 +235,9 @@ export async function GET(req: NextRequest) {
       },
       {
         headers: {
-          "Cache-Control": "public, s-maxage=120, stale-while-revalidate=300",
+          "Cache-Control": "public, max-age=60, s-maxage=120, stale-while-revalidate=300",
+          "CDN-Cache-Control": "public, s-maxage=120, stale-while-revalidate=300",
+          "Vercel-CDN-Cache-Control": "public, s-maxage=120, stale-while-revalidate=300",
         },
       }
     );

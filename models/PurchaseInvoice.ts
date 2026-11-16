@@ -239,6 +239,8 @@ const PurchaseInvoiceSchema = new Schema<IPurchaseInvoice>(
 PurchaseInvoiceSchema.index({ supplier: 1 });
 PurchaseInvoiceSchema.index({ status: 1 });
 PurchaseInvoiceSchema.index({ invoiceDate: 1 });
+PurchaseInvoiceSchema.index({ "items.product": 1, status: 1 });
+PurchaseInvoiceSchema.index({ "items.product": 1, createdAt: -1 });
 
 export const PurchaseInvoice: Model<IPurchaseInvoice> =
   mongoose.models.PurchaseInvoice ||

@@ -1029,7 +1029,12 @@ function DashboardQueueWidget() {
 
   useEffect(() => {
     fetchQueue();
-    const interval = setInterval(fetchQueue, 1500);
+    // Low-frequency fallback poll (45s) only when tab is visible to prevent Vercel invocation spikes
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        fetchQueue();
+      }
+    }, 45000);
 
     const onFocus = () => fetchQueue();
     const onVisibilityChange = () => {

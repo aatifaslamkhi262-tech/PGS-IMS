@@ -15,6 +15,7 @@ import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 import { recordCashMovement } from "@/lib/cashSessionEngine";
 import { CashSession } from "@/models/CashSession";
 import { resolveOrCreateCustomer } from "@/lib/customerResolver";
+import { invalidateStorefrontCache } from "@/lib/redis";
 
 export async function generateSaleNumber(session?: ClientSession): Promise<string> {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
@@ -852,6 +853,9 @@ export async function completeSale(input: CompleteSaleInput) {
     // Commit Transaction
     await session.commitTransaction();
     session.endSession();
+
+    // Fire-and-forget storefront Redis cache invalidation on completed sale
+    invalidateStorefrontCache().catch(() => {});
 
     return { alreadyCompleted: false, sale, invoice };
   } catch (error: any) {

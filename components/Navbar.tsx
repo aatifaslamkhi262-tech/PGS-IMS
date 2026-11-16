@@ -41,25 +41,30 @@ export const Navbar: React.FC<NavbarProps> = () => {
   const [loading, setLoading] = useState(true);
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
 
-  // Fetch session on mount
+  // Fetch session on initial mount once (avoid refetching on every route navigation)
   useEffect(() => {
+    let isMounted = true;
     const fetchSession = async () => {
       try {
         const res = await fetch("/api/auth/me");
         const data = await res.json();
+        if (!isMounted) return;
         if (data.success) {
           setUser(data.data);
         } else {
           setUser(null);
         }
       } catch {
-        setUser(null);
+        if (isMounted) setUser(null);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
     fetchSession();
-  }, [pathname]);
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleLogout = async () => {
     try {
