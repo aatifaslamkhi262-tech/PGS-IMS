@@ -28,6 +28,8 @@ export interface IRepair extends Document {
   partsCostTotal: number; // Cost value of parts used
   partsTotal: number; // Selling value of parts used
   totalAmount: number; // laborCost + partsTotal
+  adjustmentAmount?: number; // Settlement Adjustment: negative = discount/waiver, positive = extra charge/tip
+  adjustmentReason?: string;
   paidAmount: number; // Amount paid by customer
   balanceDue: number; // totalAmount - paidAmount
   paymentMethod: "CASH" | "CARD" | "BANK_TRANSFER" | "ONLINE_GATEWAY";
@@ -125,6 +127,15 @@ const RepairSchema: Schema = new Schema(
       required: true,
       default: 0,
       min: 0,
+    },
+    adjustmentAmount: {
+      type: Number,
+      default: 0,
+    },
+    adjustmentReason: {
+      type: String,
+      trim: true,
+      default: "",
     },
     paidAmount: {
       type: Number,

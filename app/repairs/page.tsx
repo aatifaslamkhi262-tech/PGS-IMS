@@ -17,6 +17,7 @@ import {
   Gamepad2,
   FileText,
   RotateCcw,
+  Edit2,
 } from "lucide-react";
 import {
   ThermalRepairSlipModal,
@@ -74,11 +75,24 @@ export default function RepairsPage() {
   const [listSearch, setListSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
 
-  // Collect Balance Modal State
-  const [collectingRepair, setCollectingRepair] = useState<any | null>(null);
-  const [collectAmount, setCollectAmount] = useState<number>(0);
-  const [collectPaymentMethod, setCollectPaymentMethod] = useState<string>("CASH");
-  const [collectSubmitting, setCollectSubmitting] = useState(false);
+  // Unified Edit & Settle Modal State
+  const [editingRepair, setEditingRepair] = useState<any | null>(null);
+  const [editCustomerName, setEditCustomerName] = useState("");
+  const [editCustomerPhone, setEditCustomerPhone] = useState("");
+  const [editProductName, setEditProductName] = useState("");
+  const [editSerialNumber, setEditSerialNumber] = useState("");
+  const [editFaultReason, setEditFaultReason] = useState("");
+  const [editRepairedBy, setEditRepairedBy] = useState("");
+  const [editStatus, setEditStatus] = useState("COMPLETED");
+  const [editTotalAmount, setEditTotalAmount] = useState<number>(0);
+  const [editRepairCost, setEditRepairCost] = useState<number>(0);
+  const [editPaidAmount, setEditPaidAmount] = useState<number>(0);
+  const [editAdjustment, setEditAdjustment] = useState<number>(0);
+  const [editAdjustmentReason, setEditAdjustmentReason] = useState<string>("");
+  const [editCollectAmount, setEditCollectAmount] = useState<number>(0);
+  const [editPaymentMethod, setEditPaymentMethod] = useState<string>("CASH");
+  const [editNotes, setEditNotes] = useState("");
+  const [editSubmitting, setEditSubmitting] = useState(false);
 
   // Initial Load
   useEffect(() => {
@@ -409,40 +423,68 @@ export default function RepairsPage() {
     setShowSlipModal(true);
   };
 
-  // Collect Balance Handler
-  const handleCollectBalanceSubmit = async (e: React.FormEvent) => {
+  // Open Unified Edit & Settle Modal
+  const handleOpenEditModal = (r: any) => {
+    setEditingRepair(r);
+    setEditCustomerName(r.customerName || "");
+    setEditCustomerPhone(r.customerPhone || "");
+    setEditProductName(r.productName || "");
+    setEditSerialNumber(r.serialNumber || "");
+    setEditFaultReason(r.faultReason || "");
+    setEditRepairedBy(r.repairedBy || "");
+    setEditStatus(r.status || "COMPLETED");
+    setEditTotalAmount(r.totalAmount || 0);
+    setEditRepairCost(r.repairCost || 0);
+    setEditPaidAmount(r.paidAmount || 0);
+    setEditAdjustment(0);
+    setEditAdjustmentReason("");
+    // Default collection amount to current balance due if any
+    setEditCollectAmount(r.balanceDue > 0 ? r.balanceDue : 0);
+    setEditPaymentMethod("CASH");
+    setEditNotes(r.notes || "");
+  };
+
+  // Submit Unified Edit & Settlement Form
+  const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!collectingRepair) return;
+    if (!editingRepair) return;
 
-    if (collectAmount <= 0) {
-      alert("Collection amount must be greater than 0.");
-      return;
-    }
-
-    setCollectSubmitting(true);
+    setEditSubmitting(true);
     try {
-      const res = await fetch(`/api/repairs/${collectingRepair._id}`, {
+      const res = await fetch(`/api/repairs/${editingRepair._id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "COLLECT_BALANCE",
-          collectAmount,
-          paymentMethod: collectPaymentMethod,
+          action: "EDIT_REPAIR",
+          customerName: editCustomerName,
+          customerPhone: editCustomerPhone,
+          productName: editProductName,
+          serialNumber: editSerialNumber,
+          faultReason: editFaultReason,
+          repairedBy: editRepairedBy,
+          status: editStatus,
+          totalAmount: editTotalAmount,
+          repairCost: editRepairCost,
+          adjustment: editAdjustment,
+          adjustmentReason: editAdjustmentReason,
+          collectAmount: editCollectAmount,
+          paymentMethod: editPaymentMethod,
+          notes: editNotes,
         }),
       });
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to collect balance.");
+        throw new Error(data.error || "Failed to update repair.");
       }
 
-      setCollectingRepair(null);
-      setSuccessMsg(`Successfully collected balance for ${collectingRepair.repairNumber}!`);
+      setEditingRepair(null);
+      setSuccessMsg(`Repair ${editingRepair.repairNumber} successfully updated & saved!`);
       fetchRepairs();
     } catch (err: any) {
-      alert(err.message || "Error collecting balance.");
+      alert(err.message || "Error updating repair.");
     } finally {
-      setCollectSubmitting(false);
+      setEditSubmitting(false);
     }
   };
 
@@ -1024,22 +1066,34 @@ export default function RepairsPage() {
                         Rs. {r.balanceDue.toLocaleString()}
                       </span>
                     </div>
+                    {r.adjustmentAmount && r.adjustmentAmount !== 0 ? (
+                      <div className="hidden sm:block">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                          r.adjustmentAmount < 0
+                            ? "bg-emerald-950/60 border border-emerald-800 text-emerald-400"
+                            : "bg-cyan-950/60 border border-cyan-800 text-cyan-400"
+                        }`}>
+                          {r.adjustmentAmount < 0 ? `Disc: -Rs.${Math.abs(r.adjustmentAmount)}` : `Extra: +Rs.${r.adjustmentAmount}`}
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
 
                   {/* Actions */}
                   <div className="flex items-center justify-end gap-2 pt-1">
-                    {r.balanceDue > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCollectingRepair(r);
-                          setCollectAmount(r.balanceDue);
-                        }}
-                        className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 transition"
-                      >
-                        Collect Balance
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEditModal(r)}
+                      className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border transition flex items-center gap-1 ${
+                        r.balanceDue > 0
+                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
+                          : "bg-indigo-500/10 border-indigo-500/20 text-indigo-400 hover:bg-indigo-500/20"
+                      }`}
+                      title={r.balanceDue > 0 ? "Edit Details & Settle Balance" : "Edit Repair Details"}
+                    >
+                      <Edit2 className="w-3 h-3" />
+                      <span>{r.balanceDue > 0 ? "Edit / Settle" : "Edit"}</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => handlePrintPastSlip(r)}
@@ -1067,79 +1121,293 @@ export default function RepairsPage() {
         />
       )}
 
-      {/* COLLECT BALANCE MODAL */}
-      {collectingRepair && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm p-5 shadow-2xl space-y-4">
-            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-              <DollarSign className="w-4 h-4 text-emerald-400" />
-              <span>Collect Remaining Repair Balance</span>
-            </h3>
-
-            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs space-y-1">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Repair Job:</span>
-                <span className="font-mono font-bold text-amber-400">{collectingRepair.repairNumber}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Customer:</span>
-                <span className="text-slate-200 font-semibold">{collectingRepair.customerName}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Total Billed:</span>
-                <span className="font-mono text-slate-200">Rs. {collectingRepair.totalAmount.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between font-bold text-amber-400 pt-1 border-t border-slate-800">
-                <span>Balance Due:</span>
-                <span>Rs. {collectingRepair.balanceDue.toLocaleString()}</span>
-              </div>
+      {/* UNIFIED EDIT & SETTLE REPAIR MODAL */}
+      {editingRepair && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-5 shadow-2xl space-y-4 my-8">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-indigo-400" />
+                <span>
+                  Repair Job: <span className="font-mono text-amber-400">{editingRepair.repairNumber}</span>
+                </span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditingRepair(null)}
+                className="text-slate-500 hover:text-slate-300 p-1"
+              >
+                ✕
+              </button>
             </div>
 
-            <form onSubmit={handleCollectBalanceSubmit} className="space-y-3">
+            <form onSubmit={handleEditSubmit} className="space-y-4">
+              {/* Customer Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1 font-semibold">
+                    Customer Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editCustomerName}
+                    onChange={(e) => setEditCustomerName(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1 font-semibold">
+                    Customer Phone *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editCustomerPhone}
+                    onChange={(e) => setEditCustomerPhone(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Device Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1 font-semibold">
+                    Device / Product Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editProductName}
+                    onChange={(e) => setEditProductName(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1 font-semibold">
+                    Serial Number (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={editSerialNumber}
+                    onChange={(e) => setEditSerialNumber(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block text-[11px] text-slate-400 mb-1 font-semibold">
-                  Amount to Collect (Rs.)
+                  Fault / Problem Description *
                 </label>
                 <input
-                  type="number"
-                  min="1"
-                  max={collectingRepair.balanceDue}
+                  type="text"
                   required
-                  value={collectAmount}
-                  onChange={(e) => setCollectAmount(parseFloat(e.target.value) || 0)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-100 focus:outline-none focus:border-emerald-500"
+                  value={editFaultReason}
+                  onChange={(e) => setEditFaultReason(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
                 />
               </div>
 
+              {/* Financials & Settlement Section */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-3">
+                <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                  <span>Billing & Payment Settlement</span>
+                  {editingRepair.balanceDue > 0 && (
+                    <span className="text-[10px] text-amber-400 font-semibold font-mono">
+                      Current Due: Rs. {editingRepair.balanceDue.toLocaleString()}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="block text-[10px] text-slate-400 mb-1 font-semibold">
+                      Total Bill (Rs.)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      value={editTotalAmount}
+                      onChange={(e) => {
+                        const newTotal = Math.max(0, parseFloat(e.target.value) || 0);
+                        setEditTotalAmount(newTotal);
+                        const newDue = Math.max(0, newTotal - editPaidAmount + editAdjustment);
+                        setEditCollectAmount(newDue);
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-slate-100 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400 mb-1 font-semibold">
+                      Shop Cost (Rs.)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={editRepairCost}
+                      onChange={(e) => setEditRepairCost(Math.max(0, parseFloat(e.target.value) || 0))}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-300 focus:outline-none focus:border-indigo-500"
+                      title="Direct internal cost/kharcha incurred by shop"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400 mb-1 font-semibold">
+                      Already Paid (Rs.)
+                    </label>
+                    <input
+                      type="number"
+                      disabled
+                      value={editPaidAmount}
+                      className="w-full bg-slate-900/60 border border-slate-800 text-slate-400 rounded-lg px-2.5 py-1.5 text-xs font-mono"
+                      title="Amount already received previously"
+                    />
+                  </div>
+                </div>
+
+                {/* Settlement Adjustment Field (Single Field for Minus / Plus) */}
+                <div className="pt-2 border-t border-slate-800 space-y-2">
+                  <div>
+                    <label className="block text-[11px] text-slate-300 mb-1 font-semibold flex items-center justify-between">
+                      <span>Settlement Adjustment (± PKR)</span>
+                      <span className="text-[10px] font-normal">
+                        {editAdjustment < 0 ? (
+                          <span className="text-emerald-400 font-semibold">🏷️ Discount: -Rs. {Math.abs(editAdjustment).toLocaleString()}</span>
+                        ) : editAdjustment > 0 ? (
+                          <span className="text-cyan-400 font-semibold">⚡ Extra Surcharge: +Rs. {editAdjustment.toLocaleString()}</span>
+                        ) : (
+                          <span className="text-slate-500">Optional (- for discount, + for extra)</span>
+                        )}
+                      </span>
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="e.g. -100 for Discount, +200 for Surcharge"
+                      value={editAdjustment || ""}
+                      onChange={(e) => {
+                        const adj = e.target.value === "" ? 0 : parseFloat(e.target.value) || 0;
+                        setEditAdjustment(adj);
+                        const newDue = Math.max(0, editTotalAmount - editPaidAmount + adj);
+                        setEditCollectAmount(newDue);
+                      }}
+                      className={`w-full bg-slate-900 border rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none transition-colors ${
+                        editAdjustment < 0
+                          ? "border-emerald-500 text-emerald-400"
+                          : editAdjustment > 0
+                          ? "border-cyan-500 text-cyan-400"
+                          : "border-slate-700 text-slate-100 focus:border-indigo-500"
+                      }`}
+                    />
+                  </div>
+
+                  {editAdjustment !== 0 && (
+                    <div>
+                      <input
+                        type="text"
+                        placeholder="Reason for adjustment (e.g. Round-off, Customer discount, Rush fee)"
+                        value={editAdjustmentReason}
+                        onChange={(e) => setEditAdjustmentReason(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-750 rounded-lg px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  )}
+
+                  {/* Immediate Collection Row */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1 font-semibold flex items-center justify-between">
+                        <span>Collect Now (Rs.)</span>
+                        <span className="text-[10px] text-emerald-400 font-mono font-bold">
+                          Net Due: Rs. {Math.max(0, editTotalAmount - editPaidAmount + editAdjustment).toLocaleString()}
+                        </span>
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={editCollectAmount}
+                        onChange={(e) => setEditCollectAmount(Math.max(0, parseFloat(e.target.value) || 0))}
+                        className="w-full bg-slate-900 border border-slate-700 text-emerald-400 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1 font-semibold">
+                        Payment Method
+                      </label>
+                      <select
+                        value={editPaymentMethod}
+                        onChange={(e) => setEditPaymentMethod(e.target.value)}
+                        disabled={editCollectAmount <= 0}
+                        className="w-full bg-slate-900 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50"
+                      >
+                        <option value="CASH">💵 CASH (Physical Drawer)</option>
+                        <option value="CARD">💳 CARD / POS Machine</option>
+                        <option value="BANK_TRANSFER">🏦 BANK TRANSFER / Online</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Technician & Status */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1 font-semibold">
+                    Assigned Technician
+                  </label>
+                  <input
+                    type="text"
+                    value={editRepairedBy}
+                    onChange={(e) => setEditRepairedBy(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1 font-semibold">
+                    Job Status
+                  </label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="PENDING">⏳ PENDING (In Queue)</option>
+                    <option value="IN_PROGRESS">⚙️ IN_PROGRESS (Working)</option>
+                    <option value="COMPLETED">✅ COMPLETED (Ready for Pickup)</option>
+                    <option value="DELIVERED">📦 DELIVERED (Handed Over)</option>
+                    <option value="CANCELLED">❌ CANCELLED</option>
+                  </select>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-[11px] text-slate-400 mb-1 font-semibold">
-                  Payment Method
+                  Notes / Remarks
                 </label>
-                <select
-                  value={collectPaymentMethod}
-                  onChange={(e) => setCollectPaymentMethod(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 font-semibold focus:outline-none focus:border-emerald-500 cursor-pointer"
-                >
-                  <option value="CASH">CASH (Physical Drawer)</option>
-                  <option value="CARD">CARD / POS Machine</option>
-                  <option value="BANK_TRANSFER">BANK TRANSFER / Online</option>
-                </select>
+                <input
+                  type="text"
+                  placeholder="Optional internal remarks..."
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                />
               </div>
 
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setCollectingRepair(null)}
+                  onClick={() => setEditingRepair(null)}
                   className="flex-1 py-2 text-xs font-semibold rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 transition"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={collectSubmitting}
-                  className="flex-1 py-2 text-xs font-bold rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition"
+                  disabled={editSubmitting}
+                  className="flex-1 py-2 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center justify-center gap-1.5"
                 >
-                  {collectSubmitting ? "Collecting..." : "Confirm & Collect"}
+                  {editSubmitting ? "Saving..." : "Save & Update"}
                 </button>
               </div>
             </form>

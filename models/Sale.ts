@@ -37,6 +37,8 @@ export interface ISaleItem {
   discountAmount: number;
   lineTotal: number;
   grossProfit: number;
+  fulfillmentLocation?: Types.ObjectId;
+  fulfillmentLocationName?: string;
 }
 
 export interface ISale {
@@ -103,6 +105,11 @@ const SaleItemSchema = new Schema(
     discountAmount: { type: Number, default: 0, min: 0 },
     lineTotal: { type: Number, required: true, min: 0 },
     grossProfit: { type: Number, required: true },
+    fulfillmentLocation: {
+      type: Schema.Types.ObjectId,
+      ref: "Location",
+    },
+    fulfillmentLocationName: { type: String, trim: true },
   },
   { _id: false }
 );

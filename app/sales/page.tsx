@@ -818,6 +818,8 @@ function SalesWorkspaceContent() {
           quantity: 1,
           unitPrice: product.sellingPrice,
           serialNumbers: scannedSerial ? [scannedSerial] : [],
+          fulfillmentLocationId: "", // DEFAULT: NONE SELECTED to prevent mistakes
+          fulfillmentLocationName: "",
         },
       ]);
     }
@@ -841,6 +843,16 @@ function SalesWorkspaceContent() {
     if (!targetLocationId) {
       alert("Please select a valid Store Location.");
       return;
+    }
+
+    // Explicit Branch Validation: Prevent mistakes by requiring a fulfilling branch for each item
+    for (const it of cartItems) {
+      if (!it.fulfillmentLocationId) {
+        alert(
+          `⚠️ Branch select nahi hui: "${it.product.name}"!\n\nGhalti se bachne ke liye please dropdown se select karein ke yeh product kis branch se uthaya gaya hai.`
+        );
+        return;
+      }
     }
 
     const allocations = isSplitPayment
@@ -892,6 +904,8 @@ function SalesWorkspaceContent() {
             quantity: it.quantity,
             serialNumbers: it.serialNumbers,
             unitPrice: it.unitPrice,
+            fulfillmentLocationId: it.fulfillmentLocationId,
+            fulfillmentLocationName: it.fulfillmentLocationName,
           })),
           discountAmount,
           deliveryCharges,
@@ -917,6 +931,7 @@ function SalesWorkspaceContent() {
             unitPrice: it.unitPrice,
             lineTotal: it.unitPrice * it.quantity,
             serialNumbers: it.serialNumbers,
+            fulfillmentLocationName: it.fulfillmentLocationName,
           })),
           subtotal: cartSubtotal,
           discountAmount,
@@ -1925,118 +1940,172 @@ function SalesWorkspaceContent() {
                   POS Cart Items ({cartItems.length})
                 </h3>
 
-                <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                   {cartItems.map((item, idx) => (
                     <div
                       key={idx}
-                      className="bg-slate-950 border border-slate-800 p-2.5 rounded-xl flex items-center justify-between text-xs gap-2"
+                      className="bg-slate-950 border border-slate-800 hover:border-slate-700 p-2.5 rounded-xl text-xs space-y-2 transition-colors"
                     >
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold text-slate-200 truncate">{item.product.name}</div>
-                        {posType === "RENTAL" ? (
-                          <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400 mt-1">
-                            <div>
-                              <span>Deposit (PKR):</span>
+                      {/* Top Row: Name on left, Total price + Trash on right */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="font-semibold text-slate-200 truncate flex-1 min-w-0" title={item.product.name}>
+                          {item.product.name}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-bold text-purple-400 font-mono text-xs">
+                            Rs. {posType === "RENTAL"
+                              ? ((item.depositPaid !== undefined ? item.depositPaid : (item.product.originalPrice || item.unitPrice || 0)) * item.quantity).toLocaleString()
+                              : (item.unitPrice * item.quantity).toLocaleString()}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeFromCart(idx)}
+                            className="text-slate-500 hover:text-rose-400 p-0.5 transition-colors"
+                            title="Remove item"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Bottom Row: Editable Price / Rental details + Branch Picker + Quantity Stepper */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {posType === "RENTAL" ? (
+                            <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-slate-500 uppercase font-semibold">Deposit:</span>
+                                <input
+                                  type="number"
+                                  value={item.depositPaid !== undefined ? item.depositPaid : (item.product.originalPrice || item.unitPrice || 0)}
+                                  onChange={(e) => {
+                                    const val = Number(e.target.value);
+                                    setCartItems(
+                                      cartItems.map((it, i) =>
+                                        i === idx ? { ...it, depositPaid: val } : it
+                                      )
+                                    );
+                                  }}
+                                  className="w-16 bg-slate-900 border border-slate-700 text-purple-400 font-mono rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-purple-500"
+                                />
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-slate-500 uppercase font-semibold">Rate/d:</span>
+                                <input
+                                  type="number"
+                                  value={item.perDayRate !== undefined ? item.perDayRate : 200}
+                                  onChange={(e) => {
+                                    const val = Number(e.target.value);
+                                    setCartItems(
+                                      cartItems.map((it, i) =>
+                                        i === idx ? { ...it, perDayRate: val } : it
+                                      )
+                                    );
+                                  }}
+                                  className="w-14 bg-slate-900 border border-slate-700 text-cyan-400 font-mono rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-cyan-500"
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1 text-[11px] text-slate-400">
+                              <span className="text-[10px] text-slate-500 uppercase font-semibold">Price:</span>
                               <input
                                 type="number"
-                                value={item.depositPaid !== undefined ? item.depositPaid : (item.product.originalPrice || item.unitPrice || 0)}
+                                value={item.unitPrice}
                                 onChange={(e) => {
-                                  const val = Number(e.target.value);
+                                  const newPrice = Number(e.target.value);
                                   setCartItems(
                                     cartItems.map((it, i) =>
-                                      i === idx ? { ...it, depositPaid: val } : it
+                                      i === idx ? { ...it, unitPrice: Math.max(0, newPrice) } : it
                                     )
                                   );
                                 }}
-                                className="w-full bg-slate-900 border border-slate-700 text-purple-400 font-bold font-mono rounded px-1.5 py-0.5 text-xs focus:outline-none focus:border-purple-500"
+                                className="w-20 bg-slate-900 border border-slate-700 text-emerald-400 font-mono rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-emerald-500"
+                                title="Editable Unit Price"
                               />
                             </div>
-                            <div>
-                              <span>Per Day Rate:</span>
-                              <input
-                                type="number"
-                                value={item.perDayRate !== undefined ? item.perDayRate : 200}
-                                onChange={(e) => {
-                                  const val = Number(e.target.value);
-                                  setCartItems(
-                                    cartItems.map((it, i) =>
-                                      i === idx ? { ...it, perDayRate: val } : it
-                                    )
-                                  );
-                                }}
-                                className="w-full bg-slate-900 border border-slate-700 text-cyan-400 font-bold font-mono rounded px-1.5 py-0.5 text-xs focus:outline-none focus:border-cyan-500"
-                              />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5 mt-1">
-                            <span className="text-[10px] text-slate-500 uppercase font-bold">Price:</span>
-                            <input
-                              type="number"
-                              value={item.unitPrice}
+                          )}
+
+                          {/* Branch Selection */}
+                          <div className="flex items-center gap-1 text-[11px]">
+                            <span className="text-[10px] text-slate-500 uppercase font-semibold">Branch:</span>
+                            <select
+                              value={item.fulfillmentLocationId || ""}
                               onChange={(e) => {
-                                const newPrice = Number(e.target.value);
+                                const chosenId = e.target.value;
+                                const chosenLoc = locations.find((l) => l._id === chosenId);
                                 setCartItems(
                                   cartItems.map((it, i) =>
-                                    i === idx ? { ...it, unitPrice: Math.max(0, newPrice) } : it
+                                    i === idx
+                                      ? {
+                                          ...it,
+                                          fulfillmentLocationId: chosenId,
+                                          fulfillmentLocationName: chosenLoc ? chosenLoc.name : "",
+                                        }
+                                      : it
                                   )
                                 );
                               }}
-                              className="w-20 bg-slate-900 border border-slate-700 text-emerald-400 font-bold font-mono rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-emerald-500"
-                              title="Editable Unit Price"
-                            />
+                              className={`bg-slate-900 text-xs rounded px-2 py-0.5 border focus:outline-none transition-colors ${
+                                !item.fulfillmentLocationId
+                                  ? "border-amber-500/70 text-amber-300 hover:border-amber-500"
+                                  : "border-slate-700 text-slate-200 hover:border-slate-600"
+                              }`}
+                            >
+                              <option value="" className="text-slate-400 bg-slate-900">
+                                Select branch...
+                              </option>
+                              {locations.map((loc) => {
+                                const stockInfo = (item.product?.stockBreakdown || []).find((sb: any) => sb.locationId === loc._id);
+                                const stockQty = stockInfo ? stockInfo.quantity : 0;
+                                return (
+                                  <option
+                                    key={loc._id}
+                                    value={loc._id}
+                                    className="text-slate-200 bg-slate-900"
+                                  >
+                                    {loc.name} {stockQty > 0 ? `(${stockQty})` : `(0)`}
+                                  </option>
+                                );
+                              })}
+                            </select>
                           </div>
-                        )}
-                      </div>
+                        </div>
 
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (item.quantity > 1) {
+                        {/* Quantity Stepper */}
+                        <div className="flex items-center gap-1 shrink-0 ml-auto">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (item.quantity > 1) {
+                                setCartItems(
+                                  cartItems.map((it, i) =>
+                                    i === idx ? { ...it, quantity: it.quantity - 1 } : it
+                                  )
+                                );
+                              } else {
+                                removeFromCart(idx);
+                              }
+                            }}
+                            className="w-5 h-5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold flex items-center justify-center border border-slate-700 text-xs transition-colors"
+                          >
+                            -
+                          </button>
+                          <span className="font-bold text-slate-200 w-5 text-center font-mono">{item.quantity}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
                               setCartItems(
                                 cartItems.map((it, i) =>
-                                  i === idx ? { ...it, quantity: it.quantity - 1 } : it
+                                  i === idx ? { ...it, quantity: it.quantity + 1 } : it
                                 )
                               );
-                            } else {
-                              removeFromCart(idx);
-                            }
-                          }}
-                          className="w-5 h-5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold flex items-center justify-center border border-slate-750 text-xs"
-                        >
-                          -
-                        </button>
-                        <span className="font-bold text-slate-200 w-4 text-center font-mono">{item.quantity}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCartItems(
-                              cartItems.map((it, i) =>
-                                i === idx ? { ...it, quantity: it.quantity + 1 } : it
-                              )
-                            );
-                          }}
-                          className="w-5 h-5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold flex items-center justify-center border border-slate-750 text-xs"
-                        >
-                          +
-                        </button>
-                      </div>
-
-                      <div className="flex items-center gap-2.5 shrink-0">
-                        <span className="font-bold text-purple-400 font-mono text-xs">
-                          Rs. {posType === "RENTAL"
-                            ? ((item.depositPaid !== undefined ? item.depositPaid : (item.product.originalPrice || item.unitPrice || 0)) * item.quantity).toLocaleString()
-                            : (item.unitPrice * item.quantity).toLocaleString()}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => removeFromCart(idx)}
-                          className="text-rose-400 hover:text-rose-300 p-1"
-                          title="Remove item"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                            }}
+                            className="w-5 h-5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold flex items-center justify-center border border-slate-700 text-xs transition-colors"
+                          >
+                            +
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -2235,8 +2304,8 @@ function SalesWorkspaceContent() {
                   Warehouse Pending Billing Queue
                 </h3>
                 <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-semibold">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Live Instant Sync (1.5s)
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  Live Instant Sync
                 </span>
                 {(selectedLocation !== "ALL" || selectedSalesman !== "ALL") && (
                   <button

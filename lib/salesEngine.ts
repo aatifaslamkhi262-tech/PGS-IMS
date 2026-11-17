@@ -153,6 +153,8 @@ export interface CreateSaleInput {
     serialNumbers?: string[];
     unitPrice?: number;
     discountAmount?: number;
+    fulfillmentLocationId?: string;
+    fulfillmentLocationName?: string;
   }>;
   discountAmount?: number;
   deliveryCharges?: number;
@@ -252,6 +254,10 @@ export async function createSaleInput(input: CreateSaleInput) {
     subtotal += lineTotal;
     totalCost += lineCost;
 
+    const fulfillLocId = itemInput.fulfillmentLocationId && Types.ObjectId.isValid(itemInput.fulfillmentLocationId)
+      ? new Types.ObjectId(itemInput.fulfillmentLocationId)
+      : undefined;
+
     processedItems.push({
       product: product._id as Types.ObjectId,
       productName: product.name,
@@ -260,6 +266,8 @@ export async function createSaleInput(input: CreateSaleInput) {
       condition,
       quantity: itemInput.quantity,
       serialNumbers: cleanSerials,
+      fulfillmentLocation: fulfillLocId,
+      fulfillmentLocationName: itemInput.fulfillmentLocationName || undefined,
       unitCost: itemUnitCost,
       unitPrice,
       minSellingPrice,
@@ -570,17 +578,20 @@ export async function completeSale(input: CompleteSaleInput) {
           }
         }
       } else {
-        // Non-serialized item: validate against counter branch (sale.location)
+        // Non-serialized item: validate against chosen fulfillmentLocation or counter branch (sale.location)
+        const targetLocId = (item as any).fulfillmentLocation || sale.location;
         const inv = await Inventory.findOne({
           product: item.product,
-          location: sale.location,
+          location: targetLocId,
           condition: item.condition,
         }).session(session);
 
         const currentQty = inv ? inv.quantity : 0;
         if (currentQty < item.quantity) {
+          const locDoc = await Location.findById(targetLocId).session(session);
+          const locName = locDoc?.name || location.name;
           throw new Error(
-            `Insufficient stock for '${item.productName}' (${item.condition}) at ${location.name}. Available: ${currentQty}, Required: ${item.quantity}`
+            `Insufficient stock for '${item.productName}' (${item.condition}) at ${locName}. Available: ${currentQty}, Required: ${item.quantity}`
           );
         }
       }
@@ -670,10 +681,15 @@ export async function completeSale(input: CompleteSaleInput) {
           recalculatedTotalCost += itemBlendedCost;
         }
       } else {
-        // Non-serialized item: deduct directly from sale.location
+        // Non-serialized item: deduct directly from fulfillmentLocation or counter branch (sale.location)
+        const effectiveLocId = (item as any).fulfillmentLocation || sale.location;
+        const effectiveLocDoc = (item as any).fulfillmentLocation
+          ? (await Location.findById(effectiveLocId).session(session)) || location
+          : location;
+
         const invBefore = await Inventory.findOne({
           product: item.product,
-          location: sale.location,
+          location: effectiveLocId,
           condition: item.condition,
         }).session(session);
         const beforeQty = invBefore ? invBefore.quantity : 0;
@@ -681,7 +697,7 @@ export async function completeSale(input: CompleteSaleInput) {
         const deductRes = await deductInventoryWithAverageCost(
           {
             productId: item.product,
-            locationId: sale.location,
+            locationId: effectiveLocId,
             condition: item.condition,
             quantity: item.quantity,
           },
@@ -694,12 +710,13 @@ export async function completeSale(input: CompleteSaleInput) {
         }
         recalculatedTotalCost += item.unitCost * item.quantity;
 
+        const isCrossBranch = effectiveLocId.toString() !== location._id.toString();
         await new InventoryMovement({
           product: item.product,
           quantity: item.quantity,
           serialNumbers: [],
-          sourceLocation: location._id,
-          sourceName: location.name,
+          sourceLocation: effectiveLocId,
+          sourceName: effectiveLocDoc.name,
           destinationName: sale.customerName || "Customer",
           type: "TRANSFER",
           referenceTransaction: invoiceNumber,
@@ -708,7 +725,9 @@ export async function completeSale(input: CompleteSaleInput) {
           performedBy: input.completedBy,
           condition: item.condition,
           date: new Date(),
-          notes: `Sale Completed: Invoice ${invoiceNumber}`,
+          notes: isCrossBranch
+            ? `Cross-Branch Sale (Dispatched from ${effectiveLocDoc.name}, Billed at ${location.name}): Invoice ${invoiceNumber}`
+            : `Sale Completed: Invoice ${invoiceNumber}`,
         }).save({ session });
       }
     }

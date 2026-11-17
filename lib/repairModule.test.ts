@@ -123,5 +123,79 @@ describe("Repair Module & Schema Verification", () => {
     const netProfit = repairWithDirectCost.totalAmount - (repairWithDirectCost.repairCost + repairWithDirectCost.partsCostTotal);
     expect(netProfit).toBe(1200);
   });
+
+  it("should support negative adjustmentAmount as discount/waiver reducing totalAmount and clearing balance", () => {
+    const repair = new Repair({
+      repairNumber: "REP-20261016-0003",
+      customerName: "Waqas Ahmed",
+      customerPhone: "03211112233",
+      productName: "DualSense Edge Controller",
+      faultReason: "Stick drift calibration",
+      laborCost: 2000,
+      totalAmount: 2000,
+      paidAmount: 500,
+      balanceDue: 1500,
+      repairedBy: "Tech A",
+      location: new mongoose.Types.ObjectId(),
+      createdBy: "staff",
+    });
+
+    // Customer negotiates Rs. 200 discount at counter (-200 adjustment)
+    const adjustment = -200;
+    repair.totalAmount += adjustment; // 2000 - 200 = 1800
+    repair.adjustmentAmount = adjustment;
+    repair.adjustmentReason = "Customer settlement round-off";
+
+    // Customer pays remaining 1300
+    const collected = 1300;
+    repair.paidAmount += collected;
+    repair.balanceDue = Math.max(0, repair.totalAmount - repair.paidAmount); // 1800 - 1800 = 0
+
+    if (repair.balanceDue === 0) {
+      repair.status = "DELIVERED";
+    }
+
+    expect(repair.totalAmount).toBe(1800);
+    expect(repair.adjustmentAmount).toBe(-200);
+    expect(repair.balanceDue).toBe(0);
+    expect(repair.status).toBe("DELIVERED");
+  });
+
+  it("should support positive adjustmentAmount as extra charge/surcharge increasing totalAmount", () => {
+    const repair = new Repair({
+      repairNumber: "REP-20261016-0004",
+      customerName: "Rashid Ali",
+      customerPhone: "03334445566",
+      productName: "Xbox Series X",
+      faultReason: "Overheating fan replacement",
+      laborCost: 4000,
+      totalAmount: 4000,
+      paidAmount: 1000,
+      balanceDue: 3000,
+      repairedBy: "Tech B",
+      location: new mongoose.Types.ObjectId(),
+      createdBy: "staff",
+    });
+
+    // Customer requests express rush delivery fee (+500 adjustment)
+    const adjustment = 500;
+    repair.totalAmount += adjustment; // 4000 + 500 = 4500
+    repair.adjustmentAmount = adjustment;
+    repair.adjustmentReason = "Express rush service fee";
+
+    // Customer pays 3500
+    const collected = 3500;
+    repair.paidAmount += collected;
+    repair.balanceDue = Math.max(0, repair.totalAmount - repair.paidAmount); // 4500 - 4500 = 0
+
+    if (repair.balanceDue === 0) {
+      repair.status = "DELIVERED";
+    }
+
+    expect(repair.totalAmount).toBe(4500);
+    expect(repair.adjustmentAmount).toBe(500);
+    expect(repair.balanceDue).toBe(0);
+    expect(repair.status).toBe("DELIVERED");
+  });
 });
 
