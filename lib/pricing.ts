@@ -381,7 +381,10 @@ export async function batchCalculateProductWeightedPricing(
       status: "Approved",
       "items.product": { $in: validIds },
     })
-      .populate("purchaseInvoice")
+      .populate(
+        "purchaseInvoice",
+        "createdAt items.product items.condition items.sellingPrice items.minSellingPrice"
+      )
       .lean(),
   ]);
 
@@ -427,9 +430,14 @@ export async function batchCalculateProductWeightedPricing(
   > = {};
 
   if (missingProductIds.length > 0) {
-    const invoices = await PurchaseInvoice.find({
+    const invQuery: any = PurchaseInvoice.find({
       "items.product": { $in: missingProductIds },
-    })
+    });
+    const invoices = await (
+      typeof invQuery?.select === "function"
+        ? invQuery.select("createdAt items.product items.unitCost items.sellingPrice items.minSellingPrice")
+        : invQuery
+    )
       .sort({ createdAt: -1 })
       .lean();
 

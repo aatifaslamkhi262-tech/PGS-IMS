@@ -5,22 +5,46 @@ import { Customer } from "@/models/Customer";
 import { Payment } from "@/models/Payment";
 import { Location } from "@/models/Location";
 import { CustomerLedger } from "@/models/CustomerLedger";
-import { CashSession } from "@/models/CashSession";
-import { recordCashMovement } from "@/lib/cashSessionEngine";
+import { findOrAutoOpenCashSession, recordCashMovement } from "@/lib/cashSessionEngine";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
+import { nextSequentialPaymentNumber } from "@/lib/salesEngine";
 
 export async function POST(request: Request) {
   try {
     await dbConnect();
     const body = await request.json();
-    const { customerId, locationId, amount, paymentMethod, receivedBy, notes, actionType } = body;
+    const {
+      customerId,
+      locationId,
+      amount,
+      paymentMethod,
+      paymentAllocations,
+      receivedBy,
+      notes,
+      actionType,
+    } = body;
 
     const customer = await Customer.findById(customerId);
     if (!customer) {
       return NextResponse.json({ success: false, error: "Customer not found." }, { status: 404 });
     }
 
-    const paymentAmount = Number(amount);
+    const sanitizedAllocations =
+      actionType !== "ADD_DEBT" && Array.isArray(paymentAllocations) && paymentAllocations.length > 0
+        ? paymentAllocations
+            .filter((a: any) => Number(a?.amount || 0) > 0)
+            .map((a: any) => ({
+              method: String(a.method || "CASH"),
+              amount: Number(a.amount || 0),
+              referenceNumber: a.referenceNumber ? String(a.referenceNumber) : undefined,
+            }))
+        : [];
+
+    const paymentAmount =
+      sanitizedAllocations.length > 0
+        ? sanitizedAllocations.reduce((s, a) => s + a.amount, 0)
+        : Number(amount);
+
     if (!paymentAmount || paymentAmount <= 0) {
       return NextResponse.json({ success: false, error: "Amount must be greater than 0." }, { status: 400 });
     }
@@ -37,8 +61,20 @@ export async function POST(request: Request) {
 
     // 🔴 Action: ADD_DEBT (+) [Customer took more on credit / manual debt addition]
     if (actionType === "ADD_DEBT") {
-      const count = await CustomerLedger.countDocuments();
-      const adjustmentNumber = `ADJ-${dateStr}-${String(count + 1).padStart(3, "0")}`;
+      const adjPrefix = `ADJ-${dateStr}-`;
+      const lastAdj: any = await CustomerLedger.findOne({
+        referenceId: new RegExp(`^${adjPrefix}`),
+      })
+        .select("referenceId")
+        .sort({ referenceId: -1 })
+        .lean();
+      let nextAdjSeq = 1;
+      if (lastAdj?.referenceId) {
+        const parts = String(lastAdj.referenceId).split("-");
+        const parsed = parseInt(parts[parts.length - 1], 10);
+        if (!isNaN(parsed)) nextAdjSeq = parsed + 1;
+      }
+      const adjustmentNumber = `${adjPrefix}${String(nextAdjSeq).padStart(3, "0")}`;
 
       const ledgerEntry = await recordCustomerLedgerEntry(
         {
@@ -87,26 +123,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Valid branch location is required for ledger payment." }, { status: 400 });
     }
 
-    const count = await Payment.countDocuments();
-    const paymentNumber = `PAY-${dateStr}-${String(count + 1).padStart(3, "0")}`;
+    const effectiveAllocations =
+      sanitizedAllocations.length > 0
+        ? sanitizedAllocations
+        : [{ method: paymentMethod || "CASH", amount: paymentAmount, referenceNumber: undefined }];
 
-    const payment = new Payment({
-      paymentNumber,
-      location: location?._id,
-      locationName: location?.name || "Counter",
-      customer: customer._id,
-      customerName: customer.name,
-      paymentMethod: paymentMethod || "CASH",
-      amount: paymentAmount,
-      receivedBy: receivedBy || "system",
-      notes: notes || `Customer Khata Settlement for ${customer.name}`,
-      status: "PAID",
-    });
+    const usedPaymentNums = new Set<string>();
+    const createdPayments: any[] = [];
+    for (const alloc of effectiveAllocations) {
+      const paymentNumber = await nextSequentialPaymentNumber(
+        usedPaymentNums,
+        isTxActive ? session : undefined
+      );
+      const payment = new Payment({
+        paymentNumber,
+        location: location?._id,
+        locationName: location?.name || "Counter",
+        customer: customer._id,
+        customerName: customer.name,
+        paymentMethod: alloc.method,
+        amount: alloc.amount,
+        referenceNumber: alloc.referenceNumber,
+        receivedBy: receivedBy || "system",
+        notes: notes || `Customer Khata Settlement for ${customer.name}`,
+        status: "PAID",
+      });
 
-    if (isTxActive) {
-      await payment.save({ session });
-    } else {
-      await payment.save();
+      if (isTxActive) {
+        await payment.save({ session });
+      } else {
+        await payment.save();
+      }
+      createdPayments.push(payment);
     }
 
     // Single source of truth for Customer Ledger entry & balance updates
@@ -116,19 +164,23 @@ export async function POST(request: Request) {
         type: "PAYMENT",
         amount: paymentAmount,
         referenceType: "Payment",
-        referenceId: payment.paymentNumber,
+        referenceId: createdPayments[0].paymentNumber,
         notes: notes || `Customer Khata Settlement for ${customer.name}`,
         createdBy: receivedBy || "system",
       },
       isTxActive ? session : undefined
     );
 
-    // If CASH payment, record cash movement in active cash drawer
-    if ((!paymentMethod || paymentMethod === "CASH") && location) {
-      const activeCashSession = await CashSession.findOne({
-        location: location._id,
-        status: "OPEN",
-      });
+    // Record CASH portion in active or auto-opened cash drawer
+    const cashPortion = effectiveAllocations
+      .filter((a) => !a.method || a.method === "CASH")
+      .reduce((s, a) => s + a.amount, 0);
+
+    if (cashPortion > 0 && location) {
+      const activeCashSession = await findOrAutoOpenCashSession(
+        location._id.toString(),
+        receivedBy || "system"
+      );
       if (activeCashSession) {
         await recordCashMovement(
           {
@@ -136,10 +188,11 @@ export async function POST(request: Request) {
             locationId: location._id.toString(),
             cashier: receivedBy || "system",
             type: "CASH_SALE",
-            amount: paymentAmount,
+            amount: cashPortion,
             direction: "IN",
+            paymentMethod: "CASH",
             referenceType: "Payment",
-            referenceId: payment.paymentNumber,
+            referenceId: createdPayments[0].paymentNumber,
             notes: `Khata payment recovery from ${customer.name}`,
           },
           isTxActive ? session : undefined
@@ -158,7 +211,8 @@ export async function POST(request: Request) {
       success: true,
       message: `Payment of Rs. ${paymentAmount.toLocaleString()} recorded for ${customer.name}.`,
       data: {
-        payment,
+        payment: createdPayments[0],
+        payments: createdPayments,
         customer: updatedCustomer || customer,
         ledgerEntry,
       },

@@ -4,6 +4,7 @@ import { CashSession } from "@/models/CashSession";
 import { Payment } from "@/models/Payment";
 import { Location } from "@/models/Location";
 import { CashMovement, CashMovementType } from "@/models/CashMovement";
+import { Expense, ExpenseCategory } from "@/models/Expense";
 
 export async function generateSessionNumber(session?: ClientSession): Promise<string> {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
@@ -92,9 +93,158 @@ export interface RecordCashMovementInput {
   type: CashMovementType;
   amount: number;
   direction: "IN" | "OUT";
+  paymentMethod?: string;
   referenceType?: "Sale" | "Payment" | "Expense" | "Return" | "TradeIn" | "Withdrawal" | "Adjustment";
   referenceId?: string;
   notes?: string;
+}
+
+export async function findOrAutoOpenCashSession(
+  locationId: string,
+  actorUsername: string
+) {
+  let session =
+    (await CashSession.findOne({ location: locationId, cashier: actorUsername, status: "OPEN" })) ||
+    (await CashSession.findOne({ location: locationId, status: "OPEN" })) ||
+    (await CashSession.findOne({ status: "OPEN" }));
+
+  if (!session && locationId) {
+    const lastClosed = await CashSession.findOne({ location: locationId, status: "CLOSED" })
+      .select("actualCash expectedCash actualOnline expectedOnline")
+      .sort({ closedAt: -1 })
+      .lean();
+    const carryCash = Number((lastClosed as any)?.actualCash ?? (lastClosed as any)?.expectedCash ?? 0);
+    const carryOnline = Number((lastClosed as any)?.actualOnline ?? (lastClosed as any)?.expectedOnline ?? 0);
+    const opened = await openCashSession({
+      locationId,
+      cashierUsername: actorUsername,
+      openingCash: carryCash,
+      notes: "Auto-opened from Transaction",
+    });
+    session = opened.session;
+    session.openingOnline = carryOnline;
+    session.expectedOnline = carryOnline;
+    await session.save();
+  }
+
+  return session;
+}
+
+export interface RecordDiaryOutflowInput {
+  locationId?: string;
+  actorUsername: string;
+  entryType: "EXPENSE" | "CASH_PURCHASING";
+  category: ExpenseCategory;
+  cashAmount?: number;
+  onlineAmount?: number;
+  reason: string;
+  recipient?: string;
+  notes?: string;
+  dedupeTag?: string;
+}
+
+/**
+ * Records a shop Cash (Galla) / Online Bank outflow into Expense Diary,
+ * CashSession drawer totals, and CashMovement (for physical cash).
+ */
+export async function recordDiaryOutflowEntry(input: RecordDiaryOutflowInput) {
+  await dbConnect();
+  const cPart = Math.max(0, Number(input.cashAmount || 0));
+  const oPart = Math.max(0, Number(input.onlineAmount || 0));
+  const totalAmt = cPart + oPart;
+  if (totalAmt <= 0) return null;
+
+  if (input.dedupeTag) {
+    const existing = await Expense.findOne({
+      notes: { $regex: input.dedupeTag.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&") },
+      status: "APPROVED",
+    }).lean();
+    if (existing) return existing;
+  }
+
+  let location: any = input.locationId
+    ? await Location.findById(input.locationId).lean()
+    : null;
+  if (!location) {
+    location = await Location.findOne({ active: true }).lean();
+  }
+  if (!location) {
+    throw new Error("Active branch location is required to record cash/online diary entry.");
+  }
+
+  const cashSession = await findOrAutoOpenCashSession(
+    location._id.toString(),
+    input.actorUsername || "system"
+  );
+  if (!cashSession) {
+    throw new Error("Unable to resolve or open Cash Diary session.");
+  }
+
+  const todayPktIso = new Date(Date.now() + 5 * 3600 * 1000).toISOString().slice(0, 10);
+  const dateStr = todayPktIso.replace(/-/g, "");
+  const prefix = `PCV-${dateStr}-`;
+  const lastExp: any = await Expense.findOne({ expenseNumber: new RegExp(`^${prefix}`) })
+    .select("expenseNumber")
+    .sort({ expenseNumber: -1 })
+    .lean();
+  let nextSeq = 1;
+  if (lastExp?.expenseNumber) {
+    const parts = lastExp.expenseNumber.split("-");
+    const parsed = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(parsed)) nextSeq = parsed + 1;
+  }
+  const expenseNumber = `${prefix}${String(nextSeq).padStart(4, "0")}`;
+
+  const paymentMethod =
+    cPart > 0 && oPart > 0 ? "SPLIT" : oPart > 0 ? "ONLINE" : "CASH";
+  const finalNotes = [input.notes?.trim(), input.dedupeTag].filter(Boolean).join(" • ");
+
+  const expense = new Expense({
+    expenseNumber,
+    location: location._id,
+    locationName: location.name,
+    shopTag: location.name || "P.G.S",
+    entryType: input.entryType,
+    category: input.category,
+    amount: totalAmt,
+    paymentMethod,
+    cashAmount: cPart,
+    onlineAmount: oPart,
+    recipient: input.recipient || input.reason,
+    reason: input.reason,
+    notes: finalNotes || input.reason,
+    createdBy: input.actorUsername || "system",
+    status: "APPROVED",
+  });
+
+  if (input.entryType === "CASH_PURCHASING") {
+    cashSession.totalPurchasingOut = (cashSession.totalPurchasingOut || 0) + totalAmt;
+  } else {
+    cashSession.totalExpenses = (cashSession.totalExpenses || 0) + totalAmt;
+  }
+  cashSession.expectedCash = (cashSession.expectedCash || 0) - cPart;
+  cashSession.expectedOnline = (cashSession.expectedOnline || 0) - oPart;
+
+  await Promise.all([
+    expense.save(),
+    cashSession.save(),
+    cPart > 0
+      ? recordCashMovement({
+          sessionId: cashSession._id.toString(),
+          locationId: location._id.toString(),
+          cashier: input.actorUsername || "system",
+          type: input.entryType === "CASH_PURCHASING" ? "CUSTOMER_BUYBACK" : "PETTY_CASH",
+          amount: cPart,
+          direction: "OUT",
+          paymentMethod: "CASH",
+          referenceType: "Expense",
+          referenceId: expenseNumber,
+          notes: input.reason,
+        })
+      : Promise.resolve(),
+  ]);
+
+  return expense;
 }
 
 /**
@@ -117,6 +267,7 @@ export async function recordCashMovement(
     type: input.type,
     amount,
     direction: input.direction,
+    paymentMethod: input.paymentMethod || "CASH",
     referenceType: input.referenceType,
     referenceId: input.referenceId,
     notes: input.notes,
@@ -157,7 +308,7 @@ export async function openCashSession(input: OpenCashSessionInput) {
   }
 
   const sessionNumber = await generateSessionNumber();
-  const openingAmount = Math.max(0, Number(input.openingCash || 0));
+  const openingAmount = Number(input.openingCash || 0);
 
   const session = new CashSession({
     sessionNumber,
@@ -223,13 +374,18 @@ export async function closeCashSession(input: CloseCashSessionInput) {
   let totalRefunds = 0;
 
   for (const m of movements) {
+    const isCash = !m.paymentMethod || m.paymentMethod === "CASH";
     if (m.direction === "IN") {
-      expectedCash += m.amount;
-      if (m.type === "CASH_SALE" || m.type === "DEBT_COLLECTION") {
-        totalCashSales += m.amount;
+      if (isCash) {
+        expectedCash += m.amount;
+        if (m.type === "CASH_SALE" || m.type === "DEBT_COLLECTION") {
+          totalCashSales += m.amount;
+        }
       }
     } else if (m.direction === "OUT") {
-      expectedCash -= m.amount;
+      if (isCash) {
+        expectedCash -= m.amount;
+      }
       if (m.type === "PETTY_CASH") {
         totalExpenses += m.amount;
       } else if (m.type === "CASH_REFUND") {

@@ -4,6 +4,7 @@ import { SalaryAdvance } from "@/models/SalaryAdvance";
 import { Employee } from "@/models/Employee";
 import { verifyRole } from "@/lib/auth/rbac";
 import { recordHRAuditLog } from "@/lib/hr/auditLog";
+import { recordDiaryOutflowEntry } from "@/lib/cashSessionEngine";
 
 export async function GET(req: NextRequest) {
   try {
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { employeeId, amount, monthlyDeduction, issueDate, reason, notes } =
+    const { employeeId, amount, monthlyDeduction, issueDate, reason, notes, paymentSource = "NONE" } =
       body;
 
     if (!employeeId || !amount || !monthlyDeduction || !reason) {
@@ -102,6 +103,21 @@ export async function POST(req: NextRequest) {
       performedBy: auth.user?.userId,
       performedByName: auth.user?.username || "Admin",
     });
+
+    if (numAmount > 0 && (paymentSource === "SHOP_CASH" || paymentSource === "SHOP_ONLINE")) {
+      await recordDiaryOutflowEntry({
+        locationId: employee.location?.toString(),
+        actorUsername: auth.user?.username || "Admin",
+        entryType: "EXPENSE",
+        category: "Salary",
+        cashAmount: paymentSource === "SHOP_CASH" ? numAmount : 0,
+        onlineAmount: paymentSource === "SHOP_ONLINE" ? numAmount : 0,
+        reason: `Salary Advance: ${employee.name} (${reason.trim()})`,
+        recipient: employee.name,
+        notes: `HR Advance #${advance._id}`,
+        dedupeTag: `[HR_ADV:${advance._id}]`,
+      });
+    }
 
     return NextResponse.json({
       success: true,

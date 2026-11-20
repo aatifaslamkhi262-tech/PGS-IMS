@@ -9,12 +9,20 @@ export interface ICashSession {
   openingCash: number;
   expectedCash: number;
   actualCash?: number;
+  openingOnline?: number;
+  expectedOnline?: number;
+  actualOnline?: number;
   variance?: number; // actualCash - expectedCash
   totalCashSales: number;
   totalCardSales: number;
   totalOnlineSales: number;
   totalRefunds: number;
   totalExpenses: number;
+  adjustedAmount?: number;
+  totalPurchasingOut?: number;
+  totalAtifWithdraw?: number;
+  totalAtifDeposit?: number;
+  totalCardSettlementIn?: number;
   status: "OPEN" | "CLOSED";
   notes?: string;
   varianceReason?: string;
@@ -43,15 +51,23 @@ const CashSessionSchema: Schema = new Schema(
     },
     locationName: { type: String, required: true },
     cashier: { type: String, required: true, index: true },
-    openingCash: { type: Number, required: true, min: 0 },
-    expectedCash: { type: Number, required: true, min: 0 },
-    actualCash: { type: Number, min: 0 },
+    openingCash: { type: Number, required: true },
+    expectedCash: { type: Number, required: true },
+    actualCash: { type: Number },
+    openingOnline: { type: Number, default: 0 },
+    expectedOnline: { type: Number, default: 0 },
+    actualOnline: { type: Number },
     variance: { type: Number },
     totalCashSales: { type: Number, default: 0, min: 0 },
     totalCardSales: { type: Number, default: 0, min: 0 },
     totalOnlineSales: { type: Number, default: 0, min: 0 },
     totalRefunds: { type: Number, default: 0, min: 0 },
     totalExpenses: { type: Number, default: 0, min: 0 },
+    adjustedAmount: { type: Number, default: 0 },
+    totalPurchasingOut: { type: Number, default: 0, min: 0 },
+    totalAtifWithdraw: { type: Number, default: 0, min: 0 },
+    totalAtifDeposit: { type: Number, default: 0, min: 0 },
+    totalCardSettlementIn: { type: Number, default: 0, min: 0 },
     status: {
       type: String,
       enum: ["OPEN", "CLOSED"],
@@ -67,6 +83,8 @@ const CashSessionSchema: Schema = new Schema(
     timestamps: true,
   }
 );
+
+CashSessionSchema.index({ openedAt: -1, status: 1 });
 
 export const CashSession: Model<ICashSession> =
   mongoose.models.CashSession || mongoose.model<ICashSession>("CashSession", CashSessionSchema);

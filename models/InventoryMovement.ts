@@ -39,6 +39,9 @@ export interface IInventoryMovement {
   dispatchedBy?: string;
   condition?: string; // "New" | "Used" | "Refurbished" | "Defective"
   linkedTransferNumber?: string;
+  salesman?: Types.ObjectId;
+  salesmanName?: string;
+  intakePurpose?: "SUPPLIER_PURCHASE" | "DIRECT_BUYBACK" | "EXCHANGE_INTAKE";
   date: Date;
   notes?: string;
   createdAt?: Date;
@@ -148,6 +151,18 @@ const InventoryMovementSchema: Schema = new Schema(
     linkedTransferNumber: {
       type: String,
       trim: true,
+    },
+    salesman: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    salesmanName: {
+      type: String,
+      trim: true,
+    },
+    intakePurpose: {
+      type: String,
+      enum: ["SUPPLIER_PURCHASE", "DIRECT_BUYBACK", "EXCHANGE_INTAKE"],
     },
     date: {
       type: Date,

@@ -6,9 +6,10 @@ export type PaymentMethod =
   | "BANK_TRANSFER"
   | "ONLINE_GATEWAY"
   | "COD"
-  | "CUSTOMER_ADVANCE";
+  | "CUSTOMER_ADVANCE"
+  | "EXCHANGE_CREDIT";
 
-export type PaymentStatus = "UNPAID" | "PARTIALLY_PAID" | "PAID" | "FAILED" | "REFUNDED";
+export type PaymentStatus = "UNPAID" | "PARTIALLY_PAID" | "PAID" | "FAILED" | "REFUNDED" | "FORFEITED";
 
 export interface IPaymentAllocation {
   invoice: Types.ObjectId;
@@ -75,6 +76,7 @@ const PaymentSchema: Schema = new Schema(
         "ONLINE_GATEWAY",
         "COD",
         "CUSTOMER_ADVANCE",
+        "EXCHANGE_CREDIT",
       ],
       required: true,
       index: true,
@@ -97,7 +99,7 @@ const PaymentSchema: Schema = new Schema(
     verifiedBy: { type: String },
     status: {
       type: String,
-      enum: ["UNPAID", "PARTIALLY_PAID", "PAID", "FAILED", "REFUNDED"],
+      enum: ["UNPAID", "PARTIALLY_PAID", "PAID", "FAILED", "REFUNDED", "FORFEITED"],
       default: "PAID",
       index: true,
     },

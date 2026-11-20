@@ -2,7 +2,43 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { Product } from "@/models/Product";
 import { SerialNumber } from "@/models/SerialNumber";
+import { Inventory } from "@/models/Inventory";
+import { Location } from "@/models/Location";
 import { verifyRole } from "@/lib/auth/rbac";
+
+async function buildProductStockBreakdown(productId: any) {
+  const [allLocations, invLines] = await Promise.all([
+    Location.find({}).sort({ name: 1 }).select("_id name code type active").lean(),
+    Inventory.find({ product: productId }).lean(),
+  ]);
+  const stockByLoc = new Map<string, number>();
+  let totalStock = 0;
+
+  for (const inv of invLines as any[]) {
+    const locId = inv.location ? inv.location.toString() : "";
+    const qty = Number(inv.quantity) || 0;
+    if (locId) {
+      stockByLoc.set(locId, (stockByLoc.get(locId) || 0) + qty);
+    }
+    totalStock += qty;
+  }
+
+  const stockBreakdown = (allLocations as any[])
+    .filter((loc: any) => loc.active || (stockByLoc.get(loc._id.toString()) || 0) > 0)
+    .map((loc: any) => {
+      const locId = loc._id.toString();
+      const qty = stockByLoc.get(locId) || 0;
+      return {
+        locationId: locId,
+        locationName: loc.name + (loc.active ? "" : " (Inactive)"),
+        locationCode: loc.code,
+        locationType: loc.type,
+        quantity: qty,
+      };
+    });
+
+  return { totalStock, stockBreakdown };
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -31,7 +67,7 @@ export async function GET(req: NextRequest) {
       .populate("product")
       .lean();
 
-    if (serialRecord) {
+    if (serialRecord && serialRecord.product) {
       let provenance: any = null;
       let pricing: any = null;
 
@@ -83,7 +119,10 @@ export async function GET(req: NextRequest) {
       const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
       const productId = (serialRecord.product as any)._id.toString();
       const condition = (serialRecord.product as any).condition || (serialRecord as any).condition || "New";
-      const pricingResult = await calculateProductWeightedPricing(productId, condition);
+      const [pricingResult, stockMeta] = await Promise.all([
+        calculateProductWeightedPricing(productId, condition),
+        buildProductStockBreakdown(productId),
+      ]);
       const effective = resolveProductEffectivePricing(serialRecord.product as any, pricingResult);
 
       const safeWeightedPricing = {
@@ -110,6 +149,8 @@ export async function GET(req: NextRequest) {
         description: (serialRecord.product as any).description,
         sellingPrice: effective.sellingPrice,
         minSellingPrice: effective.minSellingPrice,
+        totalStock: stockMeta.totalStock,
+        stockBreakdown: stockMeta.stockBreakdown,
         ...(isAuthorizedForProvenance && { costPrice: effective.costPrice }),
       };
 
@@ -134,10 +175,16 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // 2. Find product by barcode
+    // 2. Find product by barcode or exact SKU
+    const cleanCode = barcode.trim();
+    const escapedCode = cleanCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const product = await Product.findOne({
-      barcode: barcode.trim(),
-      isDeleted: false
+      $or: [
+        { barcode: cleanCode },
+        { barcode: new RegExp(`^${escapedCode}$`, "i") },
+        { sku: new RegExp(`^${escapedCode}$`, "i") },
+      ],
+      isDeleted: false,
     })
       .populate("category", "name code")
       .populate("productGroup", "name description")
@@ -191,7 +238,10 @@ export async function GET(req: NextRequest) {
 
     // Dynamic quantity-weighted average calculation & effective precedence resolution
     const { calculateProductWeightedPricing, resolveProductEffectivePricing } = await import("@/lib/pricing");
-    const pricingResult = await calculateProductWeightedPricing(product._id.toString(), product.condition);
+    const [pricingResult, stockMeta] = await Promise.all([
+      calculateProductWeightedPricing(product._id.toString(), product.condition),
+      buildProductStockBreakdown(product._id),
+    ]);
     const effective = resolveProductEffectivePricing(product as any, pricingResult);
 
     // Project safe product details for restricted roles
@@ -204,6 +254,8 @@ export async function GET(req: NextRequest) {
       brand: product.brand || "",
       modelNumber: product.modelNumber || product.model || "",
       model: product.model || product.modelNumber || "",
+      totalStock: stockMeta.totalStock,
+      stockBreakdown: stockMeta.stockBreakdown,
     } : {
       _id: product._id,
       name: product.name,
@@ -219,6 +271,8 @@ export async function GET(req: NextRequest) {
       model: product.model || product.modelNumber || "",
       serialTracking: product.serialTracking,
       description: product.description,
+      totalStock: stockMeta.totalStock,
+      stockBreakdown: stockMeta.stockBreakdown,
     };
 
     const safePricing = {

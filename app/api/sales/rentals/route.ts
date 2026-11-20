@@ -7,8 +7,9 @@ import { Location } from "@/models/Location";
 import { User } from "@/models/User";
 import { InventoryMovement } from "@/models/InventoryMovement";
 import { SerialNumber } from "@/models/SerialNumber";
-import { CashSession } from "@/models/CashSession";
-import { recordCashMovement } from "@/lib/cashSessionEngine";
+import { Payment } from "@/models/Payment";
+import { generatePaymentNumber } from "@/lib/salesEngine";
+import { recordCashMovement, findOrAutoOpenCashSession } from "@/lib/cashSessionEngine";
 import { deductInventoryWithAverageCost } from "@/lib/averageCostEngine";
 import { resolveOrCreateCustomer } from "@/lib/customerResolver";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
@@ -69,6 +70,8 @@ export async function POST(request: Request) {
       customerName,
       customerPhone,
       items, // array of { productId, depositPaid, perDayRate, serialNumber, condition }
+      paymentMethod,
+      paymentAllocations,
       notes,
       processedBy,
     } = body;
@@ -202,28 +205,81 @@ export async function POST(request: Request) {
       await newBooking.save();
     }
 
-    // Cash Drawer IN Movement for Security Deposit Liability
-    const activeCashSession = await CashSession.findOne({
-      location: location._id,
-      cashier: processedBy || auth.user?.username || "system",
-      status: "OPEN",
-    });
+    const actorUsername = processedBy || auth.user?.username || "system";
 
-    if (activeCashSession && totalDeposit > 0) {
-      await recordCashMovement(
-        {
-          sessionId: activeCashSession._id.toString(),
-          locationId: location._id.toString(),
-          cashier: processedBy || auth.user?.username || "system",
-          type: "CASH_SALE",
-          amount: totalDeposit,
-          direction: "IN",
-          referenceType: "Payment",
-          referenceId: bookingNumber,
-          notes: `Rental Security Deposit Received for ${bookingNumber}`,
-        },
-        isTxActive ? session : undefined
+    // Record Payment entries so Cash / Online Bank / Card deposits sync automatically with Daily Diary & Daily Closing
+    const cleanAllocations: Array<{ method: string; amount: number; referenceNumber?: string }> =
+      Array.isArray(paymentAllocations) && paymentAllocations.length > 0
+        ? paymentAllocations
+            .map((a: any) => ({
+              method: a.method || "CASH",
+              amount: Number(a.amount || 0),
+              referenceNumber: a.referenceNumber ? String(a.referenceNumber).trim() : undefined,
+            }))
+            .filter((a) => a.amount > 0)
+        : totalDeposit > 0
+        ? [{ method: paymentMethod || "CASH", amount: totalDeposit }]
+        : [];
+
+    const usedPayNums = new Set<string>();
+    let totalCashDeposit = 0;
+
+    for (const alloc of cleanAllocations) {
+      let payNum = await generatePaymentNumber(isTxActive ? session : undefined);
+      while (usedPayNums.has(payNum)) {
+        const parts = payNum.split("-");
+        const seq = parseInt(parts[parts.length - 1], 10) || 1;
+        parts[parts.length - 1] = String(seq + 1).padStart(3, "0");
+        payNum = parts.join("-");
+      }
+      usedPayNums.add(payNum);
+
+      const rentalPayment = new Payment({
+        paymentNumber: payNum,
+        customer: customerId || undefined,
+        location: location._id,
+        paymentMethod: alloc.method,
+        amount: alloc.amount,
+        referenceNumber: alloc.referenceNumber,
+        notes: `Rental Security Deposit (${bookingNumber} - ${customerName || "Walk-in Rental Customer"})`,
+        receivedBy: actorUsername,
+        status: "PAID",
+      });
+
+      if (isTxActive) {
+        await rentalPayment.save({ session });
+      } else {
+        await rentalPayment.save();
+      }
+
+      if (alloc.method === "CASH") {
+        totalCashDeposit += alloc.amount;
+      }
+    }
+
+    // Physical Cash Drawer IN Movement for Cash Deposit Portion
+    if (totalCashDeposit > 0) {
+      const activeCashSession = await findOrAutoOpenCashSession(
+        location._id.toString(),
+        actorUsername
       );
+      if (activeCashSession) {
+        await recordCashMovement(
+          {
+            sessionId: activeCashSession._id.toString(),
+            locationId: location._id.toString(),
+            cashier: actorUsername,
+            type: "CASH_SALE",
+            amount: totalCashDeposit,
+            direction: "IN",
+            paymentMethod: "CASH",
+            referenceType: "Payment",
+            referenceId: bookingNumber,
+            notes: `Rental Security Deposit Received for ${bookingNumber}`,
+          },
+          isTxActive ? session : undefined
+        );
+      }
     }
 
     // Customer Ledger: Record Security Deposit Held as liability (Customer Advance)

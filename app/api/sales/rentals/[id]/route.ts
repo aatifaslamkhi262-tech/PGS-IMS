@@ -7,8 +7,10 @@ import { Sale } from "@/models/Sale";
 import { Location } from "@/models/Location";
 import { InventoryMovement } from "@/models/InventoryMovement";
 import { SerialNumber } from "@/models/SerialNumber";
-import { CashSession } from "@/models/CashSession";
-import { recordCashMovement } from "@/lib/cashSessionEngine";
+import { Payment } from "@/models/Payment";
+import { generatePaymentNumber } from "@/lib/salesEngine";
+import { recordCashMovement, findOrAutoOpenCashSession } from "@/lib/cashSessionEngine";
+import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
 import { updateAverageCostOnIntake } from "@/lib/averageCostEngine";
 import { Inventory } from "@/models/Inventory";
 import { verifyRole } from "@/lib/auth/rbac";
@@ -26,7 +28,9 @@ export async function PATCH(
 
     const { id } = await params;
     const body = await request.json();
-    const { action, returnedItemIds, customRentFee, topUpAmount, notes, processedBy } = body;
+    const { action, returnedItemIds, customRentFee, topUpAmount, paymentMethod, notes, processedBy } = body;
+    const chosenMethod: "CASH" | "CARD" | "BANK_TRANSFER" | "ONLINE_GATEWAY" = paymentMethod || "CASH";
+    const actorUsername = processedBy || auth.user?.username || "system";
 
     const booking = await RentalBooking.findById(id);
     if (!booking) {
@@ -236,41 +240,109 @@ export async function PATCH(
         }
       }
 
-      // Cash Drawer Movement (Refund paid OUT to customer or Top-up received IN)
-      const activeCashSession = await CashSession.findOne({
-        location: booking.location,
-        cashier: processedBy || auth.user?.username || "system",
-        status: "OPEN",
-      });
-
-      if (activeCashSession) {
-        if (totalNetRefundToCustomer > 0) {
+      // Cash / Bank Drawer Movement & Payment tracking
+      if (totalNetRefundToCustomer > 0) {
+        const activeCashSession = await findOrAutoOpenCashSession(
+          booking.location.toString(),
+          actorUsername
+        );
+        if (activeCashSession) {
           await recordCashMovement(
             {
               sessionId: activeCashSession._id.toString(),
               locationId: booking.location.toString(),
-              cashier: processedBy || auth.user?.username || "system",
+              cashier: actorUsername,
               type: "CASH_REFUND",
               amount: totalNetRefundToCustomer,
               direction: "OUT",
+              paymentMethod: chosenMethod,
               referenceType: "Return",
               referenceId: booking.bookingNumber,
-              notes: `Rental Security Deposit Refund paid to ${booking.customerName}`,
+              notes: `Rental Deposit Refund (${booking.bookingNumber} - ${booking.customerName}) [${chosenMethod}]`,
+            },
+            isTxActive ? session : undefined
+          );
+        }
+      } else if (totalNetRefundToCustomer < 0) {
+        const excessFeeAmt = Math.abs(totalNetRefundToCustomer);
+        const payNum = await generatePaymentNumber(isTxActive ? session : undefined);
+        const excessPayment = new Payment({
+          paymentNumber: payNum,
+          customer: booking.customer,
+          location: booking.location,
+          paymentMethod: chosenMethod,
+          amount: excessFeeAmt,
+          notes: `Rental Usage Excess Collection (${booking.bookingNumber})`,
+          receivedBy: actorUsername,
+          status: "PAID",
+        });
+        if (isTxActive) await excessPayment.save({ session });
+        else await excessPayment.save();
+
+        if (chosenMethod === "CASH") {
+          const activeCashSession = await findOrAutoOpenCashSession(
+            booking.location.toString(),
+            actorUsername
+          );
+          if (activeCashSession) {
+            await recordCashMovement(
+              {
+                sessionId: activeCashSession._id.toString(),
+                locationId: booking.location.toString(),
+                cashier: actorUsername,
+                type: "CASH_SALE",
+                amount: excessFeeAmt,
+                direction: "IN",
+                paymentMethod: "CASH",
+                referenceType: "Return",
+                referenceId: booking.bookingNumber,
+                notes: `Rental Usage Excess Collection from ${booking.customerName}`,
+              },
+              isTxActive ? session : undefined
+            );
+          }
+        }
+      }
+
+      // Reconcile Customer Ledger for realized rent fee & refunded deposit / excess payment
+      if (booking.customer) {
+        if (totalAccruedRentRealized > 0) {
+          await recordCustomerLedgerEntry(
+            {
+              customerId: booking.customer.toString(),
+              type: "INVOICE",
+              amount: totalAccruedRentRealized,
+              referenceType: "Return",
+              referenceId: booking.bookingNumber,
+              notes: `Rental Usage Fee (${booking.bookingNumber})`,
+              createdBy: actorUsername,
+            },
+            isTxActive ? session : undefined
+          );
+        }
+        if (totalNetRefundToCustomer > 0) {
+          await recordCustomerLedgerEntry(
+            {
+              customerId: booking.customer.toString(),
+              type: "ADVANCE_REFUND",
+              amount: totalNetRefundToCustomer,
+              referenceType: "Refund",
+              referenceId: booking.bookingNumber,
+              notes: `Rental Security Deposit Refund (${booking.bookingNumber} - ${chosenMethod})`,
+              createdBy: actorUsername,
             },
             isTxActive ? session : undefined
           );
         } else if (totalNetRefundToCustomer < 0) {
-          await recordCashMovement(
+          await recordCustomerLedgerEntry(
             {
-              sessionId: activeCashSession._id.toString(),
-              locationId: booking.location.toString(),
-              cashier: processedBy || auth.user?.username || "system",
-              type: "CASH_SALE",
+              customerId: booking.customer.toString(),
+              type: "PAYMENT",
               amount: Math.abs(totalNetRefundToCustomer),
-              direction: "IN",
-              referenceType: "Return",
+              referenceType: "Payment",
               referenceId: booking.bookingNumber,
-              notes: `Rental Usage Excess Collection from ${booking.customerName}`,
+              notes: `Rental Excess Usage Collection (${booking.bookingNumber} - ${chosenMethod})`,
+              createdBy: actorUsername,
             },
             isTxActive ? session : undefined
           );
@@ -312,24 +384,54 @@ export async function PATCH(
         await booking.save();
       }
 
-      const activeCashSession = await CashSession.findOne({
+      const payNum = await generatePaymentNumber(isTxActive ? session : undefined);
+      const topUpPayment = new Payment({
+        paymentNumber: payNum,
+        customer: booking.customer,
         location: booking.location,
-        cashier: processedBy || auth.user?.username || "system",
-        status: "OPEN",
+        paymentMethod: chosenMethod,
+        amount: topUpVal,
+        notes: `Rental Deposit Top-Up (${booking.bookingNumber})`,
+        receivedBy: actorUsername,
+        status: "PAID",
       });
+      if (isTxActive) await topUpPayment.save({ session });
+      else await topUpPayment.save();
 
-      if (activeCashSession) {
-        await recordCashMovement(
+      if (chosenMethod === "CASH") {
+        const activeCashSession = await findOrAutoOpenCashSession(
+          booking.location.toString(),
+          actorUsername
+        );
+        if (activeCashSession) {
+          await recordCashMovement(
+            {
+              sessionId: activeCashSession._id.toString(),
+              locationId: booking.location.toString(),
+              cashier: actorUsername,
+              type: "CASH_SALE",
+              amount: topUpVal,
+              direction: "IN",
+              paymentMethod: "CASH",
+              referenceType: "Payment",
+              referenceId: booking.bookingNumber,
+              notes: `Rental Deposit Top-Up for ${booking.bookingNumber}`,
+            },
+            isTxActive ? session : undefined
+          );
+        }
+      }
+
+      if (booking.customer && topUpVal > 0) {
+        await recordCustomerLedgerEntry(
           {
-            sessionId: activeCashSession._id.toString(),
-            locationId: booking.location.toString(),
-            cashier: processedBy || auth.user?.username || "system",
-            type: "CASH_SALE",
+            customerId: booking.customer.toString(),
+            type: "ADVANCE_DEPOSIT",
             amount: topUpVal,
-            direction: "IN",
             referenceType: "Payment",
             referenceId: booking.bookingNumber,
-            notes: `Rental Deposit Top-Up for ${booking.bookingNumber}`,
+            notes: `Rental Deposit Top-Up (${booking.bookingNumber} - ${chosenMethod})`,
+            createdBy: actorUsername,
           },
           isTxActive ? session : undefined
         );

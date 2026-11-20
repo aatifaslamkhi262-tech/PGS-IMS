@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { Sale } from "@/models/Sale";
 import { createSaleInput, completeSale } from "@/lib/salesEngine";
 import { SerialNumber } from "@/models/SerialNumber";
+import { PaymentMethod } from "@/models/Payment";
 import { sendOwnerOrderAlert } from "@/lib/emailService";
 
 export async function POST(request: Request) {
@@ -73,7 +74,15 @@ export async function PUT(request: Request) {
   try {
     await dbConnect();
     const body = await request.json();
-    const { saleId, action, trackingNumber, courierName, processedBy, paymentMethod } = body;
+    const {
+      saleId,
+      action,
+      trackingNumber,
+      courierName,
+      processedBy,
+      paymentMethod,
+      paymentAllocations,
+    } = body;
 
     const sale = await Sale.findById(saleId);
     if (!sale) {
@@ -118,12 +127,25 @@ export async function PUT(request: Request) {
         }
       }
 
+      const sanitizedAllocations: Array<{
+        method: PaymentMethod;
+        amount: number;
+        referenceNumber?: string;
+      }> =
+        Array.isArray(paymentAllocations) && paymentAllocations.length > 0
+          ? paymentAllocations
+              .filter((a: any) => Number(a?.amount || 0) > 0)
+              .map((a: any) => ({
+                method: (a.method || "CASH") as PaymentMethod,
+                amount: Number(a.amount || 0),
+                referenceNumber: a.referenceNumber ? String(a.referenceNumber) : undefined,
+              }))
+          : [{ method: (paymentMethod || "CASH") as PaymentMethod, amount: sale.totalAmount }];
+
       const completedResult = await completeSale({
         saleId: sale._id.toString(),
         completedBy: processedBy || "system",
-        paymentAllocations: [
-          { method: paymentMethod || "CASH", amount: sale.totalAmount },
-        ],
+        paymentAllocations: sanitizedAllocations,
       });
 
       return NextResponse.json({

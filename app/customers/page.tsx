@@ -27,6 +27,13 @@ import {
   Gamepad2,
 } from "lucide-react";
 import { ThermalReceiptModal } from "@/components/ThermalReceipt";
+import {
+  PaymentAllocationInput,
+  PaymentAllocationState,
+  createInitialPaymentState,
+  buildPaymentAllocations,
+  getPaymentAllocatedTotal,
+} from "@/components/PaymentAllocationInput";
 
 export default function CustomersPage() {
   const [locations, setLocations] = useState<any[]>([]);
@@ -65,7 +72,9 @@ export default function CustomersPage() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [khataAction, setKhataAction] = useState<"PAYMENT" | "ADD_DEBT">("PAYMENT");
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
-  const [paymentMethod, setPaymentMethod] = useState<"CASH" | "CARD" | "BANK_TRANSFER">("CASH");
+  const [khataPayment, setKhataPayment] = useState<PaymentAllocationState>(() =>
+    createInitialPaymentState("CASH", 0)
+  );
   const [paymentNotes, setPaymentNotes] = useState("");
 
   useEffect(() => {
@@ -219,7 +228,18 @@ export default function CustomersPage() {
 
   const handleLedgerPayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCustomer || paymentAmount <= 0) return;
+    if (!selectedCustomer) return;
+
+    const effectiveAmt =
+      khataAction === "ADD_DEBT"
+        ? Number(paymentAmount || 0)
+        : getPaymentAllocatedTotal(khataPayment, 0, true);
+    if (effectiveAmt <= 0) return;
+
+    const paymentAllocations =
+      khataAction === "PAYMENT"
+        ? buildPaymentAllocations(khataPayment, effectiveAmt, true)
+        : undefined;
 
     setLoading(true);
     setError("");
@@ -232,8 +252,14 @@ export default function CustomersPage() {
         body: JSON.stringify({
           customerId: selectedCustomer._id,
           locationId: selectedLocation,
-          amount: Number(paymentAmount),
-          paymentMethod: khataAction === "PAYMENT" ? paymentMethod : undefined,
+          amount: effectiveAmt,
+          paymentMethod:
+            khataAction === "PAYMENT"
+              ? paymentAllocations && paymentAllocations.length > 1
+                ? "SPLIT"
+                : paymentAllocations?.[0]?.method || khataPayment.singleMethod
+              : undefined,
+          paymentAllocations,
           notes: paymentNotes,
           actionType: khataAction,
         }),
@@ -249,10 +275,11 @@ export default function CustomersPage() {
       setShowPaymentModal(false);
       setSuccessMsg(
         khataAction === "ADD_DEBT"
-          ? `Udhar (+Rs. ${paymentAmount.toLocaleString()}) added for ${selectedCustomer.name}!`
-          : `Payment (-Rs. ${paymentAmount.toLocaleString()}) recorded cleanly for ${selectedCustomer.name}!`
+          ? `Udhar (+Rs. ${effectiveAmt.toLocaleString()}) added for ${selectedCustomer.name}!`
+          : `Payment (-Rs. ${effectiveAmt.toLocaleString()}) recorded cleanly for ${selectedCustomer.name}!`
       );
       setPaymentAmount(0);
+      setKhataPayment(createInitialPaymentState("CASH", 0));
       setPaymentNotes("");
       if (data.data?.customer) {
         setSelectedCustomer(data.data.customer);
@@ -415,8 +442,10 @@ export default function CustomersPage() {
 
                   <button
                     onClick={() => {
+                      const bal = selectedCustomer.outstandingBalance || 0;
                       setKhataAction("PAYMENT");
-                      setPaymentAmount(selectedCustomer.outstandingBalance || 0);
+                      setPaymentAmount(bal);
+                      setKhataPayment(createInitialPaymentState("CASH", bal));
                       setPaymentNotes("");
                       setShowPaymentModal(true);
                     }}
@@ -961,58 +990,59 @@ export default function CustomersPage() {
                     </span>
                   </div>
                 )}
-                {paymentAmount > 0 && (
-                  <div className="flex justify-between items-center text-xs pt-1 border-t border-slate-800/80">
-                    <span className="text-slate-400 font-semibold">
-                      {khataAction === "ADD_DEBT" ? "Projected New Due (+):" : "Projected Remaining Due (-):"}
-                    </span>
-                    <span
-                      className={`font-mono font-bold ${
-                        khataAction === "ADD_DEBT" ? "text-rose-400" : "text-emerald-400"
-                      }`}
-                    >
-                      Rs.{" "}
-                      {khataAction === "ADD_DEBT"
-                        ? (selectedCustomer.outstandingBalance + Number(paymentAmount)).toLocaleString()
-                        : Math.max(0, selectedCustomer.outstandingBalance - Number(paymentAmount)).toLocaleString()}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Amount Input */}
-              <div className="space-y-1">
-                <label className="text-slate-300 font-semibold">
-                  {khataAction === "ADD_DEBT" ? "Udhar Amount (PKR) / رقم:" : "Payment Received (PKR) / وصول رقم:"}
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  value={paymentAmount || ""}
-                  onChange={(e) => setPaymentAmount(Number(e.target.value))}
-                  placeholder="0"
-                  className={`w-full bg-slate-950 border text-base font-mono font-bold rounded-xl px-3 py-2 ${
+                {(() => {
+                  const previewAmt =
                     khataAction === "ADD_DEBT"
-                      ? "border-rose-500/40 text-rose-400 focus:border-rose-500"
-                      : "border-emerald-500/40 text-emerald-400 focus:border-emerald-500"
-                  }`}
-                  required
-                />
+                      ? Number(paymentAmount || 0)
+                      : getPaymentAllocatedTotal(khataPayment, 0, true);
+                  if (previewAmt <= 0) return null;
+                  return (
+                    <div className="flex justify-between items-center text-xs pt-1 border-t border-slate-800/80">
+                      <span className="text-slate-400 font-semibold">
+                        {khataAction === "ADD_DEBT" ? "Projected New Due (+):" : "Projected Remaining Due (-):"}
+                      </span>
+                      <span
+                        className={`font-mono font-bold ${
+                          khataAction === "ADD_DEBT" ? "text-rose-400" : "text-emerald-400"
+                        }`}
+                      >
+                        Rs.{" "}
+                        {khataAction === "ADD_DEBT"
+                          ? (selectedCustomer.outstandingBalance + previewAmt).toLocaleString()
+                          : Math.max(0, selectedCustomer.outstandingBalance - previewAmt).toLocaleString()}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
 
-              {/* Payment Method (Only for Wasool Kiya / Payment) */}
-              {khataAction === "PAYMENT" && (
+              {khataAction === "ADD_DEBT" ? (
                 <div className="space-y-1">
-                  <label className="text-slate-300 font-semibold">Payment Method:</label>
-                  <select
-                    value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value as any)}
-                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-2"
-                  >
-                    <option value="CASH">Cash 💵</option>
-                    <option value="CARD">Credit/Debit Card 💳</option>
-                    <option value="BANK_TRANSFER">Bank Transfer / Raast 🏦</option>
-                  </select>
+                  <label className="text-slate-300 font-semibold">
+                    Udhar Amount (PKR) / رقم:
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={paymentAmount || ""}
+                    onChange={(e) => setPaymentAmount(Number(e.target.value))}
+                    placeholder="0"
+                    className="w-full bg-slate-950 border border-rose-500/40 text-rose-400 focus:border-rose-500 text-base font-mono font-bold rounded-xl px-3 py-2"
+                    required
+                  />
+                </div>
+              ) : (
+                <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
+                  <PaymentAllocationInput
+                    value={khataPayment}
+                    onChange={setKhataPayment}
+                    targetAmount={selectedCustomer.outstandingBalance || 0}
+                    allowEditableSingleAmount={true}
+                    includeExchangeCredit={false}
+                    label="Khata Recovery (Single / Split):"
+                    singleAmountLabel="Payment Received (PKR) *:"
+                    accent="indigo"
+                  />
                 </div>
               )}
 
@@ -1034,32 +1064,40 @@ export default function CustomersPage() {
                 />
               </div>
 
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowPaymentModal(false)}
-                  className="flex-1 py-2.5 rounded-xl border border-slate-700 bg-slate-800 text-slate-300 font-semibold text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading || paymentAmount <= 0}
-                  className={`flex-1 py-2.5 rounded-xl text-white font-bold text-xs shadow-lg transition flex items-center justify-center gap-2 ${
-                    khataAction === "ADD_DEBT"
-                      ? "bg-rose-600 hover:bg-rose-500 shadow-rose-600/20"
-                      : "bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20"
-                  }`}
-                >
-                  {loading ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : khataAction === "ADD_DEBT" ? (
-                    `+ Record Rs. ${paymentAmount ? paymentAmount.toLocaleString() : "0"} Udhar`
-                  ) : (
-                    `- Record Rs. ${paymentAmount ? paymentAmount.toLocaleString() : "0"} Payment`
-                  )}
-                </button>
-              </div>
+              {(() => {
+                const effectiveAmt =
+                  khataAction === "ADD_DEBT"
+                    ? Number(paymentAmount || 0)
+                    : getPaymentAllocatedTotal(khataPayment, 0, true);
+                return (
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowPaymentModal(false)}
+                      className="flex-1 py-2.5 rounded-xl border border-slate-700 bg-slate-800 text-slate-300 font-semibold text-xs"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={loading || effectiveAmt <= 0}
+                      className={`flex-1 py-2.5 rounded-xl text-white font-bold text-xs shadow-lg transition flex items-center justify-center gap-2 disabled:opacity-50 ${
+                        khataAction === "ADD_DEBT"
+                          ? "bg-rose-600 hover:bg-rose-500 shadow-rose-600/20"
+                          : "bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20"
+                      }`}
+                    >
+                      {loading ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : khataAction === "ADD_DEBT" ? (
+                        `+ Record Rs. ${effectiveAmt ? effectiveAmt.toLocaleString() : "0"} Udhar`
+                      ) : (
+                        `- Record Rs. ${effectiveAmt ? effectiveAmt.toLocaleString() : "0"} Payment`
+                      )}
+                    </button>
+                  </div>
+                );
+              })()}
             </form>
           </div>
         </div>

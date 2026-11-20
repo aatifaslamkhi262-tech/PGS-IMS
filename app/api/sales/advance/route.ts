@@ -1,20 +1,41 @@
 import { NextResponse } from "next/server";
+import mongoose from "mongoose";
 import { dbConnect } from "@/lib/db";
 import { Sale } from "@/models/Sale";
 import { Payment } from "@/models/Payment";
 import { Location } from "@/models/Location";
-import { createSaleInput, completeSale } from "@/lib/salesEngine";
+import { User } from "@/models/User";
+import { createSaleInput, completeSale, generatePaymentNumber } from "@/lib/salesEngine";
 import { recordPayment } from "@/lib/paymentEngine";
 import { SerialNumber } from "@/models/SerialNumber";
 import { CashSession } from "@/models/CashSession";
 import { recordCashMovement } from "@/lib/cashSessionEngine";
-
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
+import { verifyRole } from "@/lib/auth/rbac";
+import { lockIdempotencyKey, completeIdempotencyKey, failIdempotencyKey } from "@/lib/idempotencyEngine";
 
 export async function POST(request: Request) {
+  let idempotencyKeyHeader = "";
+  let createdSaleId: string | null = null;
   try {
     await dbConnect();
+    const auth = await verifyRole(["Admin", "Warehouse", "Accountant", "Salesman", "Branch"]);
+    if (!auth.authorized || !auth.user) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+    }
+
     const body = await request.json();
+    idempotencyKeyHeader = request.headers.get("x-idempotency-key") || body.idempotencyKey || "";
+
+    if (idempotencyKeyHeader) {
+      const lockRes = await lockIdempotencyKey(idempotencyKeyHeader, body, "/api/sales/advance");
+      if (lockRes.isDuplicate) {
+        return NextResponse.json(
+          lockRes.responseBody || { success: false, error: lockRes.error },
+          { status: lockRes.statusCode || 409 }
+        );
+      }
+    }
 
     const {
       locationId,
@@ -22,18 +43,89 @@ export async function POST(request: Request) {
       customerName,
       customerPhone,
       salesmanId,
+      salesmanName,
       items,
       advanceAmount,
+      discountAmount,
       paymentMethod,
+      paymentAllocations,
+      expectedDate,
+      notes,
       createdBy,
     } = body;
 
-    if (!advanceAmount || advanceAmount <= 0) {
+    const cleanAllocations: Array<{
+      method: "CASH" | "CARD" | "BANK_TRANSFER" | "ONLINE_GATEWAY" | "COD" | "CUSTOMER_ADVANCE" | "EXCHANGE_CREDIT";
+      amount: number;
+      referenceNumber?: string;
+      notes?: string;
+    }> =
+      Array.isArray(paymentAllocations) && paymentAllocations.length > 0
+        ? paymentAllocations
+            .map((a: any) => ({
+              method: a.method || "CASH",
+              amount: Number(a.amount || 0),
+              referenceNumber: a.referenceNumber ? String(a.referenceNumber).trim() : undefined,
+              notes: a.notes ? String(a.notes).trim() : undefined,
+            }))
+            .filter((a) => a.amount > 0)
+        : Number(advanceAmount || 0) > 0
+        ? [{ method: paymentMethod || "CASH", amount: Number(advanceAmount || 0) }]
+        : [];
+
+    const advAmt = cleanAllocations.reduce((sum, a) => sum + a.amount, 0);
+    if (!advAmt || advAmt <= 0 || cleanAllocations.length === 0) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
       return NextResponse.json(
-        { success: false, error: "Advance down-payment amount is required." },
+        { success: false, error: "Advance down-payment amount must be greater than 0." },
         { status: 400 }
       );
     }
+
+    if (!locationId || locationId === "ALL") {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
+      return NextResponse.json(
+        { success: false, error: "Please select a specific Store Location for Advance Booking." },
+        { status: 400 }
+      );
+    }
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
+      return NextResponse.json(
+        { success: false, error: "At least one product item is required for Advance Booking." },
+        { status: 400 }
+      );
+    }
+
+    const cleanCustName = customerName ? String(customerName).trim() : "";
+    const cleanCustPhone = customerPhone ? String(customerPhone).trim() : "";
+    if (!customerId && (!cleanCustName || cleanCustName === "Advance Booking Customer") && !cleanCustPhone) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
+      return NextResponse.json(
+        { success: false, error: "Customer Name and/or Phone is required for Advance Booking ledger tracking." },
+        { status: 400 }
+      );
+    }
+
+    const actorUsername = auth.user.username || createdBy || "system";
+
+    let resolvedSalesmanName = salesmanName;
+    if (salesmanId && !resolvedSalesmanName) {
+      const salesmanDoc = await User.findById(salesmanId).select("name username").lean();
+      if (salesmanDoc) {
+        resolvedSalesmanName = (salesmanDoc as any).name || (salesmanDoc as any).username;
+      }
+    }
+
+    const noteParts: string[] = [];
+    if (expectedDate && String(expectedDate).trim()) {
+      noteParts.push(`Expected Pickup: ${String(expectedDate).trim()}`);
+    }
+    if (notes && String(notes).trim()) {
+      noteParts.push(String(notes).trim());
+    }
+    const combinedNotes = noteParts.length > 0 ? noteParts.join(" • ") : undefined;
 
     // 1. Create Sale in PAYMENT_PENDING status with ADVANCE_BOOKING source
     const saleResult = await createSaleInput({
@@ -41,98 +133,201 @@ export async function POST(request: Request) {
       saleSource: "ADVANCE_BOOKING",
       locationId,
       customerId,
-      customerName,
-      customerPhone,
+      customerName: cleanCustName || undefined,
+      customerPhone: cleanCustPhone || undefined,
       salesmanId,
+      salesmanName: resolvedSalesmanName,
       items,
-      createdBy: createdBy || "system",
+      discountAmount: Number(discountAmount || 0),
+      notes: combinedNotes,
+      createdBy: actorUsername,
+      allowDeferredSerials: true,
     });
 
     const sale = saleResult.sale;
-    sale.status = "PAYMENT_PENDING";
-    sale.totalPaid = Number(advanceAmount);
-    sale.balanceDue = Math.max(0, sale.totalAmount - Number(advanceAmount));
-    await sale.save();
+    createdSaleId = sale._id.toString();
 
-    // 2. Mark serials as Reserved if serialized
-    for (const item of sale.items) {
-      if (item.serialNumbers && item.serialNumbers.length > 0) {
-        await SerialNumber.updateMany(
-          { serialNumber: { $in: item.serialNumbers } },
-          { $set: { status: "Reserved" } }
+    if (advAmt > sale.totalAmount + 0.01) {
+      await Sale.deleteOne({ _id: sale._id });
+      createdSaleId = null;
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Advance deposit (Rs. ${advAmt.toLocaleString()}) cannot exceed total booking amount (Rs. ${sale.totalAmount.toLocaleString()}).`,
+        },
+        { status: 400 }
+      );
+    }
+
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction();
+    } catch (txErr) {
+      session.endSession();
+      await Sale.deleteOne({ _id: sale._id }).catch(() => {});
+      createdSaleId = null;
+      throw txErr;
+    }
+
+    let createdPayments: any[] = [];
+    try {
+      const txSale = await Sale.findById(sale._id).session(session);
+      if (!txSale) throw new Error("Advance booking sale record disappeared during transaction.");
+
+      txSale.status = "PAYMENT_PENDING";
+      txSale.totalPaid = advAmt;
+      txSale.balanceDue = Math.max(0, txSale.totalAmount - advAmt);
+      await txSale.save({ session });
+
+      // 2. Mark serials as Reserved if serialized
+      for (const item of txSale.items) {
+        if (item.serialNumbers && item.serialNumbers.length > 0) {
+          await SerialNumber.updateMany(
+            { product: item.product, serialNumber: { $in: item.serialNumbers }, status: "Available" },
+            { $set: { status: "Reserved" } },
+            { session }
+          );
+        }
+      }
+
+      const targetCustId = txSale.customer ? txSale.customer.toString() : customerId;
+
+      const activeCashSession = cleanAllocations.some((a) => a.method === "CASH")
+        ? (await CashSession.findOne({
+            location: locationId,
+            cashier: actorUsername,
+            status: "OPEN",
+          }).session(session)) ||
+          (await CashSession.findOne({
+            location: locationId,
+            status: "OPEN",
+          }).session(session))
+        : null;
+
+      // 3. Record Advance Payment(s) (Single or Split)
+      const usedPaymentNums = new Set<string>();
+      for (const alloc of cleanAllocations) {
+        let payNum = await generatePaymentNumber(session);
+        while (usedPaymentNums.has(payNum)) {
+          const parts = payNum.split("-");
+          const seq = parseInt(parts[parts.length - 1], 10) || 1;
+          parts[parts.length - 1] = String(seq + 1).padStart(3, "0");
+          payNum = parts.join("-");
+        }
+        usedPaymentNums.add(payNum);
+
+        const pDoc = await recordPayment(
+          {
+            saleId: txSale._id.toString(),
+            locationId,
+            customerId: targetCustId,
+            paymentMethod: alloc.method,
+            amount: alloc.amount,
+            paymentNumber: payNum,
+            referenceNumber: alloc.referenceNumber,
+            receivedBy: actorUsername,
+            notes: alloc.notes || `Advance Down-Payment for Booking #${txSale.saleNumber}`,
+          },
+          session
+        );
+        createdPayments.push(pDoc);
+
+        if (alloc.method === "CASH" && activeCashSession) {
+          await recordCashMovement(
+            {
+              sessionId: activeCashSession._id.toString(),
+              locationId: locationId.toString(),
+              cashier: actorUsername,
+              type: "CASH_SALE",
+              amount: alloc.amount,
+              direction: "IN",
+              referenceType: "Payment",
+              referenceId: pDoc.paymentNumber,
+              notes: `Advance deposit cash collection for Booking #${txSale.saleNumber}`,
+            },
+            session
+          );
+        }
+      }
+
+      // 4. Record Customer Ledger Advance Deposit (total advance paid)
+      if (targetCustId) {
+        await recordCustomerLedgerEntry(
+          {
+            customerId: targetCustId,
+            type: "ADVANCE_DEPOSIT",
+            amount: advAmt,
+            referenceType: "Payment",
+            referenceId: createdPayments[0]?.paymentNumber || txSale.saleNumber,
+            notes: `Advance Down-Payment for Booking #${txSale.saleNumber}`,
+            createdBy: actorUsername,
+          },
+          session
         );
       }
+
+      await session.commitTransaction();
+      session.endSession();
+      createdSaleId = null;
+    } catch (innerErr) {
+      await session.abortTransaction();
+      session.endSession();
+      await Sale.deleteOne({ _id: sale._id }).catch(() => {});
+      createdSaleId = null;
+      throw innerErr;
     }
 
-    const targetCustId = sale.customer ? sale.customer.toString() : customerId;
-
-    // 3. Record Advance Payment
-    const payment = await recordPayment({
-      saleId: sale._id.toString(),
-      locationId,
-      customerId: targetCustId,
-      paymentMethod: paymentMethod || "CASH",
-      amount: advanceAmount,
-      receivedBy: createdBy || "system",
-      notes: `Advance Down-Payment for Booking #${sale.saleNumber}`,
-    });
-
-    if (targetCustId) {
-      await recordCustomerLedgerEntry({
-        customerId: targetCustId,
-        type: "ADVANCE_DEPOSIT",
-        amount: advanceAmount,
-        referenceType: "Payment",
-        referenceId: payment.paymentNumber,
-        notes: `Advance Down-Payment for Booking #${sale.saleNumber}`,
-        createdBy: createdBy || "system",
-      });
-    }
-
-    const locationDoc = await Location.findById(locationId);
+    const updatedSale = (await Sale.findById(sale._id).lean()) || sale;
+    const locationDoc = await Location.findById(locationId).lean();
 
     const receiptData = {
-      invoiceNumber: `ADV-${sale.saleNumber}`,
-      saleNumber: sale.saleNumber,
-      date: sale.createdAt || new Date(),
-      locationName: locationDoc?.name || "Warehouse",
-      cashierName: createdBy || "system",
-      salesmanName: sale.salesmanName || "Direct Counter",
-      customerName: sale.customerName || "Walk-in Customer",
-      customerPhone: sale.customerPhone || "N/A",
-      items: (sale.items || []).map((it: any) => ({
+      invoiceNumber: `ADV-${updatedSale.saleNumber}`,
+      saleNumber: updatedSale.saleNumber,
+      date: updatedSale.createdAt || new Date(),
+      locationName: (locationDoc as any)?.name || "Warehouse",
+      cashierName: actorUsername,
+      salesmanName: updatedSale.salesmanName || "Direct Counter",
+      customerName: updatedSale.customerName || "Walk-in Customer",
+      customerPhone: updatedSale.customerPhone || "N/A",
+      items: (updatedSale.items || []).map((it: any) => ({
         productName: it.productName || "Product Item",
         condition: it.condition || "New",
         quantity: it.quantity || 1,
         unitPrice: it.unitPrice || 0,
-        lineTotal: it.lineTotal || (it.quantity * (it.unitPrice || 0)),
+        lineTotal: it.lineTotal || it.quantity * (it.unitPrice || 0),
         serialNumbers: it.serialNumbers || [],
       })),
-      subtotal: sale.subtotal,
-      discountAmount: sale.discountAmount || 0,
-      deliveryCharges: sale.deliveryCharges || 0,
-      totalAmount: sale.totalAmount,
-      paidAmount: advanceAmount,
+      subtotal: updatedSale.subtotal,
+      discountAmount: updatedSale.discountAmount || 0,
+      deliveryCharges: updatedSale.deliveryCharges || 0,
+      totalAmount: updatedSale.totalAmount,
+      paidAmount: advAmt,
       changeDue: 0,
-      balanceDue: sale.totalAmount - advanceAmount,
+      balanceDue: Math.max(0, updatedSale.totalAmount - advAmt),
       status: "ADVANCE_BOOKED",
-      payments: [
-        {
-          method: paymentMethod || "CASH",
-          amount: advanceAmount,
-        },
-      ],
+      payments: cleanAllocations.map((a) => ({
+        method: a.method,
+        amount: a.amount,
+      })),
     };
 
-    return NextResponse.json({
+    const respData = {
       success: true,
       data: {
-        sale,
-        advancePayment: payment,
+        sale: updatedSale,
+        advancePayment: createdPayments[0],
+        advancePayments: createdPayments,
         receiptData,
       },
-    });
+    };
+    if (idempotencyKeyHeader) await completeIdempotencyKey(idempotencyKeyHeader, 200, respData);
+    return NextResponse.json(respData);
   } catch (error: any) {
+    if (createdSaleId) {
+      await Sale.deleteOne({ _id: createdSaleId, status: { $ne: "COMPLETED" } }).catch(() => {});
+    }
+    if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
     return NextResponse.json(
       { success: false, error: error.message || "Failed to create advance booking." },
       { status: 500 }
@@ -143,6 +338,11 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   try {
     await dbConnect();
+    const auth = await verifyRole(["Admin", "Warehouse", "Accountant"]);
+    if (!auth.authorized || !auth.user) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+    }
+
     const body = await request.json();
     const { saleId, remainingPaymentAllocations, processedBy } = body;
 
@@ -161,11 +361,13 @@ export async function PUT(request: Request) {
       );
     }
 
+    const actorUsername = auth.user.username || processedBy || "system";
+
     // Execute final SALE_OUT, balance collection & final tax invoice generation
     const completedResult = await completeSale({
       saleId: sale._id.toString(),
-      completedBy: processedBy || "system",
-      paymentAllocations: remainingPaymentAllocations,
+      completedBy: actorUsername,
+      paymentAllocations: Array.isArray(remainingPaymentAllocations) ? remainingPaymentAllocations : [],
     });
 
     const completedSaleDoc = completedResult.sale || sale;
@@ -179,7 +381,7 @@ export async function PUT(request: Request) {
       saleNumber: completedSaleDoc.saleNumber,
       date: invoiceDoc?.createdAt || new Date(),
       locationName: completedSaleDoc.locationName || "Warehouse",
-      cashierName: processedBy || "system",
+      cashierName: actorUsername,
       salesmanName: completedSaleDoc.salesmanName || "Direct Counter",
       customerName: completedSaleDoc.customerName || "Walk-in Customer",
       customerPhone: completedSaleDoc.customerPhone || "N/A",
@@ -188,7 +390,7 @@ export async function PUT(request: Request) {
         condition: it.condition || "New",
         quantity: it.quantity || 1,
         unitPrice: it.unitPrice || 0,
-        lineTotal: it.lineTotal || (it.quantity * (it.unitPrice || 0)),
+        lineTotal: it.lineTotal || it.quantity * (it.unitPrice || 0),
         serialNumbers: it.serialNumbers || [],
       })),
       subtotal: completedSaleDoc.subtotal,
@@ -223,6 +425,11 @@ export async function PUT(request: Request) {
 export async function DELETE(request: Request) {
   try {
     await dbConnect();
+    const auth = await verifyRole(["Admin", "Warehouse", "Accountant"]);
+    if (!auth.authorized || !auth.user) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+    }
+
     const { searchParams } = new URL(request.url);
     const saleId = searchParams.get("saleId");
     if (!saleId) {
@@ -238,11 +445,11 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ success: true, message: "Sale is already cancelled.", data: sale });
     }
 
-    // 1. Unreserve serial numbers if any
+    // 1. Unreserve ONLY serial numbers that are still Reserved
     for (const item of sale.items) {
       if (item.serialNumbers && item.serialNumbers.length > 0) {
         await SerialNumber.updateMany(
-          { serialNumber: { $in: item.serialNumbers } },
+          { product: item.product, serialNumber: { $in: item.serialNumbers }, status: "Reserved" },
           { $set: { status: "Available", location: sale.locationName || "Warehouse" } }
         );
       }
@@ -266,7 +473,7 @@ export async function DELETE(request: Request) {
       await recordCashMovement({
         sessionId: activeCashSession._id.toString(),
         locationId: sale.location.toString(),
-        cashier: activeCashSession.cashier || "system",
+        cashier: auth.user.username || activeCashSession.cashier || "system",
         type: "CASH_REFUND",
         amount: totalCashPaid,
         direction: "OUT",
@@ -285,7 +492,7 @@ export async function DELETE(request: Request) {
         referenceType: "AdvanceBooking",
         referenceId: sale.saleNumber,
         notes: `Advance deposit refund for cancelled booking #${sale.saleNumber}`,
-        createdBy: "system",
+        createdBy: auth.user.username || "system",
       });
     }
 

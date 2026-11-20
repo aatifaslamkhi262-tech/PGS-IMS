@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, useEffect, useMemo, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   ShoppingCart,
@@ -16,7 +16,6 @@ import {
   CheckCircle,
   Truck,
   UserCheck,
-  CreditCard,
   DollarSign,
   AlertCircle,
   ShieldCheck,
@@ -29,6 +28,13 @@ import {
 } from "lucide-react";
 import { CameraBarcodeScannerModal } from "@/components/CameraBarcodeScannerModal";
 import { ThermalReceiptModal } from "@/components/ThermalReceipt";
+import {
+  PaymentAllocationInput,
+  PaymentAllocationState,
+  createInitialPaymentState,
+  getPaymentAllocatedTotal,
+  buildPaymentAllocations,
+} from "@/components/PaymentAllocationInput";
 
 export type SalesMode = "POS" | "QUEUE" | "ONLINE" | "ADVANCE" | "RETURNS" | "TRADEIN";
 
@@ -40,26 +46,6 @@ function SalesWorkspaceContent() {
   const targetSaleIdParam = searchParams.get("targetSaleId");
   const [mode, setMode] = useState<SalesMode>(modeParam);
 
-  useEffect(() => {
-    const urlMode = searchParams.get("mode") as SalesMode;
-    if (urlMode && urlMode !== mode) {
-      setMode(urlMode);
-      if (urlMode === "QUEUE") {
-        setSelectedLocation("ALL");
-        setSelectedSalesman("ALL");
-      }
-    }
-  }, [searchParams]);
-
-  const handleModeChange = (newMode: SalesMode) => {
-    setMode(newMode);
-    if (newMode === "QUEUE") {
-      setSelectedLocation("ALL");
-      setSelectedSalesman("ALL");
-    }
-    router.push(`/sales?mode=${newMode}`);
-  };
-
   // Master Data States
   const [locations, setLocations] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
@@ -67,6 +53,7 @@ function SalesWorkspaceContent() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any | null>(null);
   const [loadingMaster, setLoadingMaster] = useState(true);
+  const [catalogLoadError, setCatalogLoadError] = useState("");
 
   // Common Header State (Default to ALL for global visibility)
   const [selectedLocation, setSelectedLocation] = useState("ALL");
@@ -74,16 +61,60 @@ function SalesWorkspaceContent() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [selectedSalesman, setSelectedSalesman] = useState("ALL");
 
+  const getDefaultOperatingLocationId = (locs: any[]): string => {
+    if (!Array.isArray(locs) || locs.length === 0) return "";
+    const warehouse = locs.find(
+      (l) => l.type === "Warehouse" || /^warehouse$/i.test(l.name || "")
+    );
+    if (warehouse?._id) return warehouse._id;
+    const normalBranch = locs.find(
+      (l) =>
+        l.type !== "Claim Godam" &&
+        !/damage|claim|repair/i.test(l.name || "")
+    );
+    return normalBranch?._id || locs[0]?._id || "";
+  };
+
+  useEffect(() => {
+    const urlMode = searchParams.get("mode") as SalesMode;
+    if (urlMode && urlMode !== mode) {
+      setMode(urlMode);
+      if (urlMode === "QUEUE") {
+        setSelectedLocation("ALL");
+        setSelectedSalesman("ALL");
+      } else {
+        setSelectedLocation((prev) =>
+          prev === "ALL" && locations.length > 0
+            ? getDefaultOperatingLocationId(locations)
+            : prev
+        );
+      }
+    }
+  }, [searchParams, locations]);
+
+  const handleModeChange = (newMode: SalesMode) => {
+    setMode(newMode);
+    if (newMode === "QUEUE") {
+      setSelectedLocation("ALL");
+      setSelectedSalesman("ALL");
+    } else if (selectedLocation === "ALL" && locations.length > 0) {
+      setSelectedLocation(getDefaultOperatingLocationId(locations));
+    }
+    router.push(`/sales?mode=${newMode}`);
+  };
+
   // Mode: POS State
   const [cartItems, setCartItems] = useState<any[]>([]);
   const [productSearch, setProductSearch] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("CASH");
-  const [isSplitPayment, setIsSplitPayment] = useState(false);
-  const [splitCash, setSplitCash] = useState(0);
-  const [splitCard, setSplitCard] = useState(0);
-  const [cardRef, setCardRef] = useState("");
-  const [splitBank, setSplitBank] = useState(0);
-  const [bankRef, setBankRef] = useState("");
+  const [posSearching, setPosSearching] = useState(false);
+  const [posSearchNotice, setPosSearchNotice] = useState("");
+  const [posPayment, setPosPayment] = useState<PaymentAllocationState>(() =>
+    createInitialPaymentState("CASH", 0)
+  );
+  const [rentalPayment, setRentalPayment] = useState<PaymentAllocationState>(() =>
+    createInitialPaymentState("CASH", 0)
+  );
+  const [returnPaymentMethod, setReturnPaymentMethod] = useState<"CASH" | "BANK_TRANSFER" | "CARD">("CASH");
   const [discountAmount, setDiscountAmount] = useState(0);
   const [deliveryCharges, setDeliveryCharges] = useState(0);
   const [submitting, setSubmitting] = useState(false);
@@ -113,7 +144,9 @@ function SalesWorkspaceContent() {
   // Queue Verification & Receipt States
   const [selectedQueueSale, setSelectedQueueSale] = useState<any | null>(null);
   const [showVerifyModal, setShowVerifyModal] = useState(false);
-  const [queuePaymentMethod, setQueuePaymentMethod] = useState<"CASH" | "CARD" | "BANK_TRANSFER">("CASH");
+  const [queuePayment, setQueuePayment] = useState<PaymentAllocationState>(() =>
+    createInitialPaymentState("CASH", 0)
+  );
   const [queuePriceAdjustment, setQueuePriceAdjustment] = useState<number>(0);
   const [completingQueueSale, setCompletingQueueSale] = useState(false);
   const [queueItemSerials, setQueueItemSerials] = useState<Record<string, string[]>>({});
@@ -154,7 +187,7 @@ function SalesWorkspaceContent() {
   const openQueueVerifyModal = async (sale: any) => {
     setSelectedQueueSale(sale);
     setQueuePriceAdjustment(0);
-    setQueuePaymentMethod((sale.paymentMethod as any) || "CASH");
+    setQueuePayment(createInitialPaymentState((sale.paymentMethod as any) || "CASH", 0));
     const locId = (sale.location?._id || sale.location || "").toString();
     setQueueFulfillLocationId(locId);
 
@@ -282,11 +315,23 @@ function SalesWorkspaceContent() {
       setCompletingQueueSale(true);
 
       const adjNum = Number(queuePriceAdjustment || 0);
-      const remainingBalance = selectedQueueSale.balanceDue !== undefined && selectedQueueSale.balanceDue > 0
-        ? selectedQueueSale.balanceDue
-        : Math.max(0, selectedQueueSale.totalAmount - (selectedQueueSale.totalPaid || 0));
-      const baseCheckoutAmount = remainingBalance > 0 ? remainingBalance : selectedQueueSale.totalAmount;
-      const finalCheckoutAmount = Math.max(0, baseCheckoutAmount + adjNum);
+      const remainingBalance =
+        selectedQueueSale.balanceDue !== undefined
+          ? Math.max(0, Number(selectedQueueSale.balanceDue))
+          : Math.max(0, selectedQueueSale.totalAmount - (selectedQueueSale.totalPaid || 0));
+      const finalCheckoutAmount = Math.max(0, remainingBalance + adjNum);
+
+      const queueAllocations =
+        finalCheckoutAmount <= 0 ? [] : buildPaymentAllocations(queuePayment, finalCheckoutAmount);
+
+      const queueAllocatedSum = queueAllocations.reduce((sum, a) => sum + Number(a.amount || 0), 0);
+      if (finalCheckoutAmount > 0 && queueAllocatedSum < finalCheckoutAmount - 0.5) {
+        alert(
+          `Split payment total (Rs. ${queueAllocatedSum.toLocaleString()}) is less than final collection amount (Rs. ${finalCheckoutAmount.toLocaleString()}).`
+        );
+        setCompletingQueueSale(false);
+        return;
+      }
 
       const noteText = adjNum !== 0
         ? (adjNum > 0
@@ -303,7 +348,7 @@ function SalesWorkspaceContent() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          paymentAllocations: [{ method: queuePaymentMethod, amount: finalCheckoutAmount }],
+          paymentAllocations: queueAllocations,
           priceAdjustment: adjNum,
           notes: noteText,
           itemSerials: itemSerialsPayload,
@@ -351,7 +396,10 @@ function SalesWorkspaceContent() {
             paidAmount: revisedTotal,
             changeDue: 0,
             balanceDue: 0,
-            payments: [{ method: queuePaymentMethod, amount: finalCheckoutAmount }],
+            payments:
+              queueAllocations.length > 0
+                ? queueAllocations
+                : [{ method: "ADVANCE_SETTLED", amount: selectedQueueSale.totalPaid || revisedTotal }],
           });
         }
 
@@ -359,10 +407,13 @@ function SalesWorkspaceContent() {
         setShowVerifyModal(false);
         setSelectedQueueSale(null);
         setQueuePriceAdjustment(0);
+        setQueuePayment(createInitialPaymentState("CASH", 0));
         setQueueItemSerials({});
         setQueueAvailableSerials({});
         setQueueSerialInputs({});
         fetchQueue();
+        if (mode === "ONLINE") fetchOnlineOrders();
+        refreshProducts();
         broadcastOrderSync();
       } else {
         alert(data.error || "Failed to complete queue sale.");
@@ -382,6 +433,60 @@ function SalesWorkspaceContent() {
   const [trackingNumber, setTrackingNumber] = useState("");
   const [onlineProductId, setOnlineProductId] = useState("");
   const [onlinePrice, setOnlinePrice] = useState(0);
+  const [onlineOrders, setOnlineOrders] = useState<any[]>([]);
+  const [loadingOnlineOrders, setLoadingOnlineOrders] = useState(false);
+
+  const fetchOnlineOrders = async () => {
+    try {
+      setLoadingOnlineOrders(true);
+      const res = await fetch("/api/sales/queue?locationId=ALL&status=PENDING", {
+        cache: "no-store",
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        const onlineSources = new Set(["WEBSITE", "WHATSAPP", "INSTAGRAM", "PHONE"]);
+        setOnlineOrders(data.data.filter((s: any) => onlineSources.has(s.saleSource)));
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingOnlineOrders(false);
+    }
+  };
+
+  const handleOnlineOrderAction = async (
+    sale: any,
+    action: "PICK_PACK" | "DISPATCH"
+  ) => {
+    try {
+      setSubmitting(true);
+      const payload: any = {
+        saleId: sale._id,
+        action,
+        processedBy: currentUser?.username || "online-system",
+      };
+      if (action === "DISPATCH") {
+        payload.courierName = courierName || "Bykea";
+        payload.trackingNumber = trackingNumber || `TRK-${Date.now().toString().slice(-6)}`;
+      }
+      const res = await fetch("/api/sales/online", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchOnlineOrders();
+        broadcastOrderSync();
+      } else {
+        alert(data.error || "Failed to update online order.");
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to update online order.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   // Mode: Advance State (Multi-Item Support)
   const [advanceItems, setAdvanceItems] = useState<any[]>([]);
@@ -389,8 +494,11 @@ function SalesWorkspaceContent() {
   const [newAdvanceQty, setNewAdvanceQty] = useState(1);
   const [newAdvancePrice, setNewAdvancePrice] = useState(0);
   const [newAdvanceSerial, setNewAdvanceSerial] = useState("");
-  const [advanceDeposit, setAdvanceDeposit] = useState(0);
+  const [advancePayment, setAdvancePayment] = useState<PaymentAllocationState>(() =>
+    createInitialPaymentState("CASH", 0)
+  );
   const [expectedDate, setExpectedDate] = useState("");
+  const [advanceNotes, setAdvanceNotes] = useState("");
   const [reserveSerial, setReserveSerial] = useState(true);
 
   // Mode: Returns & Exchange State (with Rental Swap option)
@@ -504,9 +612,81 @@ function SalesWorkspaceContent() {
   >("ONLINE");
   const [scanBarcodeInput, setScanBarcodeInput] = useState("");
 
-  const handleResolveBarcode = async (codeValue: string, targetOverride?: string) => {
+  const mergeProductsIntoState = (incoming: any[]) => {
+    if (!Array.isArray(incoming) || incoming.length === 0) return;
+    const byId = new Map<string, any>();
+    for (const p of incoming) {
+      if (p?._id) byId.set(String(p._id), p);
+    }
+
+    setProducts((prev) => {
+      const next = prev.map((p) => {
+        const fresh = byId.get(String(p._id));
+        return fresh ? { ...p, ...fresh } : p;
+      });
+      const existingIds = new Set(prev.map((p) => String(p._id)));
+      const added = incoming.filter((p) => p?._id && !existingIds.has(String(p._id)));
+      return added.length > 0 ? [...next, ...added] : next;
+    });
+
+    setCartItems((prev) =>
+      prev.map((it) => {
+        const fresh = byId.get(String(it.product?._id));
+        if (!fresh) return it;
+        return {
+          ...it,
+          product: {
+            ...it.product,
+            ...fresh,
+            stockBreakdown: fresh.stockBreakdown || it.product?.stockBreakdown,
+          },
+        };
+      })
+    );
+  };
+
+  const refreshProducts = async (searchQuery?: string): Promise<any[]> => {
+    try {
+      const url = searchQuery?.trim()
+        ? `/api/products?search=${encodeURIComponent(searchQuery.trim())}&limit=60`
+        : `/api/products?limit=120`;
+      const res = await fetch(url, { cache: "no-store" });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setCatalogLoadError("");
+        if (searchQuery?.trim()) {
+          mergeProductsIntoState(data.data);
+        } else {
+          setProducts(data.data);
+          const freshById = new Map<string, any>(data.data.map((p: any) => [String(p._id), p]));
+          setCartItems((prev) =>
+            prev.map((it) => {
+              const fresh = freshById.get(String(it.product?._id));
+              return fresh ? { ...it, product: { ...it.product, ...fresh } } : it;
+            })
+          );
+        }
+        return data.data;
+      }
+      if (!searchQuery?.trim()) {
+        setCatalogLoadError(data.error || "Failed to load products catalog.");
+      }
+    } catch (err: any) {
+      console.error("Failed to refresh products", err);
+      if (!searchQuery?.trim()) {
+        setCatalogLoadError(err?.message || "Failed to load products catalog.");
+      }
+    }
+    return [];
+  };
+
+  const handleResolveBarcode = async (
+    codeValue: string,
+    targetOverride?: string,
+    options?: { suppressNotFoundAlert?: boolean }
+  ): Promise<boolean> => {
     const code = codeValue.trim();
-    if (!code) return;
+    if (!code) return false;
 
     const target = targetOverride || activeScanTarget;
     setScanBarcodeInput("");
@@ -576,7 +756,7 @@ function SalesWorkspaceContent() {
             if (booking.customerName) setCustomerName(booking.customerName);
             if (booking.customerPhone) setCustomerPhone(booking.customerPhone);
 
-            return;
+            return true;
           }
         }
       }
@@ -593,21 +773,21 @@ function SalesWorkspaceContent() {
       } else {
         foundProduct = products.find(
           (p) =>
-            p.barcode === code ||
+            p.barcode?.toLowerCase() === code.toLowerCase() ||
             p.sku?.toLowerCase() === code.toLowerCase() ||
             p._id === code
         );
       }
 
       if (!foundProduct) {
-        alert(`Barcode / Product / Rental Invoice '${code}' not found.`);
-        return;
+        if (!options?.suppressNotFoundAlert) {
+          alert(`Barcode / Product / Rental Invoice '${code}' not found.`);
+        }
+        return false;
       }
 
-      // Ensure scanned product exists in dropdown options
-      if (!products.some((p) => p._id?.toString() === foundProduct._id?.toString())) {
-        setProducts((prev) => [foundProduct, ...prev]);
-      }
+      // Sync scanned product (including live stockBreakdown) into master list
+      mergeProductsIntoState([foundProduct]);
 
       if (target === "ONLINE") {
         setOnlineProductId(foundProduct._id);
@@ -616,7 +796,23 @@ function SalesWorkspaceContent() {
         const existingIdx = advanceItems.findIndex((it) => it.productId === foundProduct._id);
         if (existingIdx >= 0) {
           const updated = [...advanceItems];
-          updated[existingIdx].quantity += 1;
+          const existingItem = updated[existingIdx];
+          const currentSerials: string[] = Array.isArray(existingItem.serialNumbers)
+            ? [...existingItem.serialNumbers]
+            : existingItem.serialNumber
+            ? [existingItem.serialNumber]
+            : [];
+          if (scannedSerial && currentSerials.includes(scannedSerial)) {
+            alert(`Serial number '${scannedSerial}' is already in the booking list.`);
+            return true;
+          }
+          if (scannedSerial) currentSerials.push(scannedSerial);
+          updated[existingIdx] = {
+            ...existingItem,
+            quantity: existingItem.quantity + 1,
+            serialNumbers: currentSerials,
+            serialNumber: currentSerials[0] || "",
+          };
           setAdvanceItems(updated);
         } else {
           setAdvanceItems([
@@ -625,8 +821,10 @@ function SalesWorkspaceContent() {
               productId: foundProduct._id,
               productName: foundProduct.name,
               condition: foundProduct.condition || "New",
+              serialTracking: Boolean(foundProduct.serialTracking),
               quantity: 1,
               unitPrice: foundProduct.sellingPrice || 0,
+              serialNumbers: scannedSerial ? [scannedSerial] : [],
               serialNumber: scannedSerial || "",
             },
           ]);
@@ -646,39 +844,114 @@ function SalesWorkspaceContent() {
       } else if (target === "POS") {
         addToCart(foundProduct, scannedSerial);
       }
+      return true;
     } catch (err) {
       console.error("Failed to resolve barcode", err);
-      alert("Error scanning barcode.");
+      if (!options?.suppressNotFoundAlert) {
+        alert("Error scanning barcode.");
+      }
+      return false;
+    }
+  };
+
+  const loadProductsCatalog = async () => {
+    try {
+      setLoadingMaster(true);
+      setCatalogLoadError("");
+      await refreshProducts();
+    } finally {
+      setLoadingMaster(false);
     }
   };
 
   useEffect(() => {
-    const loadMaster = async () => {
-      try {
-        setLoadingMaster(true);
-        const [locRes, prodRes, userRes, custRes, meRes] = await Promise.all([
-          fetch("/api/locations").then((r) => r.json()),
-          fetch("/api/products").then((r) => r.json()),
-          fetch("/api/users/active").then((r) => r.json()),
-          fetch("/api/customers").then((r) => r.json()),
-          fetch("/api/auth/me").then((r) => r.json()),
-        ]);
-
-        if (locRes.success && locRes.data.length > 0) {
-          setLocations(locRes.data);
+    // Fetch lightweight branch/staff/customer metadata independently so slow product pricing never blocks location defaults
+    Promise.allSettled([
+      fetch("/api/locations", { cache: "no-store" }).then((r) => r.json()),
+      fetch("/api/users/active", { cache: "no-store" }).then((r) => r.json()),
+      fetch("/api/customers", { cache: "no-store" }).then((r) => r.json()),
+      fetch("/api/auth/me", { cache: "no-store" }).then((r) => r.json()),
+    ]).then(([locResult, userResult, custResult, meResult]) => {
+      if (locResult.status === "fulfilled" && locResult.value?.success && locResult.value.data?.length > 0) {
+        setLocations(locResult.value.data);
+        if (modeParam !== "QUEUE") {
+          setSelectedLocation((prev) =>
+            prev === "ALL" ? getDefaultOperatingLocationId(locResult.value.data) : prev
+          );
         }
-        if (prodRes.success) setProducts(prodRes.data);
-        if (userRes.success) setSalesmen(userRes.data);
-        if (custRes.success) setCustomers(custRes.data);
-        if (meRes.success) setCurrentUser(meRes.data);
-      } catch (err) {
-        console.error("Failed to load master data", err);
-      } finally {
-        setLoadingMaster(false);
       }
-    };
-    loadMaster();
+      if (userResult.status === "fulfilled" && userResult.value?.success) {
+        setSalesmen(userResult.value.data);
+      }
+      if (custResult.status === "fulfilled" && custResult.value?.success) {
+        setCustomers(custResult.value.data);
+      }
+      if (meResult.status === "fulfilled" && meResult.value?.success) {
+        setCurrentUser(meResult.value.data);
+      }
+    });
+
+    loadProductsCatalog();
   }, []);
+
+  // Debounced live server search for POS catalog beyond initial load
+  useEffect(() => {
+    if (mode !== "POS") return;
+    const q = productSearch.trim();
+    setPosSearchNotice("");
+    if (q.length < 2) {
+      setPosSearching(false);
+      return;
+    }
+
+    let cancelled = false;
+    setPosSearching(true);
+    const timer = setTimeout(async () => {
+      await refreshProducts(q);
+      if (!cancelled) setPosSearching(false);
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [productSearch, mode]);
+
+  const filteredPosProducts = useMemo(() => {
+    const q = productSearch.trim().toLowerCase();
+    if (!q) return products;
+
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const matches = products.filter((p) => {
+      const haystack = [
+        p.name,
+        p.sku,
+        p.barcode,
+        p.brand,
+        p.modelNumber,
+        p.model,
+        p.condition,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return tokens.every((tok) => haystack.includes(tok));
+    });
+
+    return matches.sort((a, b) => {
+      const aExact = a.barcode?.toLowerCase() === q || a.sku?.toLowerCase() === q ? 0 : 1;
+      const bExact = b.barcode?.toLowerCase() === q || b.sku?.toLowerCase() === q ? 0 : 1;
+      if (aExact !== bExact) return aExact - bExact;
+
+      const aStarts = a.name?.toLowerCase().startsWith(q) || a.sku?.toLowerCase().startsWith(q) ? 0 : 1;
+      const bStarts = b.name?.toLowerCase().startsWith(q) || b.sku?.toLowerCase().startsWith(q) ? 0 : 1;
+      if (aStarts !== bStarts) return aStarts - bStarts;
+
+      const aStock = (a.totalStock || 0) > 0 ? 0 : 1;
+      const bStock = (b.totalStock || 0) > 0 ? 0 : 1;
+      return aStock - bStock;
+    });
+  }, [products, productSearch]);
 
   const broadcastOrderSync = () => {
     try {
@@ -705,6 +978,12 @@ function SalesWorkspaceContent() {
       if (!silent) setLoadingQueue(false);
     }
   };
+
+  useEffect(() => {
+    if (mode === "ONLINE") {
+      fetchOnlineOrders();
+    }
+  }, [mode]);
 
   useEffect(() => {
     if (mode === "QUEUE") {
@@ -774,6 +1053,8 @@ function SalesWorkspaceContent() {
         setShowCancelModal(false);
         setCancelSaleTarget(null);
         fetchQueue();
+        if (mode === "ONLINE") fetchOnlineOrders();
+        refreshProducts();
         broadcastOrderSync();
       } else {
         alert(data.error || "Failed to cancel sale.");
@@ -786,7 +1067,13 @@ function SalesWorkspaceContent() {
   };
 
   const addToCart = (product: any, scannedSerial?: string) => {
-    const existing = cartItems.find((item) => item.product._id === product._id);
+    const masterProd = products.find((p) => String(p._id) === String(product._id));
+    const resolvedProduct =
+      Array.isArray(product?.stockBreakdown) && product.stockBreakdown.length > 0
+        ? product
+        : masterProd || product;
+
+    const existing = cartItems.find((item) => String(item.product._id) === String(resolvedProduct._id));
     if (existing) {
       const existingSerials = existing.serialNumbers || [];
       let newSerials = [...existingSerials];
@@ -805,8 +1092,8 @@ function SalesWorkspaceContent() {
 
       setCartItems(
         cartItems.map((item) =>
-          item.product._id === product._id
-            ? { ...item, quantity: newQty, serialNumbers: newSerials }
+          String(item.product._id) === String(resolvedProduct._id)
+            ? { ...item, product: resolvedProduct, quantity: newQty, serialNumbers: newSerials }
             : item
         )
       );
@@ -814,9 +1101,9 @@ function SalesWorkspaceContent() {
       setCartItems([
         ...cartItems,
         {
-          product,
+          product: resolvedProduct,
           quantity: 1,
-          unitPrice: product.sellingPrice,
+          unitPrice: resolvedProduct.sellingPrice,
           serialNumbers: scannedSerial ? [scannedSerial] : [],
           fulfillmentLocationId: "", // DEFAULT: NONE SELECTED to prevent mistakes
           fulfillmentLocationName: "",
@@ -837,9 +1124,15 @@ function SalesWorkspaceContent() {
       alert("Cart is empty.");
       return;
     }
-    const targetLocationId = (selectedLocation && selectedLocation !== "ALL")
-      ? selectedLocation
-      : (locations[0]?._id || "");
+    const itemLocIds = Array.from(
+      new Set(cartItems.map((it) => it.fulfillmentLocationId).filter(Boolean))
+    );
+    const targetLocationId =
+      selectedLocation && selectedLocation !== "ALL"
+        ? selectedLocation
+        : itemLocIds.length === 1
+        ? itemLocIds[0]
+        : getDefaultOperatingLocationId(locations);
     if (!targetLocationId) {
       alert("Please select a valid Store Location.");
       return;
@@ -855,17 +1148,7 @@ function SalesWorkspaceContent() {
       }
     }
 
-    const allocations = isSplitPayment
-      ? [
-          ...(splitCash > 0 ? [{ method: "CASH", amount: splitCash }] : []),
-          ...(splitCard > 0
-            ? [{ method: "CARD", amount: splitCard, referenceNumber: cardRef }]
-            : []),
-          ...(splitBank > 0
-            ? [{ method: "BANK_TRANSFER", amount: splitBank, referenceNumber: bankRef }]
-            : []),
-        ]
-      : [{ method: paymentMethod, amount: cartTotal }];
+    const allocations = buildPaymentAllocations(posPayment, cartTotal);
 
     const totalAllocated = allocations.reduce((acc, p) => acc + p.amount, 0);
     if (totalAllocated < cartTotal - 0.5) {
@@ -919,7 +1202,7 @@ function SalesWorkspaceContent() {
         setCompletedReceiptData({
           invoiceNumber: data.invoice?.invoiceNumber || data.data?.saleNumber,
           date: new Date(),
-          locationName: locations.find((l) => l._id === selectedLocation)?.name || "Warehouse",
+          locationName: locations.find((l) => l._id === targetLocationId)?.name || "Warehouse",
           cashierName: currentUser?.username || currentUser?.name || "Counter Staff",
           salesmanName: selectedSalesmanObj ? selectedSalesmanObj.name : undefined,
           customerName: customerName || "Walk-in Customer",
@@ -943,6 +1226,10 @@ function SalesWorkspaceContent() {
         });
         setShowReceiptModal(true);
         setCartItems([]);
+        setPosPayment(createInitialPaymentState("CASH", 0));
+        setDiscountAmount(0);
+        setDeliveryCharges(0);
+        refreshProducts();
         broadcastOrderSync();
       } else {
         alert(data.error || "Failed to process sale.");
@@ -992,6 +1279,7 @@ function SalesWorkspaceContent() {
       const data = await res.json();
       if (data.success) {
         alert(`Online order ${data.data.saleNumber} created successfully!`);
+        fetchOnlineOrders();
         broadcastOrderSync();
       } else {
         alert(data.error || "Failed to create online order.");
@@ -1008,13 +1296,38 @@ function SalesWorkspaceContent() {
     const selectedProd = products.find((p) => p._id === newAdvanceProdId);
     if (!selectedProd) return;
 
+    const qty = newAdvanceQty > 0 ? Math.floor(newAdvanceQty) : 1;
+    const price = newAdvancePrice > 0 ? newAdvancePrice : (selectedProd.sellingPrice || 0);
+    if (price <= 0) {
+      alert("Agreed Price must be greater than 0.");
+      return;
+    }
+
+    const parsedSerials = Array.from(
+      new Set(
+        newAdvanceSerial
+          .split(/[\s,]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+    );
+
+    if (parsedSerials.length > 0 && parsedSerials.length !== qty) {
+      alert(
+        `You entered ${parsedSerials.length} serial number(s) for Qty ${qty}. Either enter all ${qty} serials (comma-separated) or leave blank to assign at pickup.`
+      );
+      return;
+    }
+
     const newItem = {
       productId: selectedProd._id,
       productName: selectedProd.name,
       condition: selectedProd.condition || "New",
-      quantity: newAdvanceQty > 0 ? newAdvanceQty : 1,
-      unitPrice: newAdvancePrice > 0 ? newAdvancePrice : (selectedProd.sellingPrice || 0),
-      serialNumber: newAdvanceSerial.trim() || undefined,
+      serialTracking: Boolean(selectedProd.serialTracking),
+      quantity: qty,
+      unitPrice: price,
+      serialNumbers: parsedSerials,
+      serialNumber: parsedSerials[0] || undefined,
     };
 
     setAdvanceItems([...advanceItems, newItem]);
@@ -1038,24 +1351,39 @@ function SalesWorkspaceContent() {
       alert("Please add at least one product to the Advance Booking list.");
       return;
     }
-    if (!advanceDeposit || advanceDeposit <= 0) {
+    if (!selectedLocation || selectedLocation === "ALL") {
+      alert("Please select a specific Store Location (Branch / Warehouse) before saving Advance Booking.");
+      return;
+    }
+    if (!customerName.trim() && !customerPhone.trim()) {
+      alert("Please enter Customer Name and/or Phone Number for Advance Booking khata tracking.");
+      return;
+    }
+    const effectiveAdvanceDeposit = getPaymentAllocatedTotal(advancePayment, 0, true);
+
+    if (!effectiveAdvanceDeposit || effectiveAdvanceDeposit <= 0) {
       alert("Advance deposit amount must be greater than 0.");
       return;
     }
+    if (effectiveAdvanceDeposit > advanceTotalPrice + 0.01) {
+      alert(
+        `Advance deposit (Rs. ${effectiveAdvanceDeposit.toLocaleString()}) cannot exceed total booking amount (Rs. ${advanceTotalPrice.toLocaleString()}).`
+      );
+      return;
+    }
+
+    const advanceAllocations = buildPaymentAllocations(advancePayment, 0, true);
 
     try {
       setSubmitting(true);
       const idempotencyKey = `ADV-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-      const targetLocationId = (selectedLocation && selectedLocation !== "ALL")
-        ? selectedLocation
-        : (locations[0]?._id || "");
-      if (!targetLocationId) {
-        alert("Please select a valid Store Location.");
-        return;
-      }
+      const targetLocationId = selectedLocation;
       const targetSalesmanId = (selectedSalesman && selectedSalesman !== "ALL" && selectedSalesman !== "DIRECT")
         ? selectedSalesman
+        : undefined;
+      const targetSalesmanObj = targetSalesmanId
+        ? salesmen.find((s) => s._id === targetSalesmanId)
         : undefined;
 
       const res = await fetch("/api/sales/advance", {
@@ -1067,17 +1395,25 @@ function SalesWorkspaceContent() {
         body: JSON.stringify({
           locationId: targetLocationId,
           salesmanId: targetSalesmanId,
-          customerName: customerName || "Advance Booking Customer",
-          customerPhone: customerPhone || undefined,
+          salesmanName: targetSalesmanObj?.name,
+          customerName: customerName.trim() || undefined,
+          customerPhone: customerPhone.trim() || undefined,
           items: advanceItems.map((it) => ({
             productId: it.productId,
             quantity: it.quantity,
             unitPrice: it.unitPrice,
             condition: it.condition || "New",
-            serialNumbers: it.serialNumber ? [it.serialNumber] : [],
+            serialNumbers: Array.isArray(it.serialNumbers)
+              ? it.serialNumbers
+              : it.serialNumber
+              ? [it.serialNumber]
+              : [],
           })),
-          advanceAmount: advanceDeposit,
-          paymentMethod: paymentMethod || "CASH",
+          advanceAmount: effectiveAdvanceDeposit,
+          paymentMethod: advancePayment.singleMethod || "CASH",
+          paymentAllocations: advanceAllocations,
+          expectedDate: expectedDate || undefined,
+          notes: advanceNotes.trim() || undefined,
           createdBy: currentUser?.username || currentUser?.name || "counter-staff",
         }),
       });
@@ -1087,8 +1423,9 @@ function SalesWorkspaceContent() {
         const saleDoc = data.data?.sale;
         alert(`Advance booking ${saleDoc?.saleNumber || ""} registered with ${advanceItems.length} item(s) successfully!`);
         setAdvanceItems([]);
-        setAdvanceDeposit(0);
+        setAdvancePayment(createInitialPaymentState("CASH", 0));
         setExpectedDate("");
+        setAdvanceNotes("");
         if (data.data?.receiptData) {
           setCompletedReceiptData(data.data.receiptData);
           setShowReceiptModal(true);
@@ -1120,6 +1457,11 @@ function SalesWorkspaceContent() {
 
       const replacementItem = products.find((p) => p._id === replacementProductId);
 
+      const targetTradeInLoc =
+        selectedLocation && selectedLocation !== "ALL"
+          ? selectedLocation
+          : getDefaultOperatingLocationId(locations);
+
       const res = await fetch("/api/sales/returns", {
         method: "POST",
         headers: {
@@ -1128,7 +1470,7 @@ function SalesWorkspaceContent() {
         },
         body: JSON.stringify({
           action: "DIRECT_TRADE_IN",
-          locationId: selectedLocation,
+          locationId: targetTradeInLoc,
           customerName: customerName || "Walk-in Customer",
           customerPhone: customerPhone || undefined,
           tradeInItem: {
@@ -1148,8 +1490,8 @@ function SalesWorkspaceContent() {
                 },
               ]
             : [],
-          paymentMethod,
-          processedBy: "admin",
+          paymentMethod: returnPaymentMethod,
+          processedBy: currentUser?.username || currentUser?.name || "system",
         }),
       });
 
@@ -1159,6 +1501,7 @@ function SalesWorkspaceContent() {
           setCompletedReceiptData(data.data.receiptData);
           setShowReceiptModal(true);
         }
+        refreshProducts();
         alert(`Direct Trade-In ${data.data?.tradeInNumber || ""} completed successfully!`);
       } else {
         alert(data.error || "Failed to process Trade-In.");
@@ -1281,6 +1624,7 @@ function SalesWorkspaceContent() {
           condition: it.condition,
           serialNumbers: it.serialNumbers,
         })),
+        paymentMethod: returnPaymentMethod,
         processedBy: currentUser?.username || currentUser?.name || "system",
         notes: returnNotes || `Return/Exchange against Invoice ${foundSale.saleNumber}`,
       };
@@ -1319,7 +1663,7 @@ function SalesWorkspaceContent() {
           totalAmount: returnedTotal,
           paidAmount: returnedTotal,
           changeDue: 0,
-          payments: [{ method: "CASH_REFUND", amount: returnedTotal }],
+          payments: [{ method: returnPaymentMethod, amount: returnedTotal }],
         });
 
         setShowReceiptModal(true);
@@ -1328,6 +1672,7 @@ function SalesWorkspaceContent() {
         setReturnSelectedItems({});
         setReturnReplacementItems([]);
         setReturnNotes("");
+        refreshProducts();
         setTimeout(() => setReturnSuccessMsg(""), 4000);
       } else {
         setReturnError(data.error || "Failed to process return.");
@@ -1344,10 +1689,38 @@ function SalesWorkspaceContent() {
       alert("Cart is empty.");
       return;
     }
-    if (!selectedLocation) {
-      alert("Please select a location.");
+    const rentalLocId =
+      selectedLocation && selectedLocation !== "ALL"
+        ? selectedLocation
+        : cartItems.find((it) => it.fulfillmentLocationId)?.fulfillmentLocationId ||
+          getDefaultOperatingLocationId(locations);
+    if (!rentalLocId) {
+      alert("Please select a valid Store Location.");
       return;
     }
+
+    const rentalTotalDeposit = cartItems.reduce(
+      (acc, it) =>
+        acc +
+        (it.depositPaid !== undefined
+          ? Number(it.depositPaid)
+          : it.product.originalPrice || it.unitPrice || 0) *
+          it.quantity,
+      0
+    );
+    const rentalAllocations = buildPaymentAllocations(rentalPayment, rentalTotalDeposit);
+    const totalRentalAllocated = rentalAllocations.reduce((acc, p) => acc + p.amount, 0);
+    if (rentalTotalDeposit > 0 && totalRentalAllocated < rentalTotalDeposit - 0.5) {
+      alert(
+        `Split deposit total (Rs. ${totalRentalAllocated.toLocaleString()}) is less than required security deposit (Rs. ${rentalTotalDeposit.toLocaleString()}).`
+      );
+      return;
+    }
+
+    const targetSalesmanId =
+      selectedSalesman && selectedSalesman !== "ALL" && selectedSalesman !== "DIRECT"
+        ? selectedSalesman
+        : undefined;
 
     try {
       setSubmitting(true);
@@ -1355,10 +1728,11 @@ function SalesWorkspaceContent() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          locationId: selectedLocation,
-          salesmanId: selectedSalesman || undefined,
+          locationId: rentalLocId,
+          salesmanId: targetSalesmanId,
           customerName: customerName || "Walk-in Rental Customer",
           customerPhone: customerPhone || undefined,
+          paymentAllocations: rentalAllocations,
           items: cartItems.map((it) => ({
             productId: it.product._id,
             depositPaid: it.depositPaid !== undefined ? Number(it.depositPaid) : (it.product.originalPrice || it.unitPrice || 0),
@@ -1373,12 +1747,12 @@ function SalesWorkspaceContent() {
       const data = await res.json();
       if (data.success && data.data) {
         const booking = data.data;
-        const selectedSalesmanObj = salesmen.find((s) => s._id === selectedSalesman);
+        const selectedSalesmanObj = targetSalesmanId ? salesmen.find((s) => s._id === targetSalesmanId) : undefined;
 
         setCompletedReceiptData({
           invoiceNumber: booking.bookingNumber,
           date: new Date(),
-          locationName: locations.find((l) => l._id === selectedLocation)?.name || "Warehouse",
+          locationName: locations.find((l) => l._id === rentalLocId)?.name || "Warehouse",
           cashierName: currentUser?.username || currentUser?.name || "Counter Staff",
           salesmanName: selectedSalesmanObj ? selectedSalesmanObj.name : "Direct Counter",
           customerName: customerName || "Walk-in Rental Customer",
@@ -1397,11 +1771,16 @@ function SalesWorkspaceContent() {
           totalAmount: booking.totalDepositHeld,
           paidAmount: booking.totalDepositHeld,
           changeDue: 0,
-          payments: [{ method: "RENTAL_SECURITY_DEPOSIT", amount: booking.totalDepositHeld }],
+          payments:
+            rentalAllocations.length > 0
+              ? rentalAllocations
+              : [{ method: "RENTAL_SECURITY_DEPOSIT", amount: booking.totalDepositHeld }],
         });
 
         setShowReceiptModal(true);
         setCartItems([]);
+        setRentalPayment(createInitialPaymentState("CASH", 0));
+        refreshProducts();
       } else {
         alert(data.error || "Failed to process rental booking.");
       }
@@ -1449,6 +1828,7 @@ function SalesWorkspaceContent() {
         body: JSON.stringify({
           action: "PARTIAL_RETURN",
           returnedItemIds: selectedRentalReturnItems,
+          paymentMethod: returnPaymentMethod,
           processedBy: currentUser?.username || currentUser?.name || "system",
         }),
       });
@@ -1478,12 +1858,13 @@ function SalesWorkspaceContent() {
           totalAmount: totalAccruedRentRealized,
           paidAmount: totalAccruedRentRealized,
           changeDue: totalNetRefundToCustomer > 0 ? totalNetRefundToCustomer : 0,
-          payments: [{ method: totalNetRefundToCustomer > 0 ? "SHOP_REFUND_CASH" : "RENTAL_SETTLEMENT", amount: Math.abs(totalNetRefundToCustomer) }],
+          payments: [{ method: totalNetRefundToCustomer > 0 ? `REFUND_${returnPaymentMethod}` : returnPaymentMethod, amount: Math.abs(totalNetRefundToCustomer) }],
         });
 
         setShowReceiptModal(true);
         setSelectedRentalBooking(null);
         setSelectedRentalReturnItems([]);
+        refreshProducts();
       } else {
         alert(data.error || "Failed to process rental return.");
       }
@@ -1506,12 +1887,13 @@ function SalesWorkspaceContent() {
         body: JSON.stringify({
           action: "ADD_TOP_UP",
           topUpAmount: topUpAmountInput,
+          paymentMethod: returnPaymentMethod,
           processedBy: currentUser?.username || currentUser?.name || "system",
         }),
       });
       const data = await res.json();
       if (data.success && data.data) {
-        alert(`Rs. ${topUpAmountInput} Top-Up Deposit added successfully!`);
+        alert(`Rs. ${topUpAmountInput} Top-Up Deposit added (${returnPaymentMethod}) successfully!`);
         setSelectedRentalBooking(data.data);
         setTopUpModalOpen(false);
         setTopUpAmountInput(0);
@@ -1577,6 +1959,7 @@ function SalesWorkspaceContent() {
         securityDepositPaid: totalSecDeposit,
         rentalFeeDeducted: totalFeeCut,
         additionalTopUpCash: Number(rentalTopUpCash || 0),
+        paymentMethod: returnPaymentMethod,
         returnedItems: allReturnItems.map((it) => ({
           productId: it.productId,
           quantity: 1,
@@ -1599,7 +1982,7 @@ function SalesWorkspaceContent() {
           serialNumbers: it.serialNumbers,
         })),
         processedBy: currentUser?.username || currentUser?.name || "system",
-        notes: returnNotes || `Rental Return & Swap (${allReturnItems.length} returned CD(s), Deposit: Rs. ${totalSecDeposit}, Rent Fee: Rs. ${totalFeeCut}, Top-up Cash: Rs. ${rentalTopUpCash})`,
+        notes: returnNotes || `Rental Return & Swap (${allReturnItems.length} returned CD(s), Deposit: Rs. ${totalSecDeposit}, Rent Fee: Rs. ${totalFeeCut}, Top-up: Rs. ${rentalTopUpCash})`,
       };
 
       const res = await fetch("/api/sales/returns", {
@@ -1654,7 +2037,7 @@ function SalesWorkspaceContent() {
           paidAmount: netCashPayable,
           changeDue: netCashRefund,
           payments: [{
-            method: netDiff < 0 ? "SHOP_REFUND_CASH" : (netDiff > 0 ? "CUSTOMER_TOPUP_CASH" : "RENTAL_CREDIT_SETTLEMENT"),
+            method: netDiff !== 0 ? returnPaymentMethod : "RENTAL_CREDIT_SETTLEMENT",
             amount: Math.abs(netDiff),
           }],
         });
@@ -1668,6 +2051,7 @@ function SalesWorkspaceContent() {
         setRentalReturnItems([]);
         setReturnReplacementItems([]);
         setReturnNotes("");
+        refreshProducts();
         setTimeout(() => setReturnSuccessMsg(""), 4000);
       } else {
         setReturnError(data.error || "Failed to process rental settlement.");
@@ -1677,6 +2061,53 @@ function SalesWorkspaceContent() {
     } finally {
       setSubmittingReturn(false);
     }
+  };
+
+  const rentalCartDepositTotal = cartItems.reduce(
+    (acc, it) =>
+      acc +
+      (it.depositPaid !== undefined
+        ? Number(it.depositPaid)
+        : it.product.originalPrice || it.unitPrice || 0) *
+        it.quantity,
+    0
+  );
+
+  const renderPaymentMethodPicker = (label: string) => {
+    const methods: Array<{
+      value: "CASH" | "BANK_TRANSFER" | "CARD";
+      label: string;
+    }> = [
+      { value: "CASH", label: "Cash (Galla)" },
+      { value: "BANK_TRANSFER", label: "Bank / Online" },
+      { value: "CARD", label: "Card" },
+    ];
+    return (
+      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+            {label}
+          </span>
+          <span className="text-[10px] text-slate-500">Syncs Cash / Online Diary</span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {methods.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              onClick={() => setReturnPaymentMethod(m.value)}
+              className={`px-2.5 py-2 rounded-lg text-xs font-bold border transition ${
+                returnPaymentMethod === m.value
+                  ? "bg-indigo-600 border-indigo-500 text-white shadow-sm shadow-indigo-600/30"
+                  : "bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -1873,63 +2304,141 @@ function SalesWorkspaceContent() {
         {mode === "POS" && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-7 bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-4">
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input
-                    type="text"
-                    placeholder="Search products by name, SKU, or scan barcode..."
-                    value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleResolveBarcode(productSearch, "POS");
-                        setProductSearch("");
-                      }
+              <div className="space-y-1.5">
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      type="text"
+                      placeholder="Search products by name, model, condition, SKU, or scan barcode..."
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                      onKeyDown={async (e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          const q = productSearch.trim();
+                          if (!q) return;
+                          const matched = await handleResolveBarcode(q, "POS", {
+                            suppressNotFoundAlert: true,
+                          });
+                          if (matched) {
+                            setProductSearch("");
+                            setPosSearchNotice("");
+                          } else {
+                            setPosSearching(true);
+                            const found = await refreshProducts(q);
+                            setPosSearching(false);
+                            if (found.length === 0) {
+                              setPosSearchNotice(`No exact barcode or product found for "${q}".`);
+                            } else {
+                              setPosSearchNotice("");
+                            }
+                          }
+                        }
+                      }}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-16 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
+                    />
+                    {posSearching && (
+                      <span className="absolute right-8 top-2.5 text-[10px] text-indigo-400 font-semibold">
+                        Searching...
+                      </span>
+                    )}
+                    {productSearch && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProductSearch("");
+                          setPosSearchNotice("");
+                        }}
+                        className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-200 p-0.5"
+                        title="Clear search"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveScanTarget("POS");
+                      setShowCameraModal(true);
                     }}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
-                  />
+                    className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition shrink-0"
+                    title="Scan product via Phone or Webcam Camera"
+                  >
+                    <Camera className="w-4 h-4 shrink-0" />
+                    <span className="hidden sm:inline">Mobile Scan</span>
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveScanTarget("POS");
-                    setShowCameraModal(true);
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition shrink-0"
-                  title="Scan product via Phone or Webcam Camera"
-                >
-                  <Camera className="w-4 h-4 shrink-0" />
-                  <span className="hidden sm:inline">Mobile Scan</span>
-                </button>
+                {posSearchNotice && (
+                  <p className="text-[11px] text-amber-400 px-1">{posSearchNotice}</p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[460px] overflow-y-auto pr-1">
-                {products
-                  .filter((p) => p.name.toLowerCase().includes(productSearch.toLowerCase()))
-                  .map((product) => (
+                {filteredPosProducts.length === 0 ? (
+                  <div className="col-span-full py-10 text-center text-xs text-slate-400 space-y-2">
+                    {posSearching || (loadingMaster && !productSearch.trim()) ? (
+                      <p className="text-indigo-400 font-semibold">Loading catalog...</p>
+                    ) : catalogLoadError && products.length === 0 ? (
+                      <div className="space-y-2">
+                        <p className="text-rose-400">{catalogLoadError}</p>
+                        <button
+                          type="button"
+                          onClick={loadProductsCatalog}
+                          className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition"
+                        >
+                          Retry Loading Catalog
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-slate-500">
+                        {productSearch.trim()
+                          ? `No products match "${productSearch.trim()}".`
+                          : "No products available in catalog."}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  filteredPosProducts.map((product) => (
                     <div
                       key={product._id}
                       onClick={() => addToCart(product)}
                       className="bg-slate-950 border border-slate-800 hover:border-indigo-500 p-3 rounded-xl cursor-pointer transition flex flex-col justify-between"
                     >
                       <div>
-                        <span className="text-[10px] font-semibold text-indigo-400 bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-800/40">
-                          {product.sku}
-                        </span>
-                        <h4 className="text-xs font-bold text-slate-100 mt-1 line-clamp-2">
+                        <div className="flex items-center justify-between gap-1 flex-wrap">
+                          <span className="text-[10px] font-semibold text-indigo-400 bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-800/40">
+                            {product.sku}
+                          </span>
+                          <span className="text-[10px] font-medium text-slate-400 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
+                            {product.condition || "New"}
+                          </span>
+                        </div>
+                        <h4 className="text-xs font-bold text-slate-100 mt-1.5 line-clamp-2">
                           {product.name}
                         </h4>
                       </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <span className="text-xs font-extrabold text-emerald-400">
-                          Rs. {product.sellingPrice?.toLocaleString()}
-                        </span>
-                        <Plus className="w-4 h-4 text-slate-400" />
+                      <div className="mt-2 flex items-center justify-between gap-1">
+                        <div>
+                          <span className="text-xs font-extrabold text-emerald-400 block">
+                            Rs. {product.sellingPrice?.toLocaleString()}
+                          </span>
+                          <span
+                            className={`text-[10px] font-semibold ${
+                              (product.totalStock || 0) > 0
+                                ? "text-slate-400"
+                                : "text-rose-400"
+                            }`}
+                          >
+                            Stock: {product.totalStock || 0}
+                          </span>
+                        </div>
+                        <Plus className="w-4 h-4 text-slate-400 shrink-0" />
                       </div>
                     </div>
-                  ))}
+                  ))
+                )}
               </div>
             </div>
 
@@ -2056,15 +2565,16 @@ function SalesWorkspaceContent() {
                                 Select branch...
                               </option>
                               {locations.map((loc) => {
-                                const stockInfo = (item.product?.stockBreakdown || []).find((sb: any) => sb.locationId === loc._id);
-                                const stockQty = stockInfo ? stockInfo.quantity : 0;
+                                const stockQty = (item.product?.stockBreakdown || [])
+                                  .filter((sb: any) => String(sb.locationId) === String(loc._id))
+                                  .reduce((sum: number, sb: any) => sum + Number(sb.quantity || 0), 0);
                                 return (
                                   <option
                                     key={loc._id}
                                     value={loc._id}
                                     className="text-slate-200 bg-slate-900"
                                   >
-                                    {loc.name} {stockQty > 0 ? `(${stockQty})` : `(0)`}
+                                    {loc.name} ({stockQty})
                                   </option>
                                 );
                               })}
@@ -2114,11 +2624,23 @@ function SalesWorkspaceContent() {
 
               <div className="bg-slate-950 border border-slate-800 p-3.5 rounded-xl space-y-3 text-xs">
                 {posType === "RENTAL" ? (
-                  <div className="flex justify-between font-bold text-purple-400">
-                    <span>Total Rental Security Deposit Held</span>
-                    <span>
-                      Rs. {cartItems.reduce((acc, it) => acc + (it.depositPaid !== undefined ? it.depositPaid : (it.product.originalPrice || it.unitPrice || 0)) * it.quantity, 0).toLocaleString()}
-                    </span>
+                  <div className="space-y-3">
+                    <div className="flex justify-between font-bold text-purple-400">
+                      <span>Total Rental Security Deposit Held</span>
+                      <span>
+                        Rs. {rentalCartDepositTotal.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="pt-2 border-t border-slate-800">
+                      <PaymentAllocationInput
+                        value={rentalPayment}
+                        onChange={setRentalPayment}
+                        targetAmount={rentalCartDepositTotal}
+                        includeExchangeCredit={false}
+                        label="Deposit Payment Mode:"
+                        accent="purple"
+                      />
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -2137,133 +2659,14 @@ function SalesWorkspaceContent() {
                     </div>
 
                     <div className="pt-2 border-t border-slate-800 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                          <CreditCard className="w-3.5 h-3.5 text-indigo-400" />
-                          Payment Type:
-                        </label>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => setIsSplitPayment(false)}
-                            className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition ${
-                              !isSplitPayment
-                                ? "bg-indigo-600 border-indigo-500 text-white"
-                                : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
-                            }`}
-                          >
-                            Single
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsSplitPayment(true);
-                              if (splitCash === 0 && splitCard === 0 && splitBank === 0) {
-                                setSplitCash(cartTotal);
-                              }
-                            }}
-                            className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition ${
-                              isSplitPayment
-                                ? "bg-cyan-600 border-cyan-500 text-white shadow-md shadow-cyan-600/30"
-                                : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
-                            }`}
-                          >
-                            🔀 Split Payment
-                          </button>
-                        </div>
-                      </div>
-
-                      {!isSplitPayment ? (
-                        <div className="flex justify-between text-slate-400 items-center">
-                          <span>Payment Method</span>
-                          <select
-                            value={paymentMethod}
-                            onChange={(e) => setPaymentMethod(e.target.value)}
-                            className="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-slate-200 font-semibold"
-                          >
-                            <option value="CASH">💵 Cash</option>
-                            <option value="CARD">💳 Credit/Debit Card</option>
-                            <option value="BANK_TRANSFER">🏦 Bank Transfer / Online</option>
-                          </select>
-                        </div>
-                      ) : (
-                        <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl space-y-2 text-xs">
-                          <div className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider mb-1">
-                            Split Payment Breakdown
-                          </div>
-
-                          {/* Cash Input */}
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-slate-300 font-medium flex items-center gap-1">
-                              💵 Cash (PKR):
-                            </span>
-                            <input
-                              type="number"
-                              value={splitCash}
-                              onChange={(e) => setSplitCash(Number(e.target.value))}
-                              className="w-28 bg-slate-950 border border-slate-700 text-emerald-400 font-bold rounded px-2 py-1 text-right text-xs"
-                            />
-                          </div>
-
-                          {/* Card Input */}
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-slate-300 font-medium flex items-center gap-1">
-                              💳 Card (PKR):
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="text"
-                                placeholder="Card Ref #"
-                                value={cardRef}
-                                onChange={(e) => setCardRef(e.target.value)}
-                                className="w-20 bg-slate-950 border border-slate-800 text-slate-300 rounded px-1.5 py-1 text-[10px]"
-                              />
-                              <input
-                                type="number"
-                                value={splitCard}
-                                onChange={(e) => setSplitCard(Number(e.target.value))}
-                                className="w-28 bg-slate-950 border border-slate-700 text-indigo-400 font-bold rounded px-2 py-1 text-right text-xs"
-                              />
-                            </div>
-                          </div>
-
-                          {/* Bank Input */}
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-slate-300 font-medium flex items-center gap-1">
-                              🏦 Online/Bank (PKR):
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="text"
-                                placeholder="IBFT Ref #"
-                                value={bankRef}
-                                onChange={(e) => setBankRef(e.target.value)}
-                                className="w-20 bg-slate-950 border border-slate-800 text-slate-300 rounded px-1.5 py-1 text-[10px]"
-                              />
-                              <input
-                                type="number"
-                                value={splitBank}
-                                onChange={(e) => setSplitBank(Number(e.target.value))}
-                                className="w-28 bg-slate-950 border border-slate-700 text-cyan-400 font-bold rounded px-2 py-1 text-right text-xs"
-                              />
-                            </div>
-                          </div>
-
-                          {/* Summary Calculation */}
-                          <div className="pt-2 border-t border-slate-800 flex items-center justify-between font-bold">
-                            <span className="text-slate-400">Total Allocated:</span>
-                            <span
-                              className={
-                                splitCash + splitCard + splitBank >= cartTotal
-                                  ? "text-emerald-400"
-                                  : "text-rose-400 animate-pulse"
-                              }
-                            >
-                              Rs. {(splitCash + splitCard + splitBank).toLocaleString()} / {cartTotal.toLocaleString()}
-                            </span>
-                          </div>
-                        </div>
-                      )}
+                      <PaymentAllocationInput
+                        value={posPayment}
+                        onChange={setPosPayment}
+                        targetAmount={cartTotal}
+                        includeExchangeCredit={true}
+                        label="Payment Type:"
+                        accent="indigo"
+                      />
 
                       <div className="flex justify-between font-bold text-emerald-400 text-sm border-t border-slate-800 pt-2">
                         <span>Total Amount</span>
@@ -2671,16 +3074,110 @@ function SalesWorkspaceContent() {
             >
               {submitting ? "Creating Order..." : "Create Online Order & Generate Dispatch Ticket"}
             </button>
+
+            {/* Active Online Orders Fulfillment List (Pick, Dispatch & Complete COD) */}
+            <div className="border-t border-slate-800 pt-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-wider">
+                  Active Online Orders ({onlineOrders.length}) — Pick, Dispatch & COD Settlement
+                </h4>
+                <button
+                  type="button"
+                  onClick={fetchOnlineOrders}
+                  className="text-xs px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-semibold"
+                >
+                  {loadingOnlineOrders ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
+              {onlineOrders.length === 0 ? (
+                <p className="text-xs text-slate-500 py-4 text-center">
+                  No active pending online orders.
+                </p>
+              ) : (
+                <div className="space-y-2.5">
+                  {onlineOrders.map((order) => (
+                    <div
+                      key={order._id}
+                      className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono font-bold text-cyan-400">{order.saleNumber}</span>
+                          <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] font-bold text-amber-300">
+                            {order.status}
+                          </span>
+                          <span className="text-slate-300 font-semibold">
+                            {order.customerName || "Online Customer"}
+                          </span>
+                          {order.customerPhone && (
+                            <span className="text-slate-500 font-mono">({order.customerPhone})</span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          {(order.items || []).map((it: any) => `${it.productName} x${it.quantity}`).join(", ")} •{" "}
+                          <span className="text-emerald-400 font-bold">
+                            Rs. {(order.totalAmount || 0).toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {order.status === "DRAFT" && (
+                          <button
+                            type="button"
+                            disabled={submitting}
+                            onClick={() => handleOnlineOrderAction(order, "PICK_PACK")}
+                            className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-[11px]"
+                          >
+                            1. Pick &amp; Pack
+                          </button>
+                        )}
+                        {(order.status === "DRAFT" || order.status === "CHECKOUT") && (
+                          <button
+                            type="button"
+                            disabled={submitting}
+                            onClick={() => handleOnlineOrderAction(order, "DISPATCH")}
+                            className="px-2.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-bold text-[11px]"
+                          >
+                            2. Dispatch
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => openQueueVerifyModal(order)}
+                          className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold text-[11px]"
+                        >
+                          3. Collect COD &amp; Complete
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenCancelModal(order)}
+                          className="px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded-lg font-bold text-[11px]"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
         {/* Mode: ADVANCE BOOKINGS */}
         {mode === "ADVANCE" && (
           <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-6">
-            <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-purple-400" />
-              Multi-Item Advance Booking & Stock Reservation Form
-            </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-purple-400" />
+                Multi-Item Advance Booking & Stock Reservation Form
+              </h3>
+              {(selectedLocation === "ALL" || (!customerName.trim() && !customerPhone.trim())) && (
+                <span className="text-[11px] bg-amber-500/10 border border-amber-500/30 text-amber-300 px-3 py-1 rounded-lg font-medium">
+                  ⚠️ Top bar mein Store Location, Customer Name aur Phone zaroor fill karein
+                </span>
+              )}
+            </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               {/* Left Column: Add Products & Booking List */}
@@ -2777,10 +3274,10 @@ function SalesWorkspaceContent() {
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] text-slate-400 mb-1">Serial (Optional)</label>
+                      <label className="block text-[10px] text-slate-400 mb-1">Serial(s) Optional</label>
                       <input
                         type="text"
-                        placeholder="S/N"
+                        placeholder="S/N (or leave blank)"
                         value={newAdvanceSerial}
                         onChange={(e) => setNewAdvanceSerial(e.target.value)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200 font-mono text-[11px]"
@@ -2818,30 +3315,60 @@ function SalesWorkspaceContent() {
                           </td>
                         </tr>
                       ) : (
-                        advanceItems.map((item, idx) => (
-                          <tr key={idx} className="hover:bg-slate-900/50">
-                            <td className="p-2.5">
-                              <div className="font-semibold text-slate-200">{item.productName}</div>
-                              {item.serialNumber && (
-                                <div className="text-[10px] text-amber-400 font-mono">S/N: {item.serialNumber}</div>
-                              )}
-                            </td>
-                            <td className="p-2.5 text-center font-bold">{item.quantity}</td>
-                            <td className="p-2.5 text-right">Rs. {item.unitPrice?.toLocaleString()}</td>
-                            <td className="p-2.5 text-right font-bold text-slate-100">
-                              Rs. {(item.unitPrice * item.quantity).toLocaleString()}
-                            </td>
-                            <td className="p-2.5 text-center">
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveAdvanceItem(idx)}
-                                className="text-rose-400 hover:text-rose-300 p-1 rounded hover:bg-rose-500/10"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </td>
-                          </tr>
-                        ))
+                        advanceItems.map((item, idx) => {
+                          const serialsList: string[] = Array.isArray(item.serialNumbers)
+                            ? item.serialNumbers
+                            : item.serialNumber
+                            ? [item.serialNumber]
+                            : [];
+                          return (
+                            <tr key={idx} className="hover:bg-slate-900/50">
+                              <td className="p-2.5">
+                                <div className="font-semibold text-slate-200">
+                                  {item.productName}{" "}
+                                  <span className="text-[10px] text-slate-400 font-normal">({item.condition})</span>
+                                </div>
+                                {serialsList.length > 0 ? (
+                                  <div className="text-[10px] text-amber-400 font-mono">
+                                    Reserved S/N: {serialsList.join(", ")}
+                                  </div>
+                                ) : item.serialTracking ? (
+                                  <div className="text-[10px] text-slate-500 italic">
+                                    Serial will be assigned at pickup
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td className="p-2.5 text-center font-bold">{item.quantity}</td>
+                              <td className="p-2.5 text-right">
+                                <input
+                                  type="number"
+                                  value={item.unitPrice}
+                                  onChange={(e) => {
+                                    const val = Math.max(0, Number(e.target.value));
+                                    setAdvanceItems(
+                                      advanceItems.map((it, i) =>
+                                        i === idx ? { ...it, unitPrice: val } : it
+                                      )
+                                    );
+                                  }}
+                                  className="w-20 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-right text-xs text-emerald-400 font-mono font-bold"
+                                />
+                              </td>
+                              <td className="p-2.5 text-right font-bold text-slate-100">
+                                Rs. {(item.unitPrice * item.quantity).toLocaleString()}
+                              </td>
+                              <td className="p-2.5 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveAdvanceItem(idx)}
+                                  className="text-rose-400 hover:text-rose-300 p-1 rounded hover:bg-rose-500/10"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
@@ -2855,41 +3382,84 @@ function SalesWorkspaceContent() {
                     Advance Payment & Receipt Summary
                   </h4>
 
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Advance Deposit Received (PKR) *</label>
-                    <input
-                      type="number"
-                      placeholder="e.g. 7000 or 15000"
-                      value={advanceDeposit}
-                      onChange={(e) => setAdvanceDeposit(Number(e.target.value))}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm font-bold text-purple-400 focus:outline-none focus:border-purple-500"
-                    />
+                  <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-2.5 text-[11px] space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Branch / Location:</span>
+                      <span className={`font-bold ${selectedLocation === "ALL" ? "text-amber-400" : "text-slate-200"}`}>
+                        {selectedLocation === "ALL"
+                          ? "⚠️ Select Location above"
+                          : locations.find((l) => l._id === selectedLocation)?.name || "Selected"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Customer:</span>
+                      <span className="font-bold text-slate-200">
+                        {customerName.trim() || "—"} {customerPhone.trim() ? `(${customerPhone.trim()})` : ""}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Salesman:</span>
+                      <span className="font-semibold text-indigo-400">
+                        {selectedSalesman !== "ALL" && selectedSalesman !== "DIRECT"
+                          ? salesmen.find((s) => s._id === selectedSalesman)?.name || "Salesman"
+                          : "Direct Counter"}
+                      </span>
+                    </div>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Expected Pickup / Delivery Date</label>
-                    <input
-                      type="date"
-                      value={expectedDate}
-                      onChange={(e) => setExpectedDate(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
-                    />
+                  <PaymentAllocationInput
+                    value={advancePayment}
+                    onChange={setAdvancePayment}
+                    targetAmount={advanceTotalPrice}
+                    allowEditableSingleAmount={true}
+                    includeExchangeCredit={false}
+                    label="Advance Deposit Payment *"
+                    singleAmountLabel="Advance Deposit Received (PKR) *"
+                    accent="purple"
+                    showAllocatedSummary={false}
+                  />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Expected Pickup Date</label>
+                      <input
+                        type="date"
+                        value={expectedDate}
+                        onChange={(e) => setExpectedDate(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Booking Notes (Optional)</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Customer pickup evening"
+                        value={advanceNotes}
+                        onChange={(e) => setAdvanceNotes(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
+                      />
+                    </div>
                   </div>
 
-                  <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-xs space-y-2.5">
-                    <div className="flex justify-between text-slate-400">
-                      <span>Total Booked Items ({advanceItems.length})</span>
-                      <span className="font-bold text-slate-200">Rs. {advanceTotalPrice.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between text-purple-400 font-semibold">
-                      <span>Advance Deposit Paid Today</span>
-                      <span>- Rs. {advanceDeposit.toLocaleString()}</span>
-                    </div>
-                    <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-amber-400">
-                      <span>Remaining Balance Due</span>
-                      <span>Rs. {Math.max(0, advanceTotalPrice - advanceDeposit).toLocaleString()}</span>
-                    </div>
-                  </div>
+                  {(() => {
+                    const effectiveAdv = getPaymentAllocatedTotal(advancePayment, 0, true);
+                    return (
+                      <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-xs space-y-2.5">
+                        <div className="flex justify-between text-slate-400">
+                          <span>Total Booked Items ({advanceItems.length})</span>
+                          <span className="font-bold text-slate-200">Rs. {advanceTotalPrice.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-purple-400 font-semibold">
+                          <span>Advance Deposit Paid Today</span>
+                          <span>- Rs. {effectiveAdv.toLocaleString()}</span>
+                        </div>
+                        <div className="border-t border-slate-800 pt-2 flex justify-between font-extrabold text-sm text-amber-400">
+                          <span>Remaining Balance Due</span>
+                          <span>Rs. {Math.max(0, advanceTotalPrice - effectiveAdv).toLocaleString()}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <button
@@ -3022,11 +3592,22 @@ function SalesWorkspaceContent() {
                         <ArrowRightLeft className="w-4 h-4 text-purple-400" />
                         RETURNED RENTAL DVD(s) & DEPOSIT CALCULATION
                       </h4>
-                      {rentalReturnItems.length > 0 && (
-                        <span className="text-[10px] bg-purple-900/60 text-purple-300 px-2 py-0.5 rounded-full border border-purple-500/30 font-bold">
-                          {rentalReturnItems.length} CD(s) in Return List
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {selectedRentalBooking && (
+                          <button
+                            type="button"
+                            onClick={() => setTopUpModalOpen(true)}
+                            className="text-[10px] bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 px-2.5 py-1 rounded-full border border-cyan-500/30 font-bold transition"
+                          >
+                            + Top-Up ({selectedRentalBooking.bookingNumber})
+                          </button>
+                        )}
+                        {rentalReturnItems.length > 0 && (
+                          <span className="text-[10px] bg-purple-900/60 text-purple-300 px-2 py-0.5 rounded-full border border-purple-500/30 font-bold">
+                            {rentalReturnItems.length} CD(s) in Return List
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Barcode & Mobile Camera Scanner Box for Returned DVD */}
@@ -3453,6 +4034,11 @@ function SalesWorkspaceContent() {
                       </div>
                     </div>
 
+                    {(calcNetDiff !== 0 || rentalTopUpCash > 0) &&
+                      renderPaymentMethodPicker(
+                        calcNetDiff < 0 ? "Refund Payout Mode:" : "Settlement Collection Mode:"
+                      )}
+
                     <button
                       onClick={handleProcessRentalSwap}
                       disabled={submittingReturn || effectiveReturnItems.length === 0 || calcTotalReturnDeposit <= 0}
@@ -3698,6 +4284,13 @@ function SalesWorkspaceContent() {
                             : "Even Exchange (No Cash Changed)"}
                         </span>
                       </div>
+                      {netDiff !== 0 && (
+                        <div className="pt-2 border-t border-slate-800">
+                          {renderPaymentMethodPicker(
+                            netDiff < 0 ? "Refund Payout Mode:" : "Extra Payment Mode:"
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -3922,6 +4515,8 @@ function SalesWorkspaceContent() {
                 )}
               </div>
             </div>
+
+            {renderPaymentMethodPicker("Trade-In Settlement Mode:")}
 
             <button
               onClick={handleTradeInSubmit}
@@ -4328,46 +4923,23 @@ function SalesWorkspaceContent() {
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-slate-300">
-                    Select Payment Collection Method:
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setQueuePaymentMethod("CASH")}
-                      className={`py-2 px-3 rounded-xl font-bold border text-xs text-center transition ${
-                        queuePaymentMethod === "CASH"
-                          ? "bg-emerald-600 text-white border-emerald-500 shadow-md shadow-emerald-600/20"
-                          : "bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-800"
-                      }`}
-                    >
-                      💵 Cash
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setQueuePaymentMethod("CARD")}
-                      className={`py-2 px-3 rounded-xl font-bold border text-xs text-center transition ${
-                        queuePaymentMethod === "CARD"
-                          ? "bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/20"
-                          : "bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-800"
-                      }`}
-                    >
-                      💳 Card
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setQueuePaymentMethod("BANK_TRANSFER")}
-                      className={`py-2 px-3 rounded-xl font-bold border text-xs text-center transition ${
-                        queuePaymentMethod === "BANK_TRANSFER"
-                          ? "bg-cyan-600 text-white border-cyan-500 shadow-md shadow-cyan-600/20"
-                          : "bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-800"
-                      }`}
-                    >
-                      🏦 Bank / Raast
-                    </button>
-                  </div>
-                </div>
+                {(() => {
+                  const mDue =
+                    selectedQueueSale.balanceDue !== undefined
+                      ? Math.max(0, Number(selectedQueueSale.balanceDue))
+                      : Math.max(0, (selectedQueueSale.totalAmount || 0) - (selectedQueueSale.totalPaid || 0));
+                  const mFinal = Math.max(0, mDue + Number(queuePriceAdjustment || 0));
+                  return (
+                    <PaymentAllocationInput
+                      value={queuePayment}
+                      onChange={setQueuePayment}
+                      targetAmount={mFinal}
+                      includeExchangeCredit={false}
+                      label="Select Payment Collection Method:"
+                      accent="indigo"
+                    />
+                  );
+                })()}
               </div>
 
               {(() => {
@@ -4559,6 +5131,7 @@ function SalesWorkspaceContent() {
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-cyan-400 font-bold font-mono focus:outline-none focus:border-cyan-500"
               />
             </div>
+            {renderPaymentMethodPicker("Top-Up Payment Mode:")}
             <div className="flex justify-end gap-3 pt-2">
               <button
                 type="button"

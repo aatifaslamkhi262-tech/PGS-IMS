@@ -37,9 +37,17 @@ export interface IPurchaseInvoiceItem {
 export interface IPurchaseInvoice {
   invoiceNumber: string;
   receivingType?: "SUPPLIER_PURCHASE" | "CUSTOMER_BUYBACK" | "CUSTOMER_RETURN";
+  intakePurpose?: "SUPPLIER_PURCHASE" | "DIRECT_BUYBACK" | "EXCHANGE_INTAKE";
   supplier?: Types.ObjectId;
   customerName?: string;
   customerPhone?: string;
+  handledBySalesman?: Types.ObjectId;
+  handledBySalesmanName?: string;
+  location?: Types.ObjectId;
+  locationName?: string;
+  attachmentUrls?: string[];
+  drawerCashPaid?: number;
+  onlinePaid?: number;
   invoiceDate: Date;
   status: PurchaseInvoiceStatus;
   items: IPurchaseInvoiceItem[];
@@ -156,6 +164,41 @@ const PurchaseInvoiceSchema = new Schema<IPurchaseInvoice>(
     customerPhone: {
       type: String,
       trim: true,
+    },
+    intakePurpose: {
+      type: String,
+      enum: ["SUPPLIER_PURCHASE", "DIRECT_BUYBACK", "EXCHANGE_INTAKE"],
+      default: "SUPPLIER_PURCHASE",
+    },
+    handledBySalesman: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    handledBySalesmanName: {
+      type: String,
+      trim: true,
+    },
+    location: {
+      type: Schema.Types.ObjectId,
+      ref: "Location",
+    },
+    locationName: {
+      type: String,
+      trim: true,
+    },
+    attachmentUrls: {
+      type: [String],
+      default: [],
+    },
+    drawerCashPaid: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    onlinePaid: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     invoiceDate: {
       type: Date,

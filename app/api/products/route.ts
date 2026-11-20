@@ -44,7 +44,7 @@ async function generateSystemBarcode(): Promise<string> {
 export async function GET(req: NextRequest) {
   try {
     await dbConnect();
-    const auth = await verifyRole(["Admin", "Warehouse", "Owner", "Accountant"]);
+    const auth = await verifyRole(["Admin", "Warehouse", "Owner", "Accountant", "Branch", "Salesman"]);
     if (!auth.authorized) {
       return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     }
@@ -65,17 +65,30 @@ export async function GET(req: NextRequest) {
 
     const query: any = { isDeleted: false };
 
-    // Streamlined Search filter (Name, SKU, Barcode - High Performance Indexed)
+    // Streamlined Search filter (Multi-word across Name, SKU, Barcode, Brand, Model, Condition)
     if (search.trim()) {
       const escapeRegex = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const trimmedSearch = search.trim();
-      const searchRegex = new RegExp(escapeRegex(trimmedSearch), "i");
-      query.$or = [
-        { name: searchRegex },
-        { sku: searchRegex },
-        { barcode: trimmedSearch },
-        { barcode: searchRegex },
-      ];
+      const tokens = search.trim().split(/\s+/).filter(Boolean);
+      const tokenConditions = tokens.map((token) => {
+        const tokenRegex = new RegExp(escapeRegex(token), "i");
+        return {
+          $or: [
+            { name: tokenRegex },
+            { sku: tokenRegex },
+            { barcode: token },
+            { barcode: tokenRegex },
+            { brand: tokenRegex },
+            { modelNumber: tokenRegex },
+            { model: tokenRegex },
+            { condition: tokenRegex },
+          ],
+        };
+      });
+      if (tokenConditions.length === 1) {
+        query.$or = tokenConditions[0].$or;
+      } else if (tokenConditions.length > 1) {
+        query.$and = tokenConditions;
+      }
     }
 
     // Price Range Filter

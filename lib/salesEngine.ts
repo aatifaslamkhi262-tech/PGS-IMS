@@ -137,6 +137,21 @@ export async function generatePaymentNumber(session?: ClientSession): Promise<st
   return `${prefix}${String(nextSeq).padStart(3, "0")}`;
 }
 
+export async function nextSequentialPaymentNumber(
+  usedPaymentNums: Set<string>,
+  session?: ClientSession
+): Promise<string> {
+  let paymentNumber = await generatePaymentNumber(session);
+  while (usedPaymentNums.has(paymentNumber)) {
+    const parts = paymentNumber.split("-");
+    const seq = parseInt(parts[parts.length - 1], 10) || 1;
+    parts[parts.length - 1] = String(seq + 1).padStart(3, "0");
+    paymentNumber = parts.join("-");
+  }
+  usedPaymentNums.add(paymentNumber);
+  return paymentNumber;
+}
+
 export interface CreateSaleInput {
   creationMode: CreationMode;
   saleSource: SaleSource;
@@ -160,6 +175,7 @@ export interface CreateSaleInput {
   deliveryCharges?: number;
   notes?: string;
   createdBy: string;
+  allowDeferredSerials?: boolean;
 }
 
 export async function createSaleInput(input: CreateSaleInput) {
@@ -216,15 +232,26 @@ export async function createSaleInput(input: CreateSaleInput) {
     }
 
     const cleanSerials: string[] = [];
-    if (product.serialTracking) {
-      if (!itemInput.serialNumbers || itemInput.serialNumbers.length !== itemInput.quantity) {
+    const providedSerials = (itemInput.serialNumbers || []).map((s) => s.trim()).filter(Boolean);
+    const shouldValidateSerials =
+      (product.serialTracking && !(input.allowDeferredSerials && providedSerials.length === 0)) ||
+      providedSerials.length > 0;
+
+    if (shouldValidateSerials) {
+      if (providedSerials.length !== itemInput.quantity) {
         throw new Error(
           `Product '${product.name}' requires exact ${itemInput.quantity} serial numbers.`
         );
       }
 
-      for (const sn of itemInput.serialNumbers) {
-        const cleanSn = sn.trim();
+      const seenSerials = new Set<string>();
+      for (const cleanSn of providedSerials) {
+        const upperSn = cleanSn.toUpperCase();
+        if (seenSerials.has(upperSn)) {
+          throw new Error(`Duplicate serial number '${cleanSn}' for product '${product.name}'.`);
+        }
+        seenSerials.add(upperSn);
+
         const serialDoc = await SerialNumber.findOne({
           product: product._id,
           serialNumber: cleanSn,
@@ -780,14 +807,10 @@ export async function completeSale(input: CompleteSaleInput) {
 
     const usedPaymentNums = new Set<string>();
     for (const alloc of input.paymentAllocations) {
-      let paymentNumber = await generatePaymentNumber(session);
-      while (usedPaymentNums.has(paymentNumber)) {
-        const parts = paymentNumber.split("-");
-        const seq = parseInt(parts[parts.length - 1], 10) || 1;
-        parts[parts.length - 1] = String(seq + 1).padStart(3, "0");
-        paymentNumber = parts.join("-");
-      }
-      usedPaymentNums.add(paymentNumber);
+      const allocAmount = Number(alloc.amount || 0);
+      if (allocAmount <= 0) continue;
+
+      const paymentNumber = await nextSequentialPaymentNumber(usedPaymentNums, session);
       const payment = new Payment({
         paymentNumber,
         sale: sale._id,
@@ -795,7 +818,7 @@ export async function completeSale(input: CompleteSaleInput) {
         customer: sale.customer,
         location: sale.location,
         paymentMethod: alloc.method,
-        amount: alloc.amount,
+        amount: allocAmount,
         referenceNumber: alloc.referenceNumber,
         notes: alloc.notes,
         receivedBy: input.completedBy,
@@ -811,7 +834,7 @@ export async function completeSale(input: CompleteSaleInput) {
             locationId: sale.location.toString(),
             cashier: input.completedBy,
             type: "CASH_SALE",
-            amount: alloc.amount,
+            amount: allocAmount,
             direction: "IN",
             referenceType: "Sale",
             referenceId: invoiceNumber,

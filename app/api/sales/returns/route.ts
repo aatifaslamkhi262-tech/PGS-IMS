@@ -13,8 +13,7 @@ import { RentalBooking } from "@/models/RentalBooking";
 import { updateAverageCostOnIntake, deductInventoryWithAverageCost } from "@/lib/averageCostEngine";
 import { generatePaymentNumber } from "@/lib/salesEngine";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
-import { recordCashMovement } from "@/lib/cashSessionEngine";
-import { CashSession } from "@/models/CashSession";
+import { recordCashMovement, findOrAutoOpenCashSession } from "@/lib/cashSessionEngine";
 import { resolveOrCreateCustomer } from "@/lib/customerResolver";
 import { lockIdempotencyKey, completeIdempotencyKey, failIdempotencyKey } from "@/lib/idempotencyEngine";
 import { verifyRole } from "@/lib/auth/rbac";
@@ -560,74 +559,144 @@ export async function POST(request: Request) {
       customerPhone: customerPhone || body.customerPhone,
     }, isTxActive ? session : undefined);
     if (targetCustId) {
-      await recordCustomerLedgerEntry(
-        {
-          customerId: targetCustId.toString(),
-          type: "RETURN_CREDIT",
-          amount: returnTotalValue,
-          referenceType: "Return",
-          referenceId: returnTxNumber,
-          notes: action === "RENTAL_SWAP"
-            ? `Rental Return Deposit Credit (Deposit: Rs. ${secDepositPaid}, Rent Deducted: Rs. ${rentDeducted}${topUpCash > 0 ? `, Top-up Paid: Rs. ${topUpCash}` : ""})`
-            : `Returned items against Invoice ${originalSale?.saleNumber || ""}`,
-          createdBy: processedBy || auth.user?.username || "system",
-        },
-        isTxActive ? session : undefined
-      );
-
-      if (replacementTotalValue > 0) {
-        await recordCustomerLedgerEntry(
-          {
-            customerId: targetCustId.toString(),
-            type: "INVOICE",
-            amount: replacementTotalValue,
-            referenceType: "Exchange",
-            referenceId: returnTxNumber,
-            notes: `Replacement items for ${returnTxNumber}`,
-            createdBy: processedBy || auth.user?.username || "system",
-          },
-          isTxActive ? session : undefined
-        );
-      }
-
-      if (netDifference > 0) {
-        const topUpPaid = netDifference;
-        if (topUpPaid > 0) {
+      if (action === "RENTAL_SWAP") {
+        // Original rental security deposit is ALREADY in CustomerLedger (ADVANCE_DEPOSIT at booking creation).
+        // Deduct only realized rental fee (INVOICE), add any extra top-up/upgrade deposit (ADVANCE_DEPOSIT),
+        // and deduct any cash/bank refund returned to customer (ADVANCE_REFUND).
+        const settledRentFee = Math.min(secDepositPaid, rentDeducted);
+        if (settledRentFee > 0) {
           await recordCustomerLedgerEntry(
             {
               customerId: targetCustId.toString(),
-              type: "PAYMENT",
-              amount: topUpPaid,
-              referenceType: "Exchange",
+              type: "INVOICE",
+              amount: settledRentFee,
+              referenceType: "Return",
               referenceId: returnTxNumber,
-              notes: `Exchange net top-up payment for ${returnTxNumber}`,
+              notes: `Rental Usage Fee Deducted (${returnTxNumber})`,
               createdBy: processedBy || auth.user?.username || "system",
             },
             isTxActive ? session : undefined
           );
         }
-      } else if (netDifference < 0) {
-        const refundAmount = Math.abs(netDifference);
-        const chosenPaymentMethod = paymentMethod || "CASH";
-        const actualCashRefund = chosenPaymentMethod === "CASH"
-          ? refundAmount
-          : Number(cashAmount || 0);
 
-        if (actualCashRefund > 0) {
+        if (topUpCash > 0) {
           await recordCustomerLedgerEntry(
             {
               customerId: targetCustId.toString(),
-              type: "ADVANCE_REFUND",
-              amount: actualCashRefund,
-              referenceType: "Return",
+              type: "ADVANCE_DEPOSIT",
+              amount: topUpCash,
+              referenceType: "Payment",
               referenceId: returnTxNumber,
-              notes: action === "RENTAL_SWAP"
-                ? `Rental Security Deposit Refund Paid in Cash (${returnTxNumber})`
-                : `Sales Return Net Cash Refund Paid (${returnTxNumber})`,
+              notes: `Rental Swap Additional Top-Up Deposit (${returnTxNumber})`,
               createdBy: processedBy || auth.user?.username || "system",
             },
             isTxActive ? session : undefined
           );
+        }
+
+        if (netDifference > 0) {
+          await recordCustomerLedgerEntry(
+            {
+              customerId: targetCustId.toString(),
+              type: "ADVANCE_DEPOSIT",
+              amount: netDifference,
+              referenceType: "Payment",
+              referenceId: returnTxNumber,
+              notes: `Rental Swap Net Top-Up Collection (${returnTxNumber})`,
+              createdBy: processedBy || auth.user?.username || "system",
+            },
+            isTxActive ? session : undefined
+          );
+        } else if (netDifference < 0) {
+          const refundAmount = Math.abs(netDifference);
+          const chosenPaymentMethod = paymentMethod || "CASH";
+          const settledRefund =
+            chosenPaymentMethod === "STORE_CREDIT" || chosenPaymentMethod === "CUSTOMER_ADVANCE"
+              ? Number(cashAmount || 0)
+              : refundAmount;
+
+          if (settledRefund > 0) {
+            await recordCustomerLedgerEntry(
+              {
+                customerId: targetCustId.toString(),
+                type: "ADVANCE_REFUND",
+                amount: settledRefund,
+                referenceType: "Return",
+                referenceId: returnTxNumber,
+                notes: `Rental Security Deposit Refund Paid (${chosenPaymentMethod} - ${returnTxNumber})`,
+                createdBy: processedBy || auth.user?.username || "system",
+              },
+              isTxActive ? session : undefined
+            );
+          }
+        }
+      } else {
+        await recordCustomerLedgerEntry(
+          {
+            customerId: targetCustId.toString(),
+            type: "RETURN_CREDIT",
+            amount: returnTotalValue,
+            referenceType: "Return",
+            referenceId: returnTxNumber,
+            notes: `Returned items against Invoice ${originalSale?.saleNumber || ""}`,
+            createdBy: processedBy || auth.user?.username || "system",
+          },
+          isTxActive ? session : undefined
+        );
+
+        if (replacementTotalValue > 0) {
+          await recordCustomerLedgerEntry(
+            {
+              customerId: targetCustId.toString(),
+              type: "INVOICE",
+              amount: replacementTotalValue,
+              referenceType: "Exchange",
+              referenceId: returnTxNumber,
+              notes: `Replacement items for ${returnTxNumber}`,
+              createdBy: processedBy || auth.user?.username || "system",
+            },
+            isTxActive ? session : undefined
+          );
+        }
+
+        if (netDifference > 0) {
+          const topUpPaid = netDifference;
+          if (topUpPaid > 0) {
+            await recordCustomerLedgerEntry(
+              {
+                customerId: targetCustId.toString(),
+                type: "PAYMENT",
+                amount: topUpPaid,
+                referenceType: "Exchange",
+                referenceId: returnTxNumber,
+                notes: `Exchange net top-up payment for ${returnTxNumber}`,
+                createdBy: processedBy || auth.user?.username || "system",
+              },
+              isTxActive ? session : undefined
+            );
+          }
+        } else if (netDifference < 0) {
+          const refundAmount = Math.abs(netDifference);
+          const chosenPaymentMethod = paymentMethod || "CASH";
+          const settledRefund =
+            chosenPaymentMethod === "STORE_CREDIT" || chosenPaymentMethod === "CUSTOMER_ADVANCE"
+              ? Number(cashAmount || 0)
+              : refundAmount;
+
+          if (settledRefund > 0) {
+            await recordCustomerLedgerEntry(
+              {
+                customerId: targetCustId.toString(),
+                type: "ADVANCE_REFUND",
+                amount: settledRefund,
+                referenceType: "Return",
+                referenceId: returnTxNumber,
+                notes: `Sales Return Net Refund Paid (${chosenPaymentMethod} - ${returnTxNumber})`,
+                createdBy: processedBy || auth.user?.username || "system",
+              },
+              isTxActive ? session : undefined
+            );
+          }
         }
       }
     }
@@ -716,51 +785,80 @@ export async function POST(request: Request) {
       }
     }
 
-    // Physical Cash Drawer Movements (Cash portion ONLY)
-    const activeCashSession = await CashSession.findOne({
-      location: targetLocationId,
-      cashier: processedBy || auth.user?.username || "system",
-      status: "OPEN",
-    });
-
+    // Physical Cash / Online Drawer Movements (Syncs Return/Exchange Collections & Refunds with Diary)
+    const actorUsername = processedBy || auth.user?.username || "system";
     const chosenPaymentMethod = paymentMethod || "CASH";
-    const actualCashPortion = chosenPaymentMethod === "CASH"
-      ? Math.abs(netDifference)
-      : Number(cashAmount || 0);
+    const isStoreCreditOnly =
+      chosenPaymentMethod === "STORE_CREDIT" || chosenPaymentMethod === "CUSTOMER_ADVANCE";
 
-    if (activeCashSession && actualCashPortion > 0) {
-      if (netDifference > 0) {
-        // Customer paid cash
-        await recordCashMovement(
-          {
-            sessionId: activeCashSession._id.toString(),
-            locationId: targetLocationId.toString(),
-            cashier: processedBy || auth.user?.username || "system",
-            type: "CASH_SALE",
-            amount: actualCashPortion,
-            direction: "IN",
-            referenceType: "Return",
-            referenceId: returnTxNumber,
-            notes: `Exchange net cash collection`,
-          },
-          isTxActive ? session : undefined
-        );
-      } else if (netDifference < 0) {
-        // Shop refunded cash
-        await recordCashMovement(
-          {
-            sessionId: activeCashSession._id.toString(),
-            locationId: targetLocationId.toString(),
-            cashier: processedBy || auth.user?.username || "system",
-            type: "CASH_REFUND",
-            amount: actualCashPortion,
-            direction: "OUT",
-            referenceType: "Return",
-            referenceId: returnTxNumber,
-            notes: `Return cash refund paid to customer`,
-          },
-          isTxActive ? session : undefined
-        );
+    const actualCashPortion =
+      chosenPaymentMethod === "CASH"
+        ? Math.abs(netDifference)
+        : Number(cashAmount || 0);
+    const actualBankPortion =
+      chosenPaymentMethod === "BANK_TRANSFER" || chosenPaymentMethod === "ONLINE_GATEWAY"
+        ? Math.abs(netDifference)
+        : Number(nonCashAmount || 0);
+
+    if (!isStoreCreditOnly && (actualCashPortion > 0 || (netDifference < 0 && actualBankPortion > 0))) {
+      const activeCashSession = await findOrAutoOpenCashSession(
+        targetLocationId.toString(),
+        actorUsername
+      );
+
+      if (activeCashSession) {
+        if (netDifference > 0 && actualCashPortion > 0) {
+          await recordCashMovement(
+            {
+              sessionId: activeCashSession._id.toString(),
+              locationId: targetLocationId.toString(),
+              cashier: actorUsername,
+              type: "CASH_SALE",
+              amount: actualCashPortion,
+              direction: "IN",
+              paymentMethod: "CASH",
+              referenceType: "Return",
+              referenceId: returnTxNumber,
+              notes: `Exchange net cash collection`,
+            },
+            isTxActive ? session : undefined
+          );
+        } else if (netDifference < 0) {
+          if (actualCashPortion > 0) {
+            await recordCashMovement(
+              {
+                sessionId: activeCashSession._id.toString(),
+                locationId: targetLocationId.toString(),
+                cashier: actorUsername,
+                type: "CASH_REFUND",
+                amount: actualCashPortion,
+                direction: "OUT",
+                paymentMethod: "CASH",
+                referenceType: "Return",
+                referenceId: returnTxNumber,
+                notes: `${action === "RENTAL_SWAP" ? "Rental Return / Swap Refund" : "Sales Return Refund"} (${returnTxNumber}) [CASH]`,
+              },
+              isTxActive ? session : undefined
+            );
+          }
+          if (actualBankPortion > 0) {
+            await recordCashMovement(
+              {
+                sessionId: activeCashSession._id.toString(),
+                locationId: targetLocationId.toString(),
+                cashier: actorUsername,
+                type: "CASH_REFUND",
+                amount: actualBankPortion,
+                direction: "OUT",
+                paymentMethod: "BANK_TRANSFER",
+                referenceType: "Return",
+                referenceId: returnTxNumber,
+                notes: `${action === "RENTAL_SWAP" ? "Rental Return / Swap Refund" : "Sales Return Refund"} (${returnTxNumber}) [BANK_TRANSFER]`,
+              },
+              isTxActive ? session : undefined
+            );
+          }
+        }
       }
     }
 

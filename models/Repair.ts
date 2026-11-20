@@ -32,7 +32,7 @@ export interface IRepair extends Document {
   adjustmentReason?: string;
   paidAmount: number; // Amount paid by customer
   balanceDue: number; // totalAmount - paidAmount
-  paymentMethod: "CASH" | "CARD" | "BANK_TRANSFER" | "ONLINE_GATEWAY";
+  paymentMethod: "CASH" | "CARD" | "BANK_TRANSFER" | "ONLINE_GATEWAY" | "SPLIT";
   status: RepairStatus;
   repairedBy: string; // Technician / Staff name who did the repair
   technicianId?: Types.ObjectId;
@@ -149,7 +149,7 @@ const RepairSchema: Schema = new Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["CASH", "CARD", "BANK_TRANSFER", "ONLINE_GATEWAY"],
+      enum: ["CASH", "CARD", "BANK_TRANSFER", "ONLINE_GATEWAY", "SPLIT"],
       default: "CASH",
     },
     status: {

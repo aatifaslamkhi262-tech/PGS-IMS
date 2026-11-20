@@ -38,6 +38,12 @@ interface InvoiceLineItem {
 interface InvoiceDetail {
   _id: string;
   invoiceNumber: string;
+  receivingType?: string;
+  intakePurpose?: string;
+  handledBySalesmanName?: string;
+  attachmentUrls?: string[];
+  customerName?: string;
+  customerPhone?: string;
   supplier: { _id: string; name: string; code: string; contactPerson?: string; phone?: string; email?: string; address?: string };
   invoiceDate: string;
   status:
@@ -601,6 +607,47 @@ export default function PurchaseInvoiceDetailPage() {
                   {new Date(invoice.invoiceDate).toLocaleDateString()}
                 </span>
               </div>
+
+              {invoice.handledBySalesmanName && (
+                <div>
+                  <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
+                    Handled By Salesman
+                  </span>
+                  <span className="font-bold text-indigo-300">{invoice.handledBySalesmanName}</span>
+                </div>
+              )}
+
+              {invoice.intakePurpose && (
+                <div>
+                  <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
+                    Intake Purpose
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                    {invoice.intakePurpose.replace("_", " ")}
+                  </span>
+                </div>
+              )}
+
+              {invoice.attachmentUrls && invoice.attachmentUrls.length > 0 && (
+                <div>
+                  <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    Attached Bill / Slip Pictures
+                  </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {invoice.attachmentUrls.map((url, idx) => (
+                      <a
+                        key={idx}
+                        href={url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block rounded-lg overflow-hidden border border-slate-700 hover:border-indigo-500"
+                      >
+                        <img src={url} alt={`Bill ${idx + 1}`} className="w-full h-24 object-cover" />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Notes */}
               {invoice.notes && (

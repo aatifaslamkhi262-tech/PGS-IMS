@@ -46,6 +46,7 @@ export default function HRPayrollPage() {
     "RELEASE" | "REOPEN" | null
   >(null);
   const [statusReason, setStatusReason] = useState("");
+  const [releasePaymentSource, setReleasePaymentSource] = useState<"NONE" | "SHOP_CASH" | "SHOP_ONLINE">("NONE");
   const [statusSubmitting, setStatusSubmitting] = useState(false);
 
   // Payslip Modal
@@ -70,6 +71,7 @@ export default function HRPayrollPage() {
   );
   const [advReason, setAdvReason] = useState("");
   const [advNotes, setAdvNotes] = useState("");
+  const [advPaymentSource, setAdvPaymentSource] = useState<"NONE" | "SHOP_CASH" | "SHOP_ONLINE">("NONE");
   const [advSubmitting, setAdvSubmitting] = useState(false);
 
   // Overtime Modal
@@ -278,6 +280,7 @@ export default function HRPayrollPage() {
           issueDate: advDate,
           reason: advReason.trim(),
           notes: advNotes.trim(),
+          paymentSource: advPaymentSource,
         }),
       });
       const json = await res.json();
@@ -288,6 +291,7 @@ export default function HRPayrollPage() {
         setAdvMonthly("");
         setAdvReason("");
         setAdvNotes("");
+        setAdvPaymentSource("NONE");
         fetchAdvances();
       } else {
         setError(json.error || "Failed to issue advance.");
@@ -356,6 +360,7 @@ export default function HRPayrollPage() {
           month: activePeriod.periodKey,
           action,
           reason: statusReason.trim(),
+          paymentSource: showStatusModal === "RELEASE" ? releasePaymentSource : "NONE",
         }),
       });
 
@@ -364,6 +369,7 @@ export default function HRPayrollPage() {
         setMessage(json.message);
         setShowStatusModal(null);
         setStatusReason("");
+        setReleasePaymentSource("NONE");
         fetchPayroll();
       } else {
         setError(json.error || "Action failed.");
@@ -918,6 +924,20 @@ export default function HRPayrollPage() {
                   />
                 </div>
               </div>
+              <div>
+                <label className="block text-slate-400 mb-1">
+                  Paid From (Cash / Online Diary Sync)
+                </label>
+                <select
+                  value={advPaymentSource}
+                  onChange={(e) => setAdvPaymentSource(e.target.value as any)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-slate-200"
+                >
+                  <option value="NONE">Owner / Separate HR Account (No Diary Entry)</option>
+                  <option value="SHOP_CASH">Shop Cash (Galla) -&gt; Auto Diary Expense</option>
+                  <option value="SHOP_ONLINE">Shop Online Bank -&gt; Auto Diary Expense</option>
+                </select>
+              </div>
               <div className="flex justify-end">
                 <button
                   type="submit"
@@ -1184,6 +1204,23 @@ export default function HRPayrollPage() {
                   required
                 />
               </div>
+
+              {showStatusModal === "RELEASE" && (
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    Salary Paid From (Optional Diary Sync)
+                  </label>
+                  <select
+                    value={releasePaymentSource}
+                    onChange={(e) => setReleasePaymentSource(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200"
+                  >
+                    <option value="NONE">Owner / Separate HR Fund (No Shop Diary Entry)</option>
+                    <option value="SHOP_CASH">Shop Cash (Galla) -&gt; Auto Salary Expense</option>
+                    <option value="SHOP_ONLINE">Shop Online Bank -&gt; Auto Salary Expense</option>
+                  </select>
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
                 <button

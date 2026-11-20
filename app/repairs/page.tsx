@@ -23,6 +23,13 @@ import {
   ThermalRepairSlipModal,
   RepairSlipData,
 } from "@/components/ThermalRepairSlipModal";
+import {
+  PaymentAllocationInput,
+  PaymentAllocationState,
+  createInitialPaymentState,
+  buildPaymentAllocations,
+  getPaymentAllocatedTotal,
+} from "@/components/PaymentAllocationInput";
 
 interface PartItem {
   productId: string;
@@ -49,8 +56,9 @@ export default function RepairsPage() {
   const [billAmount, setBillAmount] = useState<number | string>(0);
   const [repairCost, setRepairCost] = useState<number | string>(0);
   const [repairedBy, setRepairedBy] = useState("");
-  const [paidAmount, setPaidAmount] = useState<number | string>(0);
-  const [paymentMethod, setPaymentMethod] = useState<"CASH" | "CARD" | "BANK_TRANSFER">("CASH");
+  const [repairPayment, setRepairPayment] = useState<PaymentAllocationState>(() =>
+    createInitialPaymentState("CASH", 0)
+  );
   const [notes, setNotes] = useState("");
 
   // Used Parts State
@@ -89,8 +97,10 @@ export default function RepairsPage() {
   const [editPaidAmount, setEditPaidAmount] = useState<number>(0);
   const [editAdjustment, setEditAdjustment] = useState<number>(0);
   const [editAdjustmentReason, setEditAdjustmentReason] = useState<string>("");
-  const [editCollectAmount, setEditCollectAmount] = useState<number>(0);
-  const [editPaymentMethod, setEditPaymentMethod] = useState<string>("CASH");
+  const [editCollectPayment, setEditCollectPayment] = useState<PaymentAllocationState>(() =>
+    createInitialPaymentState("CASH", 0)
+  );
+  const [editRefundMethod, setEditRefundMethod] = useState<"CASH" | "BANK_TRANSFER" | "CARD">("CASH");
   const [editNotes, setEditNotes] = useState("");
   const [editSubmitting, setEditSubmitting] = useState(false);
 
@@ -278,7 +288,7 @@ export default function RepairsPage() {
   const totalAmount = numericBill > 0 ? numericBill : partsTotal;
   const totalCost = numericRepairCost;
   const estimatedProfit = totalAmount - totalCost;
-  const numericPaid = Math.max(0, Number(paidAmount || 0));
+  const numericPaid = Math.min(totalAmount, getPaymentAllocatedTotal(repairPayment, 0, true));
   const balanceDue = Math.max(0, totalAmount - numericPaid);
 
   // Reset Form
@@ -291,7 +301,7 @@ export default function RepairsPage() {
     setBillAmount(0);
     setRepairCost(0);
     setParts([]);
-    setPaidAmount(0);
+    setRepairPayment(createInitialPaymentState("CASH", 0));
     setNotes("");
     setError("");
   };
@@ -321,6 +331,14 @@ export default function RepairsPage() {
 
     setSubmitting(true);
     try {
+      const paymentAllocations = numericPaid > 0
+        ? buildPaymentAllocations(repairPayment, numericPaid, true)
+        : [];
+      const resolvedMethod =
+        paymentAllocations.length > 1
+          ? "SPLIT"
+          : (paymentAllocations[0]?.method || repairPayment.singleMethod || "CASH");
+
       const payload = {
         customerName: customerName.trim(),
         customerPhone: customerPhone.trim(),
@@ -336,7 +354,8 @@ export default function RepairsPage() {
           unitPrice: p.unitPrice,
         })),
         paidAmount: numericPaid,
-        paymentMethod,
+        paymentMethod: resolvedMethod,
+        paymentAllocations,
         repairedBy: repairedBy.trim() || currentUser?.name || currentUser?.username || "In-House Technician",
         locationId: selectedLocation,
         notes: notes.trim(),
@@ -439,8 +458,8 @@ export default function RepairsPage() {
     setEditAdjustment(0);
     setEditAdjustmentReason("");
     // Default collection amount to current balance due if any
-    setEditCollectAmount(r.balanceDue > 0 ? r.balanceDue : 0);
-    setEditPaymentMethod("CASH");
+    setEditCollectPayment(createInitialPaymentState("CASH", r.balanceDue > 0 ? r.balanceDue : 0));
+    setEditRefundMethod("CASH");
     setEditNotes(r.notes || "");
   };
 
@@ -448,6 +467,11 @@ export default function RepairsPage() {
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingRepair) return;
+
+    const collectTotal = getPaymentAllocatedTotal(editCollectPayment, 0, true);
+    const collectAllocations = collectTotal > 0
+      ? buildPaymentAllocations(editCollectPayment, collectTotal, true)
+      : [];
 
     setEditSubmitting(true);
     try {
@@ -465,10 +489,13 @@ export default function RepairsPage() {
           status: editStatus,
           totalAmount: editTotalAmount,
           repairCost: editRepairCost,
+          paidAmount: editPaidAmount,
+          refundPaymentMethod: editRefundMethod,
           adjustment: editAdjustment,
           adjustmentReason: editAdjustmentReason,
-          collectAmount: editCollectAmount,
-          paymentMethod: editPaymentMethod,
+          collectAmount: collectTotal,
+          paymentMethod: collectAllocations.length > 1 ? "SPLIT" : (collectAllocations[0]?.method || editCollectPayment.singleMethod),
+          paymentAllocations: collectAllocations,
           notes: editNotes,
         }),
       });
@@ -880,35 +907,17 @@ export default function RepairsPage() {
               </div>
 
               {/* Payment Settlement Fields */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1 font-semibold">
-                    Customer Paid Amount (Rs.)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="0"
-                    value={paidAmount}
-                    onChange={(e) => setPaidAmount(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-100 font-mono font-bold focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1 font-semibold">
-                    Payment Method
-                  </label>
-                  <select
-                    value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value as any)}
-                    className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-100 font-semibold focus:outline-none focus:border-emerald-500 cursor-pointer"
-                  >
-                    <option value="CASH">CASH (Physical Drawer)</option>
-                    <option value="CARD">CARD / POS Machine</option>
-                    <option value="BANK_TRANSFER">BANK TRANSFER / Online</option>
-                  </select>
-                </div>
+              <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
+                <PaymentAllocationInput
+                  value={repairPayment}
+                  onChange={setRepairPayment}
+                  targetAmount={totalAmount}
+                  allowEditableSingleAmount={true}
+                  includeExchangeCredit={false}
+                  label="Customer Payment (Single / Split):"
+                  singleAmountLabel="Customer Paid Amount (PKR)"
+                  accent="indigo"
+                />
               </div>
 
               {/* Outstanding Balance Banner */}
@@ -1235,7 +1244,7 @@ export default function RepairsPage() {
                         const newTotal = Math.max(0, parseFloat(e.target.value) || 0);
                         setEditTotalAmount(newTotal);
                         const newDue = Math.max(0, newTotal - editPaidAmount + editAdjustment);
-                        setEditCollectAmount(newDue);
+                        setEditCollectPayment((prev) => ({ ...prev, singleAmount: newDue }));
                       }}
                       className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-slate-100 focus:outline-none focus:border-indigo-500"
                     />
@@ -1255,17 +1264,42 @@ export default function RepairsPage() {
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-400 mb-1 font-semibold">
-                      Already Paid (Rs.)
+                      Paid Amount (Rs.)
                     </label>
                     <input
                       type="number"
-                      disabled
+                      min="0"
+                      max={editingRepair?.paidAmount || 0}
                       value={editPaidAmount}
-                      className="w-full bg-slate-900/60 border border-slate-800 text-slate-400 rounded-lg px-2.5 py-1.5 text-xs font-mono"
-                      title="Amount already received previously"
+                      onChange={(e) => {
+                        const maxOrig = Number(editingRepair?.paidAmount || 0);
+                        const nextPaid = Math.max(0, Math.min(maxOrig, parseFloat(e.target.value) || 0));
+                        setEditPaidAmount(nextPaid);
+                        const newDue = Math.max(0, editTotalAmount - nextPaid + editAdjustment);
+                        setEditCollectPayment((prev) => ({ ...prev, singleAmount: newDue }));
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700 text-slate-100 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none focus:border-amber-500"
+                      title="Lower this if refunding previous repair payment"
                     />
                   </div>
                 </div>
+
+                {editPaidAmount < Number(editingRepair?.paidAmount || 0) && (
+                  <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-rose-300">
+                      Refund to Customer: Rs. {(Number(editingRepair?.paidAmount || 0) - editPaidAmount).toLocaleString()}
+                    </span>
+                    <select
+                      value={editRefundMethod}
+                      onChange={(e) => setEditRefundMethod(e.target.value as any)}
+                      className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-100 font-semibold"
+                    >
+                      <option value="CASH">Cash (Galla Refund)</option>
+                      <option value="BANK_TRANSFER">Bank / Online Refund</option>
+                      <option value="CARD">Card Refund</option>
+                    </select>
+                  </div>
+                )}
 
                 {/* Settlement Adjustment Field (Single Field for Minus / Plus) */}
                 <div className="pt-2 border-t border-slate-800 space-y-2">
@@ -1290,7 +1324,7 @@ export default function RepairsPage() {
                         const adj = e.target.value === "" ? 0 : parseFloat(e.target.value) || 0;
                         setEditAdjustment(adj);
                         const newDue = Math.max(0, editTotalAmount - editPaidAmount + adj);
-                        setEditCollectAmount(newDue);
+                        setEditCollectPayment((prev) => ({ ...prev, singleAmount: newDue }));
                       }}
                       className={`w-full bg-slate-900 border rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none transition-colors ${
                         editAdjustment < 0
@@ -1314,38 +1348,18 @@ export default function RepairsPage() {
                     </div>
                   )}
 
-                  {/* Immediate Collection Row */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                    <div>
-                      <label className="block text-[10px] text-slate-400 mb-1 font-semibold flex items-center justify-between">
-                        <span>Collect Now (Rs.)</span>
-                        <span className="text-[10px] text-emerald-400 font-mono font-bold">
-                          Net Due: Rs. {Math.max(0, editTotalAmount - editPaidAmount + editAdjustment).toLocaleString()}
-                        </span>
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={editCollectAmount}
-                        onChange={(e) => setEditCollectAmount(Math.max(0, parseFloat(e.target.value) || 0))}
-                        className="w-full bg-slate-900 border border-slate-700 text-emerald-400 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-400 mb-1 font-semibold">
-                        Payment Method
-                      </label>
-                      <select
-                        value={editPaymentMethod}
-                        onChange={(e) => setEditPaymentMethod(e.target.value)}
-                        disabled={editCollectAmount <= 0}
-                        className="w-full bg-slate-900 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50"
-                      >
-                        <option value="CASH">💵 CASH (Physical Drawer)</option>
-                        <option value="CARD">💳 CARD / POS Machine</option>
-                        <option value="BANK_TRANSFER">🏦 BANK TRANSFER / Online</option>
-                      </select>
-                    </div>
+                  {/* Immediate Collection Row (Single or Split) */}
+                  <div className="pt-1">
+                    <PaymentAllocationInput
+                      value={editCollectPayment}
+                      onChange={setEditCollectPayment}
+                      targetAmount={Math.max(0, editTotalAmount - editPaidAmount + editAdjustment)}
+                      allowEditableSingleAmount={true}
+                      includeExchangeCredit={false}
+                      label={`Collect Now (Net Due: Rs. ${Math.max(0, editTotalAmount - editPaidAmount + editAdjustment).toLocaleString()}):`}
+                      singleAmountLabel="Collect Amount (Rs.)"
+                      accent="indigo"
+                    />
                   </div>
                 </div>
               </div>

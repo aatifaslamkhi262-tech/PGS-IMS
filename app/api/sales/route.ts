@@ -154,6 +154,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Sale must contain at least 1 item." }, { status: 400 });
     }
 
+    if (directComplete && (!paymentAllocations || !Array.isArray(paymentAllocations) || paymentAllocations.length === 0)) {
+      if (idempotencyKeyHeader) await failIdempotencyKey(idempotencyKeyHeader);
+      return NextResponse.json({ success: false, error: "Payment allocations are required for direct completion." }, { status: 400 });
+    }
+
     const sId = salesmanId || (auth.user.role === "Salesman" ? (auth.user as any)._id?.toString() : undefined);
     let sName = salesmanName || (auth.user.role === "Salesman" ? (auth.user as any).name : undefined);
 
@@ -183,28 +188,6 @@ export async function POST(req: NextRequest) {
       createdBy: auth.user.username,
     });
 
-    // Trigger instant email alert for online sales (non-blocking)
-    if (["WEBSITE", "WHATSAPP", "INSTAGRAM", "PHONE"].includes(source)) {
-      sendOwnerOrderAlert({
-        saleNumber: createResult.sale.saleNumber,
-        saleSource: createResult.sale.saleSource,
-        customerName: createResult.sale.customerName,
-        customerPhone: createResult.sale.customerPhone,
-        items: (createResult.sale.items || []).map((it: any) => ({
-          productName: it.productName,
-          condition: it.condition,
-          quantity: it.quantity,
-          unitPrice: it.unitPrice,
-          lineTotal: it.lineTotal,
-        })),
-        subtotal: createResult.sale.subtotal,
-        deliveryCharges: createResult.sale.deliveryCharges,
-        totalAmount: createResult.sale.totalAmount,
-        notes: createResult.sale.notes,
-        createdAt: createResult.sale.createdAt,
-      }).catch((err) => console.error("[SalesAPI] Email alert error:", err));
-    }
-
     if (createResult.isDuplicate) {
       const respData = {
         success: true,
@@ -216,13 +199,48 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(respData);
     }
 
+    const triggerOnlineEmailAlert = () => {
+      if (["WEBSITE", "WHATSAPP", "INSTAGRAM", "PHONE"].includes(source)) {
+        sendOwnerOrderAlert({
+          saleNumber: createResult.sale.saleNumber,
+          saleSource: createResult.sale.saleSource,
+          customerName: createResult.sale.customerName,
+          customerPhone: createResult.sale.customerPhone,
+          items: (createResult.sale.items || []).map((it: any) => ({
+            productName: it.productName,
+            condition: it.condition,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            lineTotal: it.lineTotal,
+          })),
+          subtotal: createResult.sale.subtotal,
+          deliveryCharges: createResult.sale.deliveryCharges,
+          totalAmount: createResult.sale.totalAmount,
+          notes: createResult.sale.notes,
+          createdAt: createResult.sale.createdAt,
+        }).catch((err) => console.error("[SalesAPI] Email alert error:", err));
+      }
+    };
+
     if (directComplete && paymentAllocations && Array.isArray(paymentAllocations)) {
-      const completeResult = await completeSale({
-        saleId: createResult.sale._id.toString(),
-        completedBy: auth.user.username,
-        paymentAllocations,
-        notes,
-      });
+      let completeResult: Awaited<ReturnType<typeof completeSale>>;
+      try {
+        completeResult = await completeSale({
+          saleId: createResult.sale._id.toString(),
+          completedBy: auth.user.username,
+          paymentAllocations,
+          notes,
+        });
+      } catch (completeErr) {
+        // Prevent orphaned PAYMENT_PENDING ghost records in the queue when a Direct POS checkout fails
+        await Sale.deleteOne({
+          _id: createResult.sale._id,
+          status: { $ne: "COMPLETED" },
+        }).catch(() => {});
+        throw completeErr;
+      }
+
+      triggerOnlineEmailAlert();
 
       const respData = {
         success: true,
@@ -233,6 +251,8 @@ export async function POST(req: NextRequest) {
       if (idempotencyKeyHeader) await completeIdempotencyKey(idempotencyKeyHeader, 200, respData);
       return NextResponse.json(respData);
     }
+
+    triggerOnlineEmailAlert();
 
     const respData = {
       success: true,

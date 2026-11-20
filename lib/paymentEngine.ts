@@ -1,3 +1,4 @@
+import { ClientSession } from "mongoose";
 import { dbConnect } from "@/lib/db";
 import { Payment, PaymentMethod, PaymentStatus } from "@/models/Payment";
 import { Invoice } from "@/models/Invoice";
@@ -13,19 +14,20 @@ export interface RecordPaymentInput {
   locationId: string;
   paymentMethod: PaymentMethod;
   amount: number;
+  paymentNumber?: string;
   referenceNumber?: string;
   notes?: string;
   receivedBy: string;
 }
 
-export async function recordPayment(input: RecordPaymentInput) {
+export async function recordPayment(input: RecordPaymentInput, session?: ClientSession) {
   await dbConnect();
 
   if (input.amount <= 0) {
     throw new Error("Payment amount must be greater than 0.");
   }
 
-  const paymentNumber = await generatePaymentNumber();
+  const paymentNumber = input.paymentNumber || (await generatePaymentNumber(session));
 
   const payment = new Payment({
     paymentNumber,
@@ -41,19 +43,26 @@ export async function recordPayment(input: RecordPaymentInput) {
     status: "PAID",
   });
 
-  await payment.save();
+  if (session) {
+    await payment.save({ session });
+  } else {
+    await payment.save();
+  }
 
   // Single source of truth for Customer Ledger entry & advance balance updates
   if (input.paymentMethod === "CUSTOMER_ADVANCE" && input.customerId) {
-    await recordCustomerLedgerEntry({
-      customerId: input.customerId,
-      type: "ADVANCE_DEPOSIT",
-      amount: input.amount,
-      referenceType: "Payment",
-      referenceId: payment.paymentNumber,
-      notes: input.notes?.trim() || `Customer Advance Payment (${payment.paymentNumber})`,
-      createdBy: input.receivedBy,
-    });
+    await recordCustomerLedgerEntry(
+      {
+        customerId: input.customerId,
+        type: "ADVANCE_DEPOSIT",
+        amount: input.amount,
+        referenceType: "Payment",
+        referenceId: payment.paymentNumber,
+        notes: input.notes?.trim() || `Customer Advance Payment (${payment.paymentNumber})`,
+        createdBy: input.receivedBy,
+      },
+      session
+    );
   }
 
   return payment;

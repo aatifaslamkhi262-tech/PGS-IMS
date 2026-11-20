@@ -4,7 +4,52 @@ import { verifyRole } from "@/lib/auth/rbac";
 import { Repair } from "@/models/Repair";
 import { Payment } from "@/models/Payment";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
-import { generatePaymentNumber } from "@/lib/salesEngine";
+import { nextSequentialPaymentNumber } from "@/lib/salesEngine";
+import { findOrAutoOpenCashSession, recordCashMovement } from "@/lib/cashSessionEngine";
+
+async function recordRepairCollections(params: {
+  repair: any;
+  allocations: Array<{ method: string; amount: number; referenceNumber?: string }>;
+  actorUsername: string;
+  notesPrefix: string;
+}) {
+  const { repair, allocations, actorUsername, notesPrefix } = params;
+  const totalCollected = allocations.reduce((s, a) => s + a.amount, 0);
+  if (totalCollected <= 0) return;
+
+  repair.paidAmount += totalCollected;
+  const summaryMethod =
+    allocations.length > 1 ? "SPLIT" : allocations[0]?.method || "CASH";
+
+  if (repair.customer) {
+    await recordCustomerLedgerEntry({
+      customerId: repair.customer,
+      type: "PAYMENT",
+      amount: totalCollected,
+      referenceType: "Repair",
+      referenceId: repair.repairNumber,
+      notes: `${notesPrefix} (${repair.repairNumber}) via ${summaryMethod}`,
+      createdBy: actorUsername,
+    });
+  }
+
+  const usedPaymentNums = new Set<string>();
+  for (const alloc of allocations) {
+    const paymentNumber = await nextSequentialPaymentNumber(usedPaymentNums);
+    const payment = new Payment({
+      paymentNumber,
+      customer: repair.customer,
+      location: repair.location,
+      paymentMethod: alloc.method,
+      amount: alloc.amount,
+      referenceNumber: alloc.referenceNumber,
+      notes: `${notesPrefix} ${repair.repairNumber} - ${repair.productName}`,
+      receivedBy: actorUsername,
+      status: "PAID",
+    });
+    await payment.save();
+  }
+}
 
 export async function GET(
   req: NextRequest,
@@ -52,13 +97,30 @@ export async function PUT(
     }
 
     const body = await req.json().catch(() => ({}));
-    const { action, collectAmount, paymentMethod = "CASH", status } = body;
+    const { action, collectAmount, paymentMethod = "CASH", paymentAllocations, status } = body;
+
+    const sanitizeAllocations = (fallbackAmount: number, fallbackMethod: string) => {
+      if (Array.isArray(paymentAllocations) && paymentAllocations.length > 0) {
+        return paymentAllocations
+          .filter((a: any) => Number(a?.amount || 0) > 0)
+          .map((a: any) => ({
+            method: String(a.method || "CASH"),
+            amount: Number(a.amount || 0),
+            referenceNumber: a.referenceNumber ? String(a.referenceNumber) : undefined,
+          }));
+      }
+      return fallbackAmount > 0
+        ? [{ method: fallbackMethod || "CASH", amount: fallbackAmount, referenceNumber: undefined }]
+        : [];
+    };
 
     // Action 1: Collect Remaining Balance & Settlement Adjustment
     if (action === "COLLECT_BALANCE") {
       const adjustment = Number(body.adjustment || 0); // Negative = Discount/Waiver, Positive = Extra Charge/Surcharge
       const adjustmentReason = String(body.adjustmentReason || "").trim();
-      const amountToCollect = Math.max(0, Number(collectAmount !== undefined ? collectAmount : repair.balanceDue));
+      const rawCollect = Math.max(0, Number(collectAmount !== undefined ? collectAmount : repair.balanceDue));
+      const collectAllocs = sanitizeAllocations(rawCollect, paymentMethod);
+      const amountToCollect = collectAllocs.reduce((s, a) => s + a.amount, 0);
 
       if (amountToCollect <= 0 && adjustment === 0) {
         return NextResponse.json(
@@ -80,10 +142,9 @@ export async function PUT(
         // Ledger record for adjustment (if customer linked)
         if (repair.customer) {
           if (adjustment < 0) {
-            // Discount / Settlement Waiver
             await recordCustomerLedgerEntry({
               customerId: repair.customer,
-              type: "PAYMENT", // credits customer to offset discount
+              type: "PAYMENT",
               amount: Math.abs(adjustment),
               referenceType: "Repair",
               referenceId: repair.repairNumber,
@@ -91,10 +152,9 @@ export async function PUT(
               createdBy: auth.user.username,
             });
           } else {
-            // Surcharge / Extra Charges
             await recordCustomerLedgerEntry({
               customerId: repair.customer,
-              type: "INVOICE", // debits customer for additional charge
+              type: "INVOICE",
               amount: adjustment,
               referenceType: "Repair",
               referenceId: repair.repairNumber,
@@ -105,36 +165,14 @@ export async function PUT(
         }
       }
 
-      // 2. Process Collected Payment (Cash/Card into Cash Drawer)
+      // 2. Process Collected Payment (Single or Split)
       if (amountToCollect > 0) {
-        repair.paidAmount += amountToCollect;
-
-        // Record in Customer Ledger
-        if (repair.customer) {
-          await recordCustomerLedgerEntry({
-            customerId: repair.customer,
-            type: "PAYMENT",
-            amount: amountToCollect,
-            referenceType: "Repair",
-            referenceId: repair.repairNumber,
-            notes: `Remaining balance collection for Repair ${repair.repairNumber} via ${paymentMethod}`,
-            createdBy: auth.user.username,
-          });
-        }
-
-        // Record in Payment for Cash Register / Daily Closing
-        const paymentNumber = await generatePaymentNumber();
-        const payment = new Payment({
-          paymentNumber,
-          customer: repair.customer,
-          location: repair.location,
-          paymentMethod,
-          amount: amountToCollect,
-          notes: `Repair Balance Collection ${repair.repairNumber} - ${repair.productName}${adjustment !== 0 ? ` (Adj: ${adjustment > 0 ? `+Rs. ${adjustment}` : `-Rs. ${Math.abs(adjustment)}`})` : ""}`,
-          receivedBy: auth.user.username,
-          status: "PAID",
+        await recordRepairCollections({
+          repair,
+          allocations: collectAllocs,
+          actorUsername: auth.user.username,
+          notesPrefix: `Repair Balance Collection${adjustment !== 0 ? ` (Adj: ${adjustment > 0 ? `+Rs. ${adjustment}` : `-Rs. ${Math.abs(adjustment)}`})` : ""}`,
         });
-        await payment.save();
       }
 
       // Recalculate balance due
@@ -249,35 +287,59 @@ export async function PUT(
         }
       }
 
-      // 3. Process Immediate Payment Collection (if any)
-      const numCollect = Math.max(0, Number(collectAmount || 0));
-      if (numCollect > 0) {
-        repair.paidAmount += numCollect;
+      // 3. Process Payment Refund (if paidAmount was reduced) or Immediate Collection
+      const oldPaid = Number(repair.paidAmount || 0);
+      const requestedPaid =
+        body.paidAmount !== undefined && body.paidAmount !== null
+          ? Math.max(0, Number(body.paidAmount))
+          : oldPaid;
+
+      if (requestedPaid < oldPaid) {
+        const refundDiff = Math.round((oldPaid - requestedPaid) * 100) / 100;
+        const refundMethod = String(body.refundPaymentMethod || paymentMethod || "CASH");
+        repair.paidAmount = requestedPaid;
 
         if (repair.customer) {
           await recordCustomerLedgerEntry({
             customerId: repair.customer,
-            type: "PAYMENT",
-            amount: numCollect,
-            referenceType: "Repair",
+            type: "ADVANCE_REFUND",
+            amount: refundDiff,
+            referenceType: "Refund",
             referenceId: repair.repairNumber,
-            notes: `Payment collection for Repair ${repair.repairNumber} via ${paymentMethod}`,
+            notes: `Repair payment refund / edit adjustment for ${repair.repairNumber} via ${refundMethod}`,
             createdBy: auth.user.username,
           });
         }
 
-        const paymentNumber = await generatePaymentNumber();
-        const payment = new Payment({
-          paymentNumber,
-          customer: repair.customer,
-          location: repair.location,
-          paymentMethod,
-          amount: numCollect,
-          notes: `Repair Collection ${repair.repairNumber} - ${repair.productName}${numAdjustment !== 0 ? ` (Adj: ${numAdjustment > 0 ? `+Rs. ${numAdjustment}` : `-Rs. ${Math.abs(numAdjustment)}`})` : ""}`,
-          receivedBy: auth.user.username,
-          status: "PAID",
+        const activeCashSession = await findOrAutoOpenCashSession(
+          repair.location.toString(),
+          auth.user.username
+        );
+        if (activeCashSession) {
+          await recordCashMovement({
+            sessionId: activeCashSession._id.toString(),
+            locationId: repair.location.toString(),
+            cashier: auth.user.username,
+            type: "CASH_REFUND",
+            amount: refundDiff,
+            direction: "OUT",
+            paymentMethod: refundMethod,
+            referenceType: "Return",
+            referenceId: repair.repairNumber,
+            notes: `Repair Refund (${repair.repairNumber} - ${repair.productName}) [${refundMethod}]`,
+          });
+        }
+      }
+
+      const collectAllocs = sanitizeAllocations(Math.max(0, Number(collectAmount || 0)), paymentMethod);
+      const numCollect = collectAllocs.reduce((s, a) => s + a.amount, 0);
+      if (numCollect > 0) {
+        await recordRepairCollections({
+          repair,
+          allocations: collectAllocs,
+          actorUsername: auth.user.username,
+          notesPrefix: `Repair Collection${numAdjustment !== 0 ? ` (Adj: ${numAdjustment > 0 ? `+Rs. ${numAdjustment}` : `-Rs. ${Math.abs(numAdjustment)}`})` : ""}`,
         });
-        await payment.save();
       }
 
       // 4. Update Status and Balance Due

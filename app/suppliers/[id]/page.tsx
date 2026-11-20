@@ -755,7 +755,15 @@ export default function SupplierDetailPage() {
   const [canEdit, setCanEdit] = useState(false);
 
   const [editOpen, setEditOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"invoices" | "products">("invoices");
+  const [activeTab, setActiveTab] = useState<"invoices" | "products" | "ledger">("invoices");
+  const [ledgerEntries, setLedgerEntries] = useState<any[]>([]);
+  const [currentOutstanding, setCurrentOutstanding] = useState<number>(0);
+  const [ledgerType, setLedgerType] = useState<"PAYMENT" | "SR_RETURN">("PAYMENT");
+  const [ledgerParticulars, setLedgerParticulars] = useState("");
+  const [ledgerAmount, setLedgerAmount] = useState("");
+  const [ledgerBank, setLedgerBank] = useState("");
+  const [ledgerTid, setLedgerTid] = useState("");
+  const [savingLedger, setSavingLedger] = useState(false);
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
@@ -818,9 +826,81 @@ export default function SupplierDetailPage() {
     }
   }, [id]);
 
+  const fetchLedger = useCallback(async () => {
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/suppliers/${id}/ledger`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        setLedgerEntries(data.data.entries || []);
+        setCurrentOutstanding(Number(data.data.currentOutstanding || 0));
+      }
+    } catch {
+      // ignore if role lacks cost permission
+    }
+  }, [id]);
+
   useEffect(() => {
     fetchHistory();
-  }, [fetchHistory]);
+    fetchLedger();
+  }, [fetchHistory, fetchLedger]);
+
+  const handleAddLedgerEntry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = Number(ledgerAmount);
+    if (!amt || amt <= 0) {
+      addToast("error", "Please enter an amount greater than 0.");
+      return;
+    }
+    setSavingLedger(true);
+    try {
+      const res = await fetch(`/api/suppliers/${id}/ledger`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: ledgerType,
+          particulars: ledgerParticulars.trim() || undefined,
+          amount: amt,
+          paymentMethod: ledgerType === "SR_RETURN" ? "SR_RETURN" : "ONLINE",
+          bankName: ledgerBank.trim() || undefined,
+          transactionId: ledgerTid.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        addToast("success", ledgerType === "SR_RETURN" ? "Stock Return (S/R) recorded!" : "Supplier payment recorded!");
+        setLedgerParticulars("");
+        setLedgerAmount("");
+        setLedgerBank("");
+        setLedgerTid("");
+        fetchLedger();
+      } else {
+        addToast("error", data.error || "Failed to record ledger entry.");
+      }
+    } catch {
+      addToast("error", "Network error.");
+    } finally {
+      setSavingLedger(false);
+    }
+  };
+
+  const handleDeleteLedgerEntry = async (entryId: string) => {
+    if (!confirm("Remove this ledger entry?")) return;
+    try {
+      const res = await fetch(`/api/suppliers/${id}/ledger?entryId=${entryId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (data.success) {
+        addToast("success", "Ledger entry removed.");
+        fetchLedger();
+      } else {
+        addToast("error", data.error || "Failed to remove entry.");
+      }
+    } catch {
+      addToast("error", "Network error.");
+    }
+  };
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -957,7 +1037,7 @@ export default function SupplierDetailPage() {
 
       {/* ── Purchase Statistics ───────────────────────────────────────────── */}
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {/* Total Invoices */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col gap-1">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
@@ -1006,13 +1086,26 @@ export default function SupplierDetailPage() {
 
           {/* Total Purchase Value — privileged roles only */}
           {canSeeCosts && stats.totalPurchaseValue !== undefined && (
-            <div className="bg-slate-900 border border-indigo-500/20 rounded-xl p-4 flex flex-col gap-1 sm:col-span-1 lg:col-span-1">
+            <div className="bg-slate-900 border border-indigo-500/20 rounded-xl p-4 flex flex-col gap-1">
               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
                 <BarChart2 className="w-3.5 h-3.5" />
                 Total Value
               </span>
               <span className="text-xl font-bold text-indigo-300">
                 PKR {formatCurrency(stats.totalPurchaseValue)}
+              </span>
+            </div>
+          )}
+
+          {/* Current Outstanding Balance — privileged roles only */}
+          {canSeeCosts && (
+            <div className="bg-slate-900 border border-rose-500/30 bg-rose-500/5 rounded-xl p-4 flex flex-col gap-1">
+              <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider flex items-center gap-1">
+                <AlertCircle className="w-3.5 h-3.5" />
+                Current Outstanding
+              </span>
+              <span className="text-xl font-bold text-rose-300">
+                PKR {formatCurrency(currentOutstanding)}
               </span>
             </div>
           )}
@@ -1078,6 +1171,21 @@ export default function SupplierDetailPage() {
                 Product Purchase History
               </span>
             </button>
+            {canSeeCosts && (
+              <button
+                onClick={() => setActiveTab("ledger")}
+                className={`px-4 py-2.5 text-xs font-semibold rounded-t-lg transition-colors cursor-pointer border-b-2 -mb-px ${
+                  activeTab === "ledger"
+                    ? "border-indigo-500 text-indigo-400"
+                    : "border-transparent text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <BarChart2 className="w-3.5 h-3.5" />
+                  Vendor Ledger (Dr / Cr / Balance)
+                </span>
+              </button>
+            )}
           </div>
 
           {/* Tab Content */}
@@ -1098,6 +1206,175 @@ export default function SupplierDetailPage() {
               invoices={invoices}
               canSeeCosts={canSeeCosts}
             />
+          )}
+
+          {activeTab === "ledger" && canSeeCosts && (
+            <div className="space-y-4">
+              {/* Quick Record Payment / S/R Return Form */}
+              <form
+                onSubmit={handleAddLedgerEntry}
+                className="bg-slate-900 border border-slate-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-12 gap-3 items-end"
+              >
+                <div className="md:col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Entry Type
+                  </label>
+                  <select
+                    value={ledgerType}
+                    onChange={(e) => setLedgerType(e.target.value as "PAYMENT" | "SR_RETURN")}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 font-semibold"
+                  >
+                    <option value="PAYMENT">Payment Sent (Cr)</option>
+                    <option value="SR_RETURN">S/R Stock Return (Cr)</option>
+                  </select>
+                </div>
+
+                <div className="md:col-span-4">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Particulars / Description
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={
+                      ledgerType === "SR_RETURN"
+                        ? "e.g. 5x PS4 CD GTA 5 (Used) (4800x5)"
+                        : "e.g. Online Payment (Meezan Bank)"
+                    }
+                    value={ledgerParticulars}
+                    onChange={(e) => setLedgerParticulars(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Bank / TID Ref
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Meezan #88392"
+                    value={ledgerTid}
+                    onChange={(e) => setLedgerTid(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Amount (PKR) *
+                  </label>
+                  <input
+                    type="number"
+                    placeholder="50,000"
+                    value={ledgerAmount}
+                    onChange={(e) => setLedgerAmount(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono font-bold"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <button
+                    type="submit"
+                    disabled={savingLedger}
+                    className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-lg transition"
+                  >
+                    {savingLedger ? "Saving..." : "+ Record Entry"}
+                  </button>
+                </div>
+              </form>
+
+              {/* Vendor Ledger Table */}
+              <div className="overflow-x-auto border border-slate-800 rounded-xl bg-slate-900">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-slate-950 border-b border-slate-800 text-slate-400">
+                      <th className="text-left px-4 py-3 font-semibold">Date</th>
+                      <th className="text-left px-4 py-3 font-semibold">Particulars / Ref #</th>
+                      <th className="text-center px-3 py-3 font-semibold">Type</th>
+                      <th className="text-right px-4 py-3 font-semibold">Debit (Bill In)</th>
+                      <th className="text-right px-4 py-3 font-semibold">Credit (Payment / S/R Return)</th>
+                      <th className="text-right px-4 py-3 font-semibold">Running Balance</th>
+                      <th className="text-center px-4 py-3 font-semibold">Bill Photo / Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {ledgerEntries.map((row) => (
+                      <tr key={row._id} className="hover:bg-slate-950/50">
+                        <td className="px-4 py-3 text-slate-300 font-mono">
+                          {formatDate(row.date)}
+                        </td>
+                        <td className="px-4 py-3 font-semibold text-slate-200">
+                          {row.invoiceId ? (
+                            <Link
+                              href={`/purchase-invoices/${row.invoiceId}`}
+                              className="text-indigo-400 hover:text-indigo-300"
+                            >
+                              {row.particulars}
+                            </Link>
+                          ) : (
+                            <span>{row.particulars}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-center">
+                          {row.type === "BILL_IN" ? (
+                            <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                              BILL IN
+                            </span>
+                          ) : row.type === "SR_RETURN" ? (
+                            <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+                              S/R RETURN
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                              PAYMENT
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono font-semibold text-slate-200">
+                          {row.debit > 0 ? `PKR ${formatCurrency(row.debit)}` : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono font-semibold text-emerald-400">
+                          {row.credit > 0 ? `PKR ${formatCurrency(row.credit)}` : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono font-bold text-slate-100">
+                          PKR {formatCurrency(row.runningBalance)}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {row.invoiceId ? (
+                            <Link
+                              href={`/purchase-invoices/${row.invoiceId}`}
+                              className="px-2.5 py-1 rounded text-[11px] font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/20"
+                            >
+                              View Bill Photo
+                            </Link>
+                          ) : (
+                            <div className="flex items-center justify-center gap-2">
+                              {row.type === "SR_RETURN" ? (
+                                <span className="px-2.5 py-1 rounded text-[11px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">
+                                  Return Slip
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                  Verified
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteLedgerEntry(row._id)}
+                                title="Delete Entry"
+                                className="p-1 text-slate-500 hover:text-rose-400 transition cursor-pointer"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           )}
         </div>
       )}

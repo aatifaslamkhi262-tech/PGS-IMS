@@ -29,9 +29,15 @@ import { PurchaseReturnReceiptModal } from "@/components/PurchaseReturnReceiptMo
 interface InvoiceItem {
   _id: string;
   invoiceNumber: string;
-  supplier: { _id: string; name: string; code: string };
+  receivingType?: "SUPPLIER_PURCHASE" | "CUSTOMER_BUYBACK" | "CUSTOMER_RETURN";
+  intakePurpose?: "SUPPLIER_PURCHASE" | "DIRECT_BUYBACK" | "EXCHANGE_INTAKE";
+  supplier?: { _id: string; name: string; code: string };
+  customerName?: string;
+  customerPhone?: string;
+  handledBySalesman?: { _id: string; name?: string; username: string };
+  handledBySalesmanName?: string;
   invoiceDate: string;
-  status: "Draft" | "Pending_Approval" | "Approved" | "Rejected";
+  status: string;
   total: number;
   createdBy: string;
   createdAt: string;
@@ -40,6 +46,7 @@ interface InvoiceItem {
 export default function PurchaseInvoicesPage() {
   const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
   const [suppliers, setSuppliers] = useState<{ _id: string; name: string }[]>([]);
+  const [staffList, setStaffList] = useState<{ _id: string; name?: string; username: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [userRole, setUserRole] = useState("");
@@ -49,6 +56,8 @@ export default function PurchaseInvoicesPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedSupplier, setSelectedSupplier] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("");
+  const [selectedPurpose, setSelectedPurpose] = useState("");
+  const [selectedSalesman, setSelectedSalesman] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
@@ -114,13 +123,22 @@ export default function PurchaseInvoicesPage() {
     fetchSession();
   }, []);
 
-  // Fetch suppliers for filter dropdown
+  // Fetch suppliers & staff for filter dropdowns
   const fetchSuppliers = async () => {
     try {
-      const res = await fetch("/api/suppliers?activeOnly=true");
-      const data = await res.json();
+      const [supRes, staffRes] = await Promise.all([
+        fetch("/api/suppliers?activeOnly=true"),
+        fetch("/api/users/active").catch(() => null),
+      ]);
+      const data = await supRes.json();
       if (data.success) {
         setSuppliers(data.data);
+      }
+      if (staffRes) {
+        const sData = await staffRes.json().catch(() => ({}));
+        if (sData.success && Array.isArray(sData.data)) {
+          setStaffList(sData.data);
+        }
       }
     } catch {
       console.error("Failed to load suppliers for filters");
@@ -135,6 +153,8 @@ export default function PurchaseInvoicesPage() {
       if (debouncedSearch.trim()) params.append("search", debouncedSearch.trim());
       if (selectedSupplier) params.append("supplier", selectedSupplier);
       if (selectedStatus) params.append("status", selectedStatus);
+      if (selectedPurpose) params.append("intakePurpose", selectedPurpose);
+      if (selectedSalesman) params.append("salesman", selectedSalesman);
       if (startDate) params.append("startDate", startDate);
       if (endDate) params.append("endDate", endDate);
 
@@ -166,7 +186,7 @@ export default function PurchaseInvoicesPage() {
     } else if (userRole && !isAuthorizedRole) {
       setLoading(false);
     }
-  }, [userRole, isAuthorizedRole, debouncedSearch, selectedSupplier, selectedStatus, startDate, endDate]);
+  }, [userRole, isAuthorizedRole, debouncedSearch, selectedSupplier, selectedStatus, selectedPurpose, selectedSalesman, startDate, endDate]);
 
   const getStatusBadge = (status: InvoiceItem["status"]) => {
     switch (status) {
@@ -188,12 +208,14 @@ export default function PurchaseInvoicesPage() {
   const canCreate = userRole === "Admin" || userRole === "Warehouse";
 
   const hasActiveFilters =
-    search || selectedSupplier || selectedStatus || startDate || endDate;
+    search || selectedSupplier || selectedStatus || selectedPurpose || selectedSalesman || startDate || endDate;
 
   const resetFilters = () => {
     setSearch("");
     setSelectedSupplier("");
     setSelectedStatus("");
+    setSelectedPurpose("");
+    setSelectedSalesman("");
     setStartDate("");
     setEndDate("");
   };
@@ -205,9 +227,29 @@ export default function PurchaseInvoicesPage() {
     return d.toLocaleDateString("en-US", { timeZone: "UTC" });
   };
 
+  const isExchangeInvoice = (inv: InvoiceItem) =>
+    inv.intakePurpose === "EXCHANGE_INTAKE" || inv.receivingType === "CUSTOMER_RETURN";
+
+  const isDirectBuybackInvoice = (inv: InvoiceItem) =>
+    inv.intakePurpose === "DIRECT_BUYBACK" ||
+    (inv.receivingType === "CUSTOMER_BUYBACK" && inv.intakePurpose !== "EXCHANGE_INTAKE");
+
   // Aggregated Summary Calculations
   const totalInvoicesCount = invoices.length;
   const totalInvestmentAmount = invoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
+
+  // Paid Purchases (Supplier Bills + Direct Customer Buybacks — Paise de kar li)
+  const paidPurchaseInvoices = invoices.filter((inv) => inv.status !== "Rejected" && !isExchangeInvoice(inv));
+  const paidPurchaseAmount = paidPurchaseInvoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
+
+  // Direct Customer Buybacks (Cash Paid to Customer)
+  const directBuybackInvoices = invoices.filter((inv) => inv.status !== "Rejected" && isDirectBuybackInvoice(inv));
+  const directBuybackAmount = directBuybackInvoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
+
+  // Exchange Credit Intake (Customer gave item in exchange against sale)
+  const exchangeIntakeInvoices = invoices.filter((inv) => inv.status !== "Rejected" && isExchangeInvoice(inv));
+  const exchangeCreditAmount = exchangeIntakeInvoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
+
   const approvedInvestmentAmount = invoices
     .filter((inv) => inv.status !== "Draft" && inv.status !== "Rejected")
     .reduce((sum, inv) => sum + (inv.total || 0), 0);
@@ -250,42 +292,89 @@ export default function PurchaseInvoicesPage() {
       </div>
 
       {/* Financial Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-slate-900 p-4 border border-slate-800 rounded-xl flex items-center gap-4">
-          <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-lg">
-            <TrendingUp className="w-6 h-6" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        {/* Card 1: Total Purchase (Paise De Kar Li) */}
+        <div className="bg-slate-900 p-4 border border-emerald-500/30 rounded-xl flex items-center gap-3.5">
+          <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg shrink-0">
+            <CheckCircle2 className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-xs text-slate-400 font-medium">Total Investment (Purchasing)</p>
-            <h3 className="text-lg font-bold text-slate-100 mt-0.5">
-              Rs. {totalInvestmentAmount.toLocaleString("en-PK")}
+            <p className="text-[11px] text-emerald-400 font-bold uppercase tracking-wider">
+              Paid Purchases (Paise De Kar)
+            </p>
+            <h3 className="text-lg font-mono font-bold text-slate-100 mt-0.5">
+              Rs. {paidPurchaseAmount.toLocaleString("en-PK")}
             </h3>
-            <p className="text-[10px] text-slate-500 mt-0.5">
-              {hasActiveFilters ? "Sum for filtered dates/selection" : "Total across all invoices"}
+            <p className="text-[10px] text-slate-400 mt-0.5">
+              {paidPurchaseInvoices.length} Invoices (Vendor + Direct Buy)
             </p>
           </div>
         </div>
 
-        <div className="bg-slate-900 p-4 border border-slate-800 rounded-xl flex items-center gap-4">
-          <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg">
-            <CheckCircle2 className="w-6 h-6" />
+        {/* Card 2: Exchange Credit Intake */}
+        <div className="bg-slate-900 p-4 border border-indigo-500/30 rounded-xl flex items-center gap-3.5">
+          <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-lg shrink-0">
+            <Layers className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-xs text-slate-400 font-medium">Approved Purchasing Total</p>
-            <h3 className="text-lg font-bold text-emerald-400 mt-0.5">
-              Rs. {approvedInvestmentAmount.toLocaleString("en-PK")}
+            <p className="text-[11px] text-indigo-400 font-bold uppercase tracking-wider">
+              Exchange Credit (Exchange In)
+            </p>
+            <h3 className="text-lg font-mono font-bold text-indigo-300 mt-0.5">
+              Rs. {exchangeCreditAmount.toLocaleString("en-PK")}
             </h3>
-            <p className="text-[10px] text-slate-500 mt-0.5">Verified financial commitments</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">
+              {exchangeIntakeInvoices.length} Exchange Intake Invoices
+            </p>
           </div>
         </div>
 
-        <div className="bg-slate-900 p-4 border border-slate-800 rounded-xl flex items-center gap-4">
-          <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg">
-            <FileText className="w-6 h-6" />
+        {/* Card 3: Direct Customer Buyback */}
+        <div className="bg-slate-900 p-4 border border-amber-500/30 rounded-xl flex items-center gap-3.5">
+          <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg shrink-0">
+            <UserIcon className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-xs text-slate-400 font-medium">Total Invoices Count</p>
-            <h3 className="text-lg font-bold text-slate-100 mt-0.5">
+            <p className="text-[11px] text-amber-400 font-bold uppercase tracking-wider">
+              Direct Buyback (Cash Out)
+            </p>
+            <h3 className="text-lg font-mono font-bold text-amber-300 mt-0.5">
+              Rs. {directBuybackAmount.toLocaleString("en-PK")}
+            </h3>
+            <p className="text-[10px] text-slate-400 mt-0.5">
+              {directBuybackInvoices.length} Customer Cash Purchases
+            </p>
+          </div>
+        </div>
+
+        {/* Card 4: Total Stock-In Investment */}
+        <div className="bg-slate-900 p-4 border border-slate-800 rounded-xl flex items-center gap-3.5">
+          <div className="p-3 bg-slate-800 border border-slate-700 text-slate-300 rounded-lg shrink-0">
+            <TrendingUp className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+              Grand Total Stock-In
+            </p>
+            <h3 className="text-lg font-mono font-bold text-slate-100 mt-0.5">
+              Rs. {totalInvestmentAmount.toLocaleString("en-PK")}
+            </h3>
+            <p className="text-[10px] text-slate-500 mt-0.5">
+              Approved: Rs. {approvedInvestmentAmount.toLocaleString("en-PK")}
+            </p>
+          </div>
+        </div>
+
+        {/* Card 5: Total Invoices Count */}
+        <div className="bg-slate-900 p-4 border border-slate-800 rounded-xl flex items-center gap-3.5">
+          <div className="p-3 bg-slate-800 border border-slate-700 text-slate-300 rounded-lg shrink-0">
+            <FileText className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+              Total Invoices
+            </p>
+            <h3 className="text-lg font-mono font-bold text-slate-100 mt-0.5">
               {totalInvoicesCount} {totalInvoicesCount === 1 ? "Invoice" : "Invoices"}
             </h3>
             <p className="text-[10px] text-slate-500 mt-0.5">Matching current filters</p>
@@ -295,11 +384,33 @@ export default function PurchaseInvoicesPage() {
 
       {/* Filter and Search Panel */}
       <div className="bg-slate-900 p-4 border border-slate-800 rounded-xl space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-            <Filter className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Search & Date Filters</span>
-          </span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5 mr-2">
+              <Filter className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Filter Type:</span>
+            </span>
+            {[
+              { key: "", label: "All Invoices" },
+              { key: "PAID_PURCHASE", label: "💵 Paid Purchases (Paise De Kar)" },
+              { key: "EXCHANGE_INTAKE", label: "🔄 Exchange Credit Intake" },
+              { key: "DIRECT_BUYBACK", label: "👤 Direct Customer Buyback" },
+              { key: "SUPPLIER_PURCHASE", label: "🚚 Supplier Bills Only" },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setSelectedPurpose(tab.key)}
+                className={`px-3 py-1 rounded-lg text-xs font-bold border transition cursor-pointer ${
+                  selectedPurpose === tab.key
+                    ? "bg-indigo-600 text-white border-indigo-500 shadow"
+                    : "bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
           {hasActiveFilters && (
             <button
               onClick={resetFilters}
@@ -311,13 +422,13 @@ export default function PurchaseInvoicesPage() {
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
           {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
             <input
               type="text"
-              placeholder="Invoice #..."
+              placeholder="Invoice # or Customer..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
@@ -336,6 +447,23 @@ export default function PurchaseInvoicesPage() {
               {suppliers.map((s) => (
                 <option key={s._id} value={s._id}>
                   {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Salesman Filter */}
+          <div className="relative">
+            <UserIcon className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
+            <select
+              value={selectedSalesman}
+              onChange={(e) => setSelectedSalesman(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors cursor-pointer appearance-none"
+            >
+              <option value="">All Salesmen</option>
+              {staffList.map((st) => (
+                <option key={st._id} value={st._id}>
+                  {st.name || st.username}
                 </option>
               ))}
             </select>
@@ -418,9 +546,10 @@ export default function PurchaseInvoicesPage() {
               <thead>
                 <tr className="bg-slate-950 border-b border-slate-800 text-slate-400 font-bold uppercase tracking-wider">
                   <th className="p-4">Invoice #</th>
-                  <th className="p-4">Supplier</th>
+                  <th className="p-4">Type</th>
+                  <th className="p-4">Supplier / Customer</th>
+                  <th className="p-4">Salesman</th>
                   <th className="p-4">Invoice Date</th>
-                  <th className="p-4">Created By</th>
                   <th className="p-4">Total Amount</th>
                   <th className="p-4">Status</th>
                   <th className="p-4 text-right">Actions</th>
@@ -430,13 +559,32 @@ export default function PurchaseInvoicesPage() {
                 {invoices.map((inv) => (
                   <tr key={inv._id} className="hover:bg-slate-850 transition-colors">
                     <td className="p-4 font-bold text-slate-200 tracking-tight">{inv.invoiceNumber}</td>
+                    <td className="p-4">
+                      {isExchangeInvoice(inv) ? (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                          🔄 EXCHANGE CREDIT
+                        </span>
+                      ) : isDirectBuybackInvoice(inv) ? (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                          💵 DIRECT BUYBACK
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                          🚚 SUPPLIER BILL
+                        </span>
+                      )}
+                    </td>
                     <td className="p-4 font-medium text-slate-300">
-                      <div>{inv.supplier?.name}</div>
-                      <div className="text-[10px] text-slate-500 font-bold">{inv.supplier?.code}</div>
+                      <div>{inv.supplier?.name || inv.customerName || "Walk-in Customer"}</div>
+                      <div className="text-[10px] text-slate-500 font-bold">
+                        {inv.supplier?.code || inv.customerPhone || ""}
+                      </div>
+                    </td>
+                    <td className="p-4 font-medium text-indigo-300">
+                      {inv.handledBySalesman?.name || inv.handledBySalesmanName || inv.createdBy}
                     </td>
                     <td className="p-4">{formatDate(inv.invoiceDate)}</td>
-                    <td className="p-4 font-medium text-slate-400">{inv.createdBy}</td>
-                    <td className="p-4 font-bold text-slate-200">
+                    <td className="p-4 font-bold text-slate-200 font-mono">
                       Rs. {inv.total.toLocaleString("en-PK")}
                     </td>
                     <td className="p-4">

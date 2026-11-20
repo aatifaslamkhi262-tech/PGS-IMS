@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { PurchaseInvoice } from "@/models/PurchaseInvoice";
 import { Product } from "@/models/Product";
+import { User } from "@/models/User";
+import { Location } from "@/models/Location";
 import "@/models/Supplier"; // Ensure Supplier model is registered
 import { verifyRole } from "@/lib/auth/rbac";
 
@@ -18,6 +20,8 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get("search") || "";
     const supplier = searchParams.get("supplier") || "";
     const status = searchParams.get("status") || "";
+    const intakePurpose = searchParams.get("intakePurpose") || "";
+    const salesman = searchParams.get("salesman") || "";
     const startDate = searchParams.get("startDate") || "";
     const endDate = searchParams.get("endDate") || "";
     const includeItems = searchParams.get("includeItems") === "true";
@@ -27,13 +31,46 @@ export async function GET(req: NextRequest) {
     const query: any = {};
     if (search.trim()) {
       const cleanSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      query.invoiceNumber = new RegExp(cleanSearch, "i");
+      query.$or = [
+        { invoiceNumber: new RegExp(cleanSearch, "i") },
+        { customerName: new RegExp(cleanSearch, "i") },
+      ];
     }
     if (supplier) {
       query.supplier = supplier;
     }
     if (status) {
       query.status = status;
+    }
+    if (salesman) {
+      query.handledBySalesman = salesman;
+    }
+    if (intakePurpose === "PAID_PURCHASE") {
+      query.intakePurpose = { $nin: ["EXCHANGE_INTAKE"] };
+      query.receivingType = { $ne: "CUSTOMER_RETURN" };
+    } else if (intakePurpose === "EXCHANGE_INTAKE") {
+      query.$and = [
+        ...(query.$and || []),
+        {
+          $or: [
+            { intakePurpose: "EXCHANGE_INTAKE" },
+            { receivingType: "CUSTOMER_RETURN" },
+          ],
+        },
+      ];
+    } else if (intakePurpose === "DIRECT_BUYBACK") {
+      query.$and = [
+        ...(query.$and || []),
+        {
+          $or: [
+            { intakePurpose: "DIRECT_BUYBACK" },
+            { receivingType: "CUSTOMER_BUYBACK", intakePurpose: { $ne: "EXCHANGE_INTAKE" } },
+          ],
+        },
+      ];
+    } else if (intakePurpose === "SUPPLIER_PURCHASE") {
+      query.receivingType = { $in: ["SUPPLIER_PURCHASE", null, undefined] };
+      query.intakePurpose = { $nin: ["DIRECT_BUYBACK", "EXCHANGE_INTAKE"] };
     }
 
     if (startDate || endDate) {
@@ -48,11 +85,15 @@ export async function GET(req: NextRequest) {
 
     let queryBuilder = PurchaseInvoice.find(query)
       .populate("supplier", "name code")
+      .populate("handledBySalesman", "name username")
+      .populate("location", "name code")
       .sort({ invoiceDate: -1, createdAt: -1 })
       .limit(limit);
 
     if (!includeItems) {
-      queryBuilder = queryBuilder.select("-items");
+      queryBuilder = queryBuilder.select("-items -attachmentUrls");
+    } else {
+      queryBuilder = queryBuilder.select("-attachmentUrls");
     }
 
     const invoices = await queryBuilder.lean();
@@ -76,9 +117,51 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json().catch(() => ({}));
-    const { invoiceNumber, receivingType, supplier, customerName, customerPhone, invoiceDate, items, notes } = body;
+    const {
+      invoiceNumber,
+      receivingType,
+      intakePurpose,
+      supplier,
+      customerName,
+      customerPhone,
+      handledBySalesman,
+      handledBySalesmanName,
+      location,
+      locationName,
+      attachmentUrls,
+      drawerCashPaid,
+      onlinePaid,
+      invoiceDate,
+      items,
+      notes,
+    } = body;
 
     const actualReceivingType = receivingType || "SUPPLIER_PURCHASE";
+    const actualIntakePurpose =
+      intakePurpose ||
+      (actualReceivingType === "CUSTOMER_BUYBACK"
+        ? "DIRECT_BUYBACK"
+        : actualReceivingType === "CUSTOMER_RETURN"
+        ? "EXCHANGE_INTAKE"
+        : "SUPPLIER_PURCHASE");
+
+    let resolvedSalesmanId = handledBySalesman || undefined;
+    let resolvedSalesmanName = handledBySalesmanName || undefined;
+    if (resolvedSalesmanId && !resolvedSalesmanName) {
+      const staffDoc = await User.findById(resolvedSalesmanId).lean();
+      if (staffDoc) {
+        resolvedSalesmanName = staffDoc.name || staffDoc.username;
+      }
+    }
+
+    let resolvedLocId = location || undefined;
+    let resolvedLocName = locationName || undefined;
+    if (resolvedLocId && !resolvedLocName) {
+      const locDoc = await Location.findById(resolvedLocId).lean();
+      if (locDoc) {
+        resolvedLocName = locDoc.name;
+      }
+    }
 
     // Field Validations
     if (!invoiceNumber || !invoiceNumber.trim()) {
@@ -147,9 +230,17 @@ export async function POST(req: NextRequest) {
     const invoice = await PurchaseInvoice.create({
       invoiceNumber: cleanInvoiceNumber,
       receivingType: actualReceivingType,
+      intakePurpose: actualIntakePurpose,
       supplier: supplier || undefined,
       customerName: customerName?.trim() || undefined,
       customerPhone: customerPhone?.trim() || undefined,
+      handledBySalesman: resolvedSalesmanId,
+      handledBySalesmanName: resolvedSalesmanName,
+      location: resolvedLocId,
+      locationName: resolvedLocName,
+      attachmentUrls: Array.isArray(attachmentUrls) ? attachmentUrls.filter(Boolean) : [],
+      drawerCashPaid: Math.max(0, Number(drawerCashPaid || 0)),
+      onlinePaid: Math.max(0, Number(onlinePaid || 0)),
       invoiceDate: invoiceDate ? new Date(invoiceDate) : new Date(),
       status: "Draft",
       items: validatedItems,

@@ -59,8 +59,17 @@ export default function NewPurchaseInvoicePage() {
 
   // Header Details
   const [receivingType, setReceivingType] = useState<"SUPPLIER_PURCHASE" | "CUSTOMER_BUYBACK" | "CUSTOMER_RETURN">("SUPPLIER_PURCHASE");
+  const [intakePurpose, setIntakePurpose] = useState<"SUPPLIER_PURCHASE" | "DIRECT_BUYBACK" | "EXCHANGE_INTAKE">("SUPPLIER_PURCHASE");
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState("");
+  const [staffList, setStaffList] = useState<any[]>([]);
+  const [handledBySalesman, setHandledBySalesman] = useState("");
+  const [attachmentUrls, setAttachmentUrls] = useState<string[]>([]);
+  const [buybackPaySource, setBuybackPaySource] = useState<
+    "" | "CASH" | "ONLINE" | "SPLIT" | "OWNER_PERSONAL"
+  >("");
+  const [drawerCashPaid, setDrawerCashPaid] = useState<number>(0);
+  const [onlinePaid, setOnlinePaid] = useState<number>(0);
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
@@ -167,16 +176,32 @@ export default function NewPurchaseInvoicePage() {
     }
   };
 
-  // Fetch Suppliers and set default values
+  // Fetch Suppliers, Active Staff, and Current User
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const res = await fetch("/api/suppliers?activeOnly=true");
-        const data = await res.json();
+        const [supRes, staffRes, meRes] = await Promise.all([
+          fetch("/api/suppliers?activeOnly=true"),
+          fetch("/api/users/active").catch(() => null),
+          fetch("/api/auth/me").catch(() => null),
+        ]);
+        const data = await supRes.json();
         if (data.success) {
           setSuppliers(data.data);
         } else {
           setError("Failed to load active suppliers.");
+        }
+        if (staffRes) {
+          const staffData = await staffRes.json().catch(() => ({}));
+          if (staffData.success && Array.isArray(staffData.data)) {
+            setStaffList(staffData.data);
+          }
+        }
+        if (meRes) {
+          const meData = await meRes.json().catch(() => ({}));
+          if (meData.success && meData.data?._id) {
+            setHandledBySalesman(meData.data._id);
+          }
         }
       } catch {
         setError("Network error loading suppliers.");
@@ -186,6 +211,19 @@ export default function NewPurchaseInvoicePage() {
     };
     fetchData();
   }, []);
+
+  const handleInvoiceImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setAttachmentUrls((prev) => [...prev, reader.result as string]);
+        addToast("success", `Attached invoice picture: ${file.name}`);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Product Search handler
   useEffect(() => {
@@ -341,12 +379,75 @@ export default function NewPurchaseInvoicePage() {
     setSubmitting(true);
     setError("");
 
+    const selectedStaffObj = staffList.find((u) => u._id === handledBySalesman);
+    const effectiveIntakePurpose =
+      receivingType === "SUPPLIER_PURCHASE"
+        ? "SUPPLIER_PURCHASE"
+        : receivingType === "CUSTOMER_RETURN"
+        ? "EXCHANGE_INTAKE"
+        : intakePurpose === "SUPPLIER_PURCHASE"
+        ? "DIRECT_BUYBACK"
+        : intakePurpose;
+
+    const invoiceSubtotal = calculateSubtotal();
+    let finalDrawerCash = 0;
+    let finalOnlinePaid = 0;
+
+    if (effectiveIntakePurpose === "DIRECT_BUYBACK") {
+      if (!buybackPaySource) {
+        setError(
+          "Direct Buyback ke liye Payment Source select karna zaroori hai (Cash Galla, Shop Online Bank, Split, ya Owner Personal)."
+        );
+        setSubmitting(false);
+        return;
+      }
+      if (buybackPaySource === "CASH") {
+        if (drawerCashPaid <= 0) {
+          setError("Please enter Cash Paid From Galla amount (Rs. > 0).");
+          setSubmitting(false);
+          return;
+        }
+        finalDrawerCash = Number(drawerCashPaid);
+      } else if (buybackPaySource === "ONLINE") {
+        if (onlinePaid <= 0) {
+          setError("Please enter Paid From Shop Online Bank amount (Rs. > 0).");
+          setSubmitting(false);
+          return;
+        }
+        finalOnlinePaid = Number(onlinePaid);
+      } else if (buybackPaySource === "SPLIT") {
+        if (drawerCashPaid <= 0 || onlinePaid <= 0) {
+          setError("Split Buyback payment ke liye Cash aur Online dono amounts enter karein (dono > 0).");
+          setSubmitting(false);
+          return;
+        }
+        finalDrawerCash = Number(drawerCashPaid);
+        finalOnlinePaid = Number(onlinePaid);
+      }
+
+      if (finalDrawerCash + finalOnlinePaid > invoiceSubtotal + 0.01) {
+        setError(
+          `Cash + Online paid (Rs. ${(finalDrawerCash + finalOnlinePaid).toLocaleString()}) invoice total (Rs. ${invoiceSubtotal.toLocaleString()}) se zyada nahi ho sakta.`
+        );
+        setSubmitting(false);
+        return;
+      }
+    }
+
     const payload = {
       invoiceNumber: invoiceNumber.trim(),
       receivingType,
+      intakePurpose: effectiveIntakePurpose,
       supplier: selectedSupplier || undefined,
       customerName: customerName.trim() || undefined,
       customerPhone: customerPhone.trim() || undefined,
+      handledBySalesman: handledBySalesman || undefined,
+      handledBySalesmanName: selectedStaffObj ? (selectedStaffObj.name || selectedStaffObj.username) : undefined,
+      location: selectedStaffObj?.assignedLocation?._id || undefined,
+      locationName: selectedStaffObj?.assignedLocation?.name || undefined,
+      attachmentUrls,
+      drawerCashPaid: finalDrawerCash,
+      onlinePaid: finalOnlinePaid,
       invoiceDate: new Date(invoiceDate).toISOString(),
       notes: notes.trim() || undefined,
       items: lines.map((l) => ({
@@ -458,14 +559,172 @@ export default function NewPurchaseInvoicePage() {
                   </label>
                   <select
                     value={receivingType}
-                    onChange={(e) => setReceivingType(e.target.value as any)}
+                    onChange={(e) => {
+                      const val = e.target.value as "SUPPLIER_PURCHASE" | "CUSTOMER_BUYBACK" | "CUSTOMER_RETURN";
+                      setReceivingType(val);
+                      setBuybackPaySource("");
+                      setDrawerCashPaid(0);
+                      setOnlinePaid(0);
+                      if (val === "SUPPLIER_PURCHASE") {
+                        setIntakePurpose("SUPPLIER_PURCHASE");
+                      } else if (val === "CUSTOMER_BUYBACK") {
+                        setIntakePurpose("DIRECT_BUYBACK");
+                        if (!invoiceNumber || /^(BB-|EX-|RET-)/.test(invoiceNumber)) {
+                          setInvoiceNumber(generateRefNumber("CUSTOMER_BUYBACK"));
+                        }
+                      } else {
+                        setIntakePurpose("EXCHANGE_INTAKE");
+                        if (!invoiceNumber || /^(BB-|EX-|RET-)/.test(invoiceNumber)) {
+                          setInvoiceNumber(generateRefNumber("CUSTOMER_RETURN"));
+                        }
+                      }
+                    }}
                     className="w-full px-3 py-2.5 bg-slate-950 border border-indigo-500/30 rounded-lg text-xs font-bold text-indigo-300 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 cursor-pointer"
                   >
                     <option value="SUPPLIER_PURCHASE">SUPPLIER_PURCHASE → Business Purchase from Vendor</option>
-                    <option value="CUSTOMER_BUYBACK">CUSTOMER_BUYBACK → Customer Business Acquisition / Buyback</option>
+                    <option value="CUSTOMER_BUYBACK">CUSTOMER_BUYBACK → Direct Buyback / Exchange Intake</option>
                     <option value="CUSTOMER_RETURN">CUSTOMER_RETURN → Customer Sale Reversal Intake</option>
                   </select>
                 </div>
+
+                {/* Intake Purpose Pill Selector for Customer Buyback / Exchange */}
+                {receivingType !== "SUPPLIER_PURCHASE" && (
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                      Intake Purpose *
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIntakePurpose("DIRECT_BUYBACK");
+                          setBuybackPaySource("");
+                          setDrawerCashPaid(0);
+                          setOnlinePaid(0);
+                          if (!invoiceNumber || /^(BB-|EX-|RET-)/.test(invoiceNumber)) {
+                            setInvoiceNumber(generateRefNumber("CUSTOMER_BUYBACK"));
+                          }
+                        }}
+                        className={`px-3.5 py-2.5 rounded-lg text-xs font-bold border transition-all text-center ${
+                          intakePurpose === "DIRECT_BUYBACK"
+                            ? "bg-indigo-600 text-white border-indigo-500 shadow-lg shadow-indigo-600/20"
+                            : "bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700"
+                        }`}
+                      >
+                        Direct Buyback (Cash Out - No Commission)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIntakePurpose("EXCHANGE_INTAKE");
+                          if (!invoiceNumber || /^(BB-|EX-|RET-)/.test(invoiceNumber)) {
+                            const dateStr = new Date().toISOString().substring(0, 10).replace(/-/g, "");
+                            setInvoiceNumber(`EX-${dateStr}-${Math.floor(100 + Math.random() * 900)}`);
+                          }
+                        }}
+                        className={`px-3.5 py-2.5 rounded-lg text-xs font-bold border transition-all text-center ${
+                          intakePurpose === "EXCHANGE_INTAKE"
+                            ? "bg-indigo-600 text-white border-indigo-500 shadow-lg shadow-indigo-600/20"
+                            : "bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700"
+                        }`}
+                      >
+                        Exchange Intake (Against Sale)
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Buyback Cash / Online Diary Payout Box (Required Selection, No Auto-Fill) */}
+                {receivingType === "CUSTOMER_BUYBACK" && intakePurpose === "DIRECT_BUYBACK" && (
+                  <div className="sm:col-span-2 bg-amber-500/5 border border-amber-500/30 rounded-xl p-3.5 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                      <span className="text-[11px] font-bold text-amber-300 uppercase tracking-wider">
+                        Buyback Payment Kahan Se Diya? * (Required)
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        Approval par Cash/Online Diary se auto-deduct hoga
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {(
+                        [
+                          { id: "CASH", label: "💵 Cash (Galla)" },
+                          { id: "ONLINE", label: "📱 Shop Online" },
+                          { id: "SPLIT", label: "🔀 Split (Cash + Online)" },
+                          { id: "OWNER_PERSONAL", label: "👤 Owner Personal" },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            setBuybackPaySource(opt.id);
+                            if (opt.id === "CASH") setOnlinePaid(0);
+                            else if (opt.id === "ONLINE") setDrawerCashPaid(0);
+                            else if (opt.id === "OWNER_PERSONAL") {
+                              setDrawerCashPaid(0);
+                              setOnlinePaid(0);
+                            }
+                          }}
+                          className={`px-2.5 py-2 rounded-lg text-[11px] font-bold border transition ${
+                            buybackPaySource === opt.id
+                              ? opt.id === "OWNER_PERSONAL"
+                                ? "bg-indigo-600 border-indigo-500 text-white"
+                                : "bg-amber-600 border-amber-500 text-white"
+                              : "bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {(buybackPaySource === "CASH" || buybackPaySource === "SPLIT") && (
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-300 mb-1">
+                          Cash Paid From Galla (Rs.) *
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={drawerCashPaid || ""}
+                          onChange={(e) => setDrawerCashPaid(Math.max(0, Number(e.target.value || 0)))}
+                          placeholder="Enter exact cash paid (no auto-fill)"
+                          className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-emerald-400 font-mono font-bold focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+                    )}
+
+                    {(buybackPaySource === "ONLINE" || buybackPaySource === "SPLIT") && (
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-300 mb-1">
+                          Paid From Shop Online Bank (Rs.) *
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={onlinePaid || ""}
+                          onChange={(e) => setOnlinePaid(Math.max(0, Number(e.target.value || 0)))}
+                          placeholder="Enter exact online transfer (no auto-fill)"
+                          className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-purple-400 font-mono font-bold focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+                    )}
+
+                    {buybackPaySource === "OWNER_PERSONAL" && (
+                      <p className="text-[11px] text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-3 py-2">
+                        Owner Personal Account selected — Shop Galla / Online Diary se Rs. 0 deduct hoga.
+                      </p>
+                    )}
+
+                    {!buybackPaySource && (
+                      <p className="text-[10px] text-rose-400">
+                        * Submit karne se pehle upar 4 mein se ek payment option select karna lazmi hai.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Original Sale Invoice Lookup Bar (Option B for CUSTOMER_RETURN) */}
                 {receivingType === "CUSTOMER_RETURN" && (
@@ -561,6 +820,25 @@ export default function NewPurchaseInvoicePage() {
                   </>
                 )}
 
+                {/* Handled By Salesman (Stock-In Attribution) */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Handled By Salesman *
+                  </label>
+                  <select
+                    value={handledBySalesman}
+                    onChange={(e) => setHandledBySalesman(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                  >
+                    <option value="">Select Salesman / Staff</option>
+                    {staffList.map((u) => (
+                      <option key={u._id} value={u._id}>
+                        {u.name || u.username} {u.assignedLocation?.name ? `(${u.assignedLocation.name})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 {/* Invoice Date */}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
@@ -573,6 +851,36 @@ export default function NewPurchaseInvoicePage() {
                     onChange={(e) => setInvoiceDate(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 cursor-pointer"
                   />
+                </div>
+
+                {/* Attach Bill / Slip Photo */}
+                <div className="sm:col-span-2">
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Attach Bill / Slip Photo {attachmentUrls.length > 0 ? `(${attachmentUrls.length} Attached)` : ""}
+                  </label>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex-1 min-w-[200px] px-3 py-2 bg-slate-950 border border-dashed border-slate-700 hover:border-indigo-500 rounded-lg text-xs text-slate-300 flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                      <span>📷 Upload Invoice Picture</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleInvoiceImageUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    {attachmentUrls.map((url, idx) => (
+                      <div key={idx} className="relative group w-10 h-10 rounded-lg overflow-hidden border border-slate-700">
+                        <img src={url} alt={`Bill ${idx + 1}`} className="w-full h-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => setAttachmentUrls((prev) => prev.filter((_, i) => i !== idx))}
+                          className="absolute inset-0 bg-black/70 text-rose-400 text-[10px] font-bold opacity-0 group-hover:opacity-100 flex items-center justify-center"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Notes */}

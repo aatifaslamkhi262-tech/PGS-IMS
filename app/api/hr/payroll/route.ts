@@ -6,6 +6,7 @@ import { SalaryAdvance } from "@/models/SalaryAdvance";
 import { verifyRole } from "@/lib/auth/rbac";
 import { computeEmployeeMonthlyPayroll } from "@/lib/hr/payrollEngine";
 import { recordHRAuditLog } from "@/lib/hr/auditLog";
+import { recordDiaryOutflowEntry } from "@/lib/cashSessionEngine";
 
 export async function GET(req: NextRequest) {
   try {
@@ -277,7 +278,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { action, month, reason } = body; // action: "RELEASE_AND_LOCK" | "REOPEN"
+    const { action, month, reason, paymentSource = "NONE" } = body; // action: "RELEASE_AND_LOCK" | "REOPEN"
 
     if (!month || !action) {
       return NextResponse.json(
@@ -366,6 +367,26 @@ export async function PATCH(req: NextRequest) {
         performedBy: auth.user?.userId,
         performedByName: auth.user?.username || "Admin",
       });
+
+      if (paymentSource === "SHOP_CASH" || paymentSource === "SHOP_ONLINE") {
+        const totalNetPayout = payrolls.reduce(
+          (sum, p) => sum + Math.max(0, Number((p as any).netSalary || 0)),
+          0
+        );
+        if (totalNetPayout > 0) {
+          await recordDiaryOutflowEntry({
+            actorUsername: auth.user?.username || "Admin",
+            entryType: "EXPENSE",
+            category: "Salary",
+            cashAmount: paymentSource === "SHOP_CASH" ? totalNetPayout : 0,
+            onlineAmount: paymentSource === "SHOP_ONLINE" ? totalNetPayout : 0,
+            reason: `Staff Payroll Release (${month}) - ${payrolls.length} Employees`,
+            recipient: "Shop Staff",
+            notes: `Auto-synced from HR Payroll Release (${month})`,
+            dedupeTag: `[PAYROLL_RELEASE:${month}]`,
+          });
+        }
+      }
 
       return NextResponse.json({
         success: true,

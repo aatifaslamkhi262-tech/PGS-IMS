@@ -18,8 +18,8 @@ export async function POST(
     const body = await req.json();
     const { paymentAllocations, priceAdjustment, notes, itemSerials } = body;
 
-    if (!paymentAllocations || !Array.isArray(paymentAllocations) || paymentAllocations.length === 0) {
-      return NextResponse.json({ success: false, error: "Payment allocations are required." }, { status: 400 });
+    if (!paymentAllocations || !Array.isArray(paymentAllocations)) {
+      return NextResponse.json({ success: false, error: "Payment allocations must be an array." }, { status: 400 });
     }
 
     const result = await completeSale({

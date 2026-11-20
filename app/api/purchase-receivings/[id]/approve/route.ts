@@ -10,6 +10,30 @@ import { Inventory } from "@/models/Inventory";
 import { InventoryMovement } from "@/models/InventoryMovement";
 import { verifyRole } from "@/lib/auth/rbac";
 import { updateAverageCostOnIntake } from "@/lib/averageCostEngine";
+import { recordDiaryOutflowEntry } from "@/lib/cashSessionEngine";
+
+async function syncBuybackDiaryIfNeeded(receivingDoc: any, actorUsername: string) {
+  if (!receivingDoc?.purchaseInvoice) return;
+  const inv: any = await PurchaseInvoice.findById(receivingDoc.purchaseInvoice).lean();
+  if (!inv || inv.receivingType !== "CUSTOMER_BUYBACK") return;
+
+  const cashOut = Math.max(0, Number(inv.drawerCashPaid || 0));
+  const onlineOut = Math.max(0, Number(inv.onlinePaid || 0));
+  if (cashOut <= 0 && onlineOut <= 0) return;
+
+  await recordDiaryOutflowEntry({
+    locationId: (inv.location || receivingDoc.location)?.toString(),
+    actorUsername,
+    entryType: "CASH_PURCHASING",
+    category: "Purchasing",
+    cashAmount: cashOut,
+    onlineAmount: onlineOut,
+    reason: `Direct Buyback ${inv.invoiceNumber}${inv.customerName ? ` (${inv.customerName})` : ""}`,
+    recipient: inv.customerName || "Customer Buyback",
+    notes: `Auto-synced upon receiving approval ${receivingDoc.receivingNumber}`,
+    dedupeTag: `[BUYBACK_PAYOUT:${inv.invoiceNumber}]`,
+  });
+}
 
 /**
  * Core receiving approval execution logic.
@@ -237,6 +261,9 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
               type: "PURCHASE_RECEIVING",
               referenceType: parentInvoice?.receivingType || "SUPPLIER_PURCHASE",
               referenceTransaction: receiving.receivingNumber,
+              salesman: parentInvoice?.handledBySalesman,
+              salesmanName: parentInvoice?.handledBySalesmanName,
+              intakePurpose: parentInvoice?.intakePurpose || (parentInvoice?.receivingType === "CUSTOMER_BUYBACK" ? "DIRECT_BUYBACK" : "SUPPLIER_PURCHASE"),
               beforeQuantity,
               afterQuantity,
               performedBy: receiving.createdBy,
@@ -262,6 +289,9 @@ async function processReceivingApproval(id: string, approvedByUsername: string, 
           type: "PURCHASE_RECEIVING",
           referenceType: parentInvoice?.receivingType || "SUPPLIER_PURCHASE",
           referenceTransaction: receiving.receivingNumber,
+          salesman: parentInvoice?.handledBySalesman,
+          salesmanName: parentInvoice?.handledBySalesmanName,
+          intakePurpose: parentInvoice?.intakePurpose || (parentInvoice?.receivingType === "CUSTOMER_BUYBACK" ? "DIRECT_BUYBACK" : "SUPPLIER_PURCHASE"),
           beforeQuantity,
           afterQuantity,
           performedBy: receiving.createdBy,
@@ -354,6 +384,9 @@ export async function POST(
         const result = await processReceivingApproval(id, auth.user.username, session);
         await session.commitTransaction();
         await session.endSession();
+        if (!result.alreadyApproved) {
+          await syncBuybackDiaryIfNeeded(result.receiving, auth.user.username);
+        }
         return NextResponse.json({
           success: true,
           message: "Receiving approved successfully.",
@@ -381,6 +414,9 @@ export async function POST(
         if (isTxnIssue) {
           // Fallback to direct non-transactional execution
           const fallbackResult = await processReceivingApproval(id, auth.user.username);
+          if (!fallbackResult.alreadyApproved) {
+            await syncBuybackDiaryIfNeeded(fallbackResult.receiving, auth.user.username);
+          }
           return NextResponse.json({
             success: true,
             message: "Receiving approved successfully.",
@@ -397,6 +433,9 @@ export async function POST(
     } else {
       // Fallback direct execution for standalone MongoDB without replica set
       const result = await processReceivingApproval(id, auth.user.username);
+      if (!result.alreadyApproved) {
+        await syncBuybackDiaryIfNeeded(result.receiving, auth.user.username);
+      }
       return NextResponse.json({
         success: true,
         message: "Receiving approved successfully.",

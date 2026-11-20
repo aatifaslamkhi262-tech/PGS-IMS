@@ -10,7 +10,8 @@ import { User } from "@/models/User";
 import { Payment } from "@/models/Payment";
 import { resolveOrCreateCustomer } from "@/lib/customerResolver";
 import { recordCustomerLedgerEntry } from "@/lib/customerLedgerEngine";
-import { generatePaymentNumber } from "@/lib/salesEngine";
+import { nextSequentialPaymentNumber } from "@/lib/salesEngine";
+import { recordDiaryOutflowEntry } from "@/lib/cashSessionEngine";
 
 // Helper to generate unique repair number e.g. REP-20261016-0001
 async function generateRepairNumber(): Promise<string> {
@@ -115,6 +116,8 @@ export async function POST(req: NextRequest) {
       parts = [], // Array of used parts [{ productId, quantity, unitPrice }]
       paidAmount, // Amount customer paid
       paymentMethod = "CASH",
+      paymentAllocations,
+      costPaymentSource = "NONE", // "NONE" | "SHOP_CASH" | "SHOP_ONLINE"
       repairedBy, // Technician name
       technicianId,
       locationId,
@@ -252,7 +255,42 @@ export async function POST(req: NextRequest) {
       totalAmount = Math.max(0, Number(laborCost || 0)) + partsTotal;
     }
     const numLabor = Math.max(0, totalAmount - partsTotal);
-    const numPaid = Math.max(0, Math.min(totalAmount, Number(paidAmount || 0)));
+
+    const sanitizedAllocations = Array.isArray(paymentAllocations)
+      ? paymentAllocations
+          .filter((a: any) => Number(a?.amount || 0) > 0)
+          .map((a: any) => ({
+            method: String(a.method || "CASH"),
+            amount: Number(a.amount || 0),
+            referenceNumber: a.referenceNumber ? String(a.referenceNumber) : undefined,
+          }))
+      : [];
+
+    const allocSum = sanitizedAllocations.reduce((s, a) => s + a.amount, 0);
+    if (sanitizedAllocations.length > 0 && allocSum > totalAmount + 0.01) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Total split payment (Rs. ${allocSum.toLocaleString()}) cannot exceed customer bill (Rs. ${totalAmount.toLocaleString()}).`,
+        },
+        { status: 400 }
+      );
+    }
+
+    const numPaid =
+      sanitizedAllocations.length > 0
+        ? Math.min(totalAmount, allocSum)
+        : Math.max(0, Math.min(totalAmount, Number(paidAmount || 0)));
+    const effectiveAllocs =
+      sanitizedAllocations.length > 0
+        ? sanitizedAllocations
+        : numPaid > 0
+        ? [{ method: paymentMethod || "CASH", amount: numPaid, referenceNumber: undefined }]
+        : [];
+    const resolvedRepairPayMethod =
+      effectiveAllocs.length > 1
+        ? "SPLIT"
+        : (effectiveAllocs[0]?.method || paymentMethod || "CASH");
     const balanceDue = Math.max(0, totalAmount - numPaid);
 
     // 6. Generate Repair Number
@@ -278,7 +316,7 @@ export async function POST(req: NextRequest) {
       totalAmount,
       paidAmount: numPaid,
       balanceDue,
-      paymentMethod: paymentMethod || "CASH",
+      paymentMethod: resolvedRepairPayMethod,
       status: balanceDue > 0 ? "PENDING" : "COMPLETED",
       repairedBy: assignedTechnician,
       technicianId: technicianId || undefined,
@@ -312,23 +350,43 @@ export async function POST(req: NextRequest) {
         amount: numPaid,
         referenceType: "Repair",
         referenceId: repair.repairNumber,
-        notes: `Payment for Repair ${repair.repairNumber} via ${paymentMethod || "CASH"}`,
+        notes: `Payment for Repair ${repair.repairNumber} via ${resolvedRepairPayMethod}`,
         createdBy: auth.user.username,
       });
 
-      // Record Payment record for Cash Register / Daily Closing report
-      const paymentNumber = await generatePaymentNumber();
-      const payment = new Payment({
-        paymentNumber,
-        customer: customerId,
-        location: targetLocation._id,
-        paymentMethod: paymentMethod || "CASH",
-        amount: numPaid,
-        notes: `Repair ${repair.repairNumber} - ${productName.trim()}`,
-        receivedBy: auth.user.username,
-        status: "PAID",
+      // Record Payment record(s) for Cash Register / Daily Closing report
+      const usedPaymentNums = new Set<string>();
+      for (const alloc of effectiveAllocs) {
+        const paymentNumber = await nextSequentialPaymentNumber(usedPaymentNums);
+        const payment = new Payment({
+          paymentNumber,
+          customer: customerId,
+          location: targetLocation._id,
+          paymentMethod: alloc.method,
+          amount: alloc.amount,
+          referenceNumber: alloc.referenceNumber,
+          notes: `Repair ${repair.repairNumber} - ${productName.trim()}`,
+          receivedBy: auth.user.username,
+          status: "PAID",
+        });
+        await payment.save();
+      }
+    }
+
+    // 10. Optional Auto-Sync of Repair Parts Cost (Kharcha) to Cash & Online Diary (uses CASH_PURCHASING so Daily Closing does not double-subtract from Net Profit)
+    if (numRepairCost > 0 && (costPaymentSource === "SHOP_CASH" || costPaymentSource === "SHOP_ONLINE")) {
+      await recordDiaryOutflowEntry({
+        locationId: targetLocation._id.toString(),
+        actorUsername: auth.user.username,
+        entryType: "CASH_PURCHASING",
+        category: "Purchasing",
+        cashAmount: costPaymentSource === "SHOP_CASH" ? numRepairCost : 0,
+        onlineAmount: costPaymentSource === "SHOP_ONLINE" ? numRepairCost : 0,
+        reason: `Repair Kharcha (${repair.repairNumber} - ${productName.trim()})`,
+        recipient: assignedTechnician,
+        notes: `Parts/external repair cost synced from ${repair.repairNumber}`,
+        dedupeTag: `[REPAIR_COST:${repair.repairNumber}]`,
       });
-      await payment.save();
     }
 
     return NextResponse.json({
